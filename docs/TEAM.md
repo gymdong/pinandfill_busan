@@ -1,35 +1,50 @@
 # 개발 역할 분담
 
-계획서상 개발자는 1명(PE)이지만 실제 개발은 4명이 나눈다. SDD의 컴포넌트(COMP-xx) 경계를 따라 담당을 나눠
-같은 파일을 여럿이 고치는 일을 줄인다. 담당자 배정은 제안이며 팀 회의에서 확정한다.
+계획서상 개발자는 1명(PE)이지만 실제 개발은 4명이 나눈다. 레이어(프런트/백/데이터)가 아니라 **P0 기능 단위**로
+나누며, 각자 맡은 기능을 화면부터 API·DB까지 끝까지 구현한다. 완료 기준은 해당 FR의 P0 인수 기준(AC) 통과다.
 
-| 파트 | 담당(제안) | 맡는 컴포넌트 | 주 디렉터리 | 관련 요구사항 |
+## P0 기능 배분
+
+| 담당 | 파트 | 맡는 기능 | 화면 | 함께 맡는 공통 영역 |
 |---|---|---|---|---|
-| A. 일정 엔진·경로 | 박범찬 | COMP-03 ItineraryEngine, COMP-07 PlanBService, 경로 어댑터(TMAP·ODsay·추정, RouteQuotaGuard) | `backend/app/modules/engine`, `trips`, `plan_b`, `backend/app/adapters/route` | FR-003, 005, 006, 009, 010, NFR-001, 012, 013, AI-REQ-03 |
-| B. 추천·AI | 김동현 | COMP-04 RecommendService, COMP-06 AIService, 카카오 로컬 연동·장소 매칭 | `backend/app/modules/recommend`, `ai`, `places`, `backend/app/adapters/kakao` | FR-001, 002, 004, 012, 015, AI-REQ-01~08 |
-| C. 데이터·혼잡·운영 | 홍민지 | COMP-05 CrowdService, COMP-09 BatchCollector, COMP-12 AdminModule, DB 스키마·마이그레이션, 날씨 | `backend/app/batch`, `modules/crowd`, `weather`, `admin`, `backend/app/adapters/public_data`, `weather`, `backend/alembic`, `data/` | FR-008, 013, 014, 016, 017, NFR-002, 003, 004, 007, 010 |
-| D. 프런트엔드 | 정현빈 | COMP-01 Frontend (UI-01~UI-09), 회원·공유(P1) 화면 | `frontend/` | FR-006, 007, 011, NFR-008, 011 |
+| 정현빈 (확정) | 경로 추천 → 일정 생성 | 핵심지 고정(FR-003), 일정 생성·제약 검증(FR-005), 경유지 제안(FR-004) | UI-03 경유지 시트 | 일정 엔진(`engine/`, 검증 체인), 경로 어댑터(TMAP·ODsay·추정, RouteQuotaGuard), trips·blocks·legs 테이블 |
+| 박범찬 | 장소 탐색·AI | 장소 검색·매칭(FR-001), 여행 조건 입력·한 줄 해석(FR-002), 분위기 추천(FR-015), 장소 사진(FR-014) | UI-01 여행 시작, UI-04 장소 상세, UI-08 분위기로 찾기 | AIService(Gemini·bge-m3·OutputGuard·InputSanitizer), 카카오 로컬 어댑터, 프런트 기본 틀(라우팅·공통 컴포넌트·API 클라이언트) |
+| 김동현 | 타임라인·편집·지도 | 일정 타임라인 표시, 블록 편집·되돌리기(FR-006), 지도 보기·지도에서 고르기(FR-007) | UI-02 코스 타임라인, UI-06 지도 보기 | 카카오맵 SDK 래퍼, schedule_snapshots(EditHistory) |
+| 홍민지 | 데이터·혼잡 | 공공데이터 배치 수집(FR-016), 예상 혼잡(FR-008), 혼잡 회피 배치(FR-009), 관리자(FR-017) | UI-04 혼잡 그래프, UI-09 관리자 | 공공 DB 테이블(places·place_hours 등), 마이그레이션 병합, `data/` |
 
-배정 근거: PE는 정확성의 핵심인 일정 엔진, PO는 UI 시안을 직접 그린 만큼 프런트엔드, QA는 데이터 검증을
-맡으므로 수집·혼잡 데이터, PM은 외부 AI·추천 연동을 맡는다. 관리(PM)·인수 기준(QA) 업무는 기존대로 병행한다.
+배분 근거
 
-## 공동 소유
+- 정현빈: 본인 희망. 경유지 제안과 일정 생성은 둘 다 일정 엔진·경로 API 위에서 동작해 한 사람이 맡는 편이 인터페이스 조율이 적다.
+- 박범찬(PE): 화면 수가 가장 많은 장소 탐색 흐름과 외부 AI 연동을 맡고, 프런트 기본 틀을 먼저 세운다.
+- 김동현(PM): 엔진 계산 결과를 보여 주고 편집하는 화면을 맡는다. 엔진 내부는 정현빈이 맡으므로 관리 업무와 병행할 수 있는 범위다.
+- 홍민지(QA): 데이터 검증 업무와 겹치는 수집·혼잡을 맡는다.
 
-아래는 여러 파트가 함께 쓰므로 변경 시 PR에 관련 담당자를 모두 리뷰어로 지정한다.
-
-- `backend/app/core` (설정·로깅·오류·캐시), `backend/app/db` (세션·Base), `backend/app/api` (라우터 조립)
-- `backend/app/adapters/__init__.py` 의 SourceAdapter 인터페이스
-- API 요청·응답 스키마(SDD 6장, API-001~026): 백엔드 담당이 먼저 스키마를 정하고 D가 확인한다
-- `.github/workflows`, `infra/`, `docker-compose.yml`
+P1(플랜 B, 날씨, 사진 입력, 저장·공유·회원)은 P0 검증(11/19~11/22)이 끝난 뒤 배분한다.
 
 ## 파트 간 인터페이스
 
-| 제공 | 사용 | 내용 |
+먼저 정해야 다른 파트가 막히지 않는 순서대로 적었다. 제공하는 쪽이 첫 주(~11/1) 안에 함수·API 형태를 공유한다.
+
+| 제공 → 사용 | 내용 | 기한 |
 |---|---|---|
-| A → B | 경유지 추천 | 구간 이동시간 조회(추정·API), 삽입 후 재계산·위반 검사 |
-| C → A, B | 일정·추천 | 영업시간(place_hours), 예상 혼잡(CrowdService), 날씨 예보 |
-| B → A | 일정 생성 | 조건 해석 결과(Trip 조건), 설명 문구(비동기, 일정 계산과 분리) |
-| A·B·C → D | 화면 | REST API (SDD 6장) |
+| 정현빈 → 김동현 | 엔진 `insert`·`recompute`(변경 블록 뒤만)·`validate` 형태, 일정 응답 스키마(API-009) | 11/1 |
+| 박범찬 → 전원 | 프런트 라우팅·공통 컴포넌트·API 클라이언트 | 11/1 |
+| 홍민지 → 정현빈, 박범찬 | places·place_hours 테이블과 샘플 데이터 | 11/1 |
+| 홍민지 → 정현빈 | 장소·시각별 예상 혼잡 조회(CrowdService). 정현빈은 미고정 블록 순서 결정에 사용(FR-009) | P0 중반 |
+| 박범찬 → 정현빈 | 조건 해석 결과(Trip 조건), 추천 이유 문구(비동기, 일정 계산과 분리) | P0 중반 |
+| 정현빈 → 김동현 | 경유지 시트(UI-03)를 타임라인의 경유지 슬롯에 붙이는 컴포넌트 | P0 중반 |
+
+## 공동 소유
+
+여러 사람이 함께 고치므로 변경 시 담당자를 PR 리뷰어로 지정한다.
+
+| 영역 | 관리자 |
+|---|---|
+| `backend/app/core`, `backend/app/db`, `backend/app/api`(라우터 조립) | 정현빈 |
+| `backend/alembic/versions` (마이그레이션은 한 사람이 순서대로 병합) | 홍민지 |
+| `frontend/src/app`, `components`, `api` | 박범찬 |
+| UI-02 타임라인 화면 (경유지 슬롯·혼잡 배지는 각 담당이 컴포넌트로 제공) | 김동현 |
+| `.github/workflows`, `infra/`, `docker-compose.yml` | 정현빈 |
 
 ## 디렉터리별 모듈 구성 규칙
 
