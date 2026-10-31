@@ -19,8 +19,8 @@ export interface CrowdBadgeProps {
 }
 
 /**
- * 예상 혼잡 표시 전용 컴포넌트. 색·글자·막대 칸 수를 함께 쓴다(NFR-008).
- * 데이터 조회와 시간대 그래프는 `features/crowd`가 맡는다.
+ * 예상 혼잡 배지. 색·글자·막대 칸 수를 함께 쓴다(NFR-008).
+ * 프런트 기본 틀과 함께 만든 초안이며 담당(홍민지, TEAM.md)이 이어받는다.
  */
 export function CrowdBadge({ grade, confidence, hourLabel }: CrowdBadgeProps) {
   const style = grade ? GRADE_STYLE[grade] : null;

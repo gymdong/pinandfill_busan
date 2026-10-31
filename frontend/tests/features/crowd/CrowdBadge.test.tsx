@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { CrowdBadge } from '@/components';
+import { CrowdBadge } from '@/features/crowd';
 import type { CrowdGrade } from '@/types/api';
 
 function filledBars(container: HTMLElement) {

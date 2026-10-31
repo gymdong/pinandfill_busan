@@ -31,6 +31,7 @@ npm run dev        # 실제 API 사용. /api를 localhost:8000으로 프록시
 | `src/api`, `src/types/api.ts` | API 클라이언트, 요청·응답 타입, mock | 박범찬 |
 | `src/pages/*` | 화면. `index.tsx`의 default export를 라우터가 불러온다 | 화면별 담당 |
 | `src/features/*`, `src/map` | 기능 컴포넌트, 카카오맵 래퍼 | 기능별 담당 |
+| `src/features/crowd` | 혼잡 배지·그래프. `CrowdBadge`는 초안이며 담당자가 이어받는다 | 홍민지 |
 
 각 페이지의 `PagePlaceholder`는 담당자가 구현하면서 지운다. 새 화면 경로는 `src/app/paths.ts`와 `src/app/router.tsx`에 함께 추가한다.
 
@@ -53,7 +54,8 @@ UI-03(경유지)과 UI-05(플랜 B)는 경로 없이 `BottomSheet`로 연다.
 ```tsx
 import { useCallback } from 'react';
 import { placesApi } from '@/api';
-import { CrowdBadge, ErrorState, LoadingState } from '@/components';
+import { ErrorState, LoadingState } from '@/components';
+import { CrowdBadge } from '@/features/crowd';
 import { useApi } from '@/hooks/useApi';
 
 export function PlaceSummaryCard({ placeId }: { placeId: string }) {
@@ -116,7 +118,7 @@ try {
 ## 화면 규칙 (NFR-007·008·012)
 
 - 360px 폭에서 가로 스크롤이 없어야 한다. 탭 영역은 44px 이상이며 `--tap-min` 토큰을 쓴다.
-- 혼잡은 `CrowdBadge`로 표시한다. 색·글자·막대 칸 수를 함께 보여 주며 '실시간'이라는 표현을 쓰지 않는다.
+- 혼잡은 `@/features/crowd`의 `CrowdBadge`로 표시한다. 색·글자·막대 칸 수를 함께 보여 주며 '실시간'이라는 표현을 쓰지 않는다.
 - 데이터가 없으면 값을 만들지 않고 '확인 필요', '정보 부족', '사진 없음', '정보 없음'으로 표시한다.
 - 장소와 사진에는 출처, 기준일, 저작권 유형을 함께 표시한다.
 - 색은 `src/styles/tokens.css`의 토큰을 쓴다. 표시 문구는 API 응답을 기준으로 렌더링한다.

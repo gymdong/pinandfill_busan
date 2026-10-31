@@ -6,12 +6,12 @@ import {
   BottomSheet,
   Button,
   Chip,
-  CrowdBadge,
   EmptyState,
   ErrorState,
   LoadingState,
   useToast,
 } from '@/components';
+import { CrowdBadge } from '@/features/crowd';
 import { paths } from './paths';
 import styles from './DevGallery.module.css';
 
