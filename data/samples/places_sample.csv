@@ -1,4 +1,4 @@
-﻿name,address,lat,lng,category,indoor_outdoor,default_stay_min,opening_hours_raw,closed_days_raw,source_label_original,checked_at,source_label_original,notes
+﻿name,address,lat,lng,category,indoor_outdoor,default_stay_min,opening_hours_raw,closed_days_raw,source_label_original,checked_at,source_url,notes
 감천문화마을,부산 사하구 감천동 1-17,35.097823,129.010402,"관광, 명소",실외,90,상시 개방(상세 시설 및 체험 09:00-16:00),연중무휴,"한국관광공사, 카카오맵",2026.11.02.,https://www.gamcheon.or.kr/gamcheon/page/user/index,"마을 자체는 상시 방문 가능.
 안내센터(3월-9월 09:00-18:00, 11월-2월 09:00-17:00)"
 태종대유원지,부산 영도구 동삼동 산 29-1,35.055432,129.087954,유원지,실외,120,"하절기(04:00-24:00), 동절기(05:00-24:00)",연중무휴,"한국관광공사, 카카오맵",2026.10.31.,https://visitbusan.net/index.do?contentsSid=22&lang_cd=ko&uc_seq=258,"하절기(3월-10월), 동절기(11월-2월)"
