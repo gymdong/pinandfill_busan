@@ -2,7 +2,9 @@
  * SDD 6장 API-001~026의 요청·응답 타입. 필드 이름은 SDD 6장 표기(camelCase)를 따른다.
  *
  * `@provisional`이 붙은 항목은 SDD에 형식이 없어 5.2 테이블·4.1 클래스 다이어그램에서 유도했거나
- * 제안한 것이다. 담당자 합의나 미결정 사항(D6) 확정 시 바뀔 수 있다.
+ * 제안한 것이다. 담당자 합의 시 바뀔 수 있다.
+ *
+ * D6(2026-11-02 팀 결정): 일정에는 공공 DB 장소만 담는다. 카카오 응답의 장소명·좌표는 서버에 저장하지 않는다.
  */
 
 export type Uuid = string;
@@ -22,7 +24,8 @@ export type TransportMode = 'TRANSIT' | 'CAR' | 'WALK';
 export type CrowdGrade = '여유' | '보통' | '붐빔' | '매우 붐빔';
 export type CrowdConfidence = '높음' | '중간' | '낮음' | '없음';
 export type IndoorOutdoor = '실내' | '야외' | '반야외';
-export type PlaceSource = 'PUBLIC' | 'USER_SELECTED';
+/** SDD 5.2의 USER_SELECTED는 D6 결정으로 쓰지 않는다. */
+export type PlaceSource = 'PUBLIC';
 export type BlockOrigin = 'USER' | 'SUGGESTED';
 export type LegSource = 'TMAP' | 'ODSAY' | 'CACHE' | 'ESTIMATED';
 export type DayType = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT' | 'SUN' | 'HOLIDAY';
@@ -36,7 +39,7 @@ export type PlaceBadge = 'DETAIL' | 'BASIC';
 export type HoursStatus = 'KNOWN' | 'NEEDS_CHECK';
 
 export interface PlaceSearchItem {
-  /** @provisional 공공 DB 매칭 시 places.id, 미매칭이면 null. 미매칭 장소의 저장 범위는 D6. */
+  /** @provisional 공공 DB 매칭 시 places.id. 미매칭이면 null이며 일정에 담을 수 없다(D6). */
   placeId: Uuid | null;
   name: string;
   coords: Coords;
@@ -268,8 +271,8 @@ export interface ScheduleMutationResponse {
 
 /** API-006 */
 export interface AddBlockRequest {
-  /** @provisional 미매칭 장소의 전달 형식은 D6에 달려 있다. */
-  place: { placeId: Uuid } | { unmatched: { name: string; coords: Coords } };
+  /** 공공 DB 장소만 담는다(D6). */
+  place: { placeId: Uuid };
   isFixed: boolean;
   fixedWindow?: { dayNo: number; start: LocalTime; end: LocalTime };
   origin: BlockOrigin;

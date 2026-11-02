@@ -85,7 +85,7 @@ export const searchItems: PlaceSearchItem[] = [
     hoursStatus: 'NEEDS_CHECK',
   },
   {
-    // 미매칭 사례: 공공 DB에 없어 placeId가 없다.
+    // 미매칭 사례: 공공 DB에 없어 placeId가 없다. '기본 정보만'으로 보이되 일정에 담을 수 없다(D6).
     placeId: null,
     name: '민락 바다뷰 카페 (예시)',
     coords: { lat: 35.1561, lng: 129.1298 },
