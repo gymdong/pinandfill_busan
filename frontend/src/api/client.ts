@@ -22,7 +22,12 @@ export interface ApiRequest {
 
 export interface CallOptions {
   signal?: AbortSignal;
+  /** 기본 15초. 사진 업로드나 AI 해석처럼 오래 걸리는 호출에서 늘린다. */
+  timeoutMs?: number;
 }
+
+/** 본문이 비었거나 JSON이 아님을 나타낸다. */
+const NO_JSON = Symbol('no-json');
 
 function buildUrl(path: string, query: ApiRequest['query']): string {
   const params = new URLSearchParams();
@@ -35,11 +40,11 @@ function buildUrl(path: string, query: ApiRequest['query']): string {
 
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
-  if (!text) return undefined;
+  if (!text) return NO_JSON;
   try {
     return JSON.parse(text);
   } catch {
-    return undefined;
+    return NO_JSON;
   }
 }
 
@@ -67,7 +72,10 @@ async function serverRequest<T>({ method, path, query, body, formData, signal, t
       signal: controller.signal,
     });
     const payload = await readJson(response);
-    if (!response.ok) throw parseErrorResponse(response.status, payload);
+    if (!response.ok) throw parseErrorResponse(response.status, payload === NO_JSON ? undefined : payload);
+    if (response.status === 204) return undefined as T;
+    // 프록시가 HTML 오류 페이지를 200으로 돌려주는 경우 등은 성공으로 넘기지 않는다.
+    if (payload === NO_JSON) throw new ApiError({ id: 'UNKNOWN', status: response.status });
     return payload as T;
   } catch (error) {
     if (error instanceof ApiError) throw error;

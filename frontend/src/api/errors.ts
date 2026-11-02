@@ -12,7 +12,7 @@ export const ERROR_CATALOG = {
   'ERR-010': { delivery: 'inline', statuses: [200], message: '추가할 곳이 없어요. 우회 허용 시간을 늘려 보세요.' },
   'ERR-011': { delivery: 'inline', statuses: [200], message: '혼잡 정보가 부족해요.' },
   'ERR-012': { delivery: 'inline', statuses: [200], message: '예보를 확인할 수 없어요.' },
-  'ERR-013': { delivery: 'inline', statuses: [200], message: '사진 없음' },
+  'ERR-013': { delivery: 'inline', statuses: [200], message: '등록된 사진이 없어요.' },
   'ERR-014': { delivery: 'http', statuses: [400, 413], message: '사진 형식이나 크기를 확인해 주세요.' },
   'ERR-015': { delivery: 'http', statuses: [422], message: '설정값을 저장할 수 없어요.' },
   'ERR-016': { delivery: 'http', statuses: [401, 403, 404], message: '볼 수 없거나 찾을 수 없는 페이지예요.' },

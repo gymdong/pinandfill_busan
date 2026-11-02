@@ -62,6 +62,21 @@ describe('apiRequest', () => {
     await expect(tripsApi.generateSchedule('t1')).rejects.toMatchObject({ id: 'ERR-009', status: 409 });
   });
 
+  it('200인데 본문이 JSON이 아니면 성공으로 넘기지 않는다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html><html></html>', { status: 200 })));
+    await expect(placesApi.search({ q: '민락' })).rejects.toMatchObject({ id: 'UNKNOWN', status: 200 });
+  });
+
+  it('200인데 본문이 비어 있으면 성공으로 넘기지 않는다', async () => {
+    stubFetch(200);
+    await expect(tripsApi.undo('t1')).rejects.toMatchObject({ id: 'UNKNOWN', status: 200 });
+  });
+
+  it('204는 본문 없이 성공으로 처리한다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    await expect(tripsApi.deleteBlock('t1', 'b1')).resolves.toBeUndefined();
+  });
+
   it('알 수 없는 상태 코드는 UNKNOWN으로 처리한다', async () => {
     stubFetch(500);
     await expect(placesApi.search({ q: '민락' })).rejects.toMatchObject({ id: 'UNKNOWN', status: 500 });
@@ -91,6 +106,25 @@ describe('apiRequest', () => {
       }),
     ));
     const pending = placesApi.search({ q: '민락' }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(pending).resolves.toMatchObject({ id: 'TIMEOUT' });
+    vi.useRealTimers();
+  });
+
+  it('호출별로 시간 제한을 늘릴 수 있다', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      }),
+    ));
+    let settled: unknown = 'pending';
+    const pending = tripsApi.interpret({ text: '부산 2박 3일' }, { timeoutMs: 30_000 }).catch((e: unknown) => {
+      settled = e;
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(settled).toBe('pending');
     await vi.advanceTimersByTimeAsync(15_000);
     await expect(pending).resolves.toMatchObject({ id: 'TIMEOUT' });
     vi.useRealTimers();

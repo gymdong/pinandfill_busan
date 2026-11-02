@@ -88,7 +88,8 @@ try {
 - HTTP 오류는 모두 `ApiError`로 던진다. `id`, `status`, `message`(사용자 문구), `fields`(항목별 오류)를 가진다.
 - `ERROR_CATALOG`에서 ERR-001~017의 기본 문구를 찾을 수 있다. 서버 문구가 있으면 서버 문구가 우선이다.
 - `delivery: 'inline'`인 항목(ERR-002, ERR-010 등)은 200 응답 안의 값으로 표현되므로 예외가 아니라 화면 상태로 처리한다.
-- 클라이언트가 붙이는 ID는 `NETWORK`, `TIMEOUT`, `UNKNOWN`이다.
+- 클라이언트가 붙이는 ID는 `NETWORK`, `TIMEOUT`, `UNKNOWN`이다. 성공 응답이어도 본문이 비었거나 JSON이 아니면 `UNKNOWN`으로 던진다(204 제외).
+- 시간 제한은 기본 15초다. 사진 업로드나 AI 해석처럼 오래 걸리는 호출은 `{ timeoutMs: 30_000 }`처럼 호출마다 늘린다.
 
 ### mock 모드
 
@@ -108,7 +109,7 @@ try {
 | 항목 | 현재 값 | 확인할 사람 |
 | --- | --- | --- |
 | 오류 응답 본문 | `{error: {id, message, fields?}}` | 정현빈 |
-| 세션 키 전달 | `X-Session-Key` 헤더, localStorage 보관 | 정현빈 |
+| 세션 키 전달·보관 | `X-Session-Key` 헤더, localStorage 보관. 키가 곧 접근 권한이면 XSS 시 노출되므로 보관 위치도 함께 정한다 | 정현빈 |
 | API-009 일정 응답 | SDD 5.2·4.1에서 유도 | 정현빈 |
 | API-002 시작·종료 위치 | `startPlaceId`, `endPlaceId` 추가 제안 | 정현빈 |
 | API-003 배지 | `badge`와 `hoursStatus` 분리, `placeId`·`category`·`address` 추가 | 박범찬 |
