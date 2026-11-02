@@ -4,7 +4,10 @@
  * `@provisional`이 붙은 항목은 SDD에 형식이 없어 5.2 테이블·4.1 클래스 다이어그램에서 유도했거나
  * 제안한 것이다. 담당자 합의 시 바뀔 수 있다.
  *
- * D6(2026-11-02 팀 결정): 일정에는 공공 DB 장소만 담는다. 카카오 응답의 장소명·좌표는 서버에 저장하지 않는다.
+ * D6(카카오 공식 답변, 2026-11-02 팀 결정):
+ * - 공공 DB에 없는 카카오 장소도 일정에 담는다. 서버에는 카카오 장소 ID와 place_url만 저장한다.
+ * - 카카오 장소의 이름·좌표는 이번 접속 동안 브라우저 메모리(`@/api/kakaoSession`)에만 둔다.
+ *   좌표는 일정 계산 요청 때 `sessionCoords`로 보내고, 서버는 계산에만 쓰고 저장·캐시·로그하지 않는다.
  */
 
 export type Uuid = string;
@@ -24,7 +27,7 @@ export type TransportMode = 'TRANSIT' | 'CAR' | 'WALK';
 export type CrowdGrade = '여유' | '보통' | '붐빔' | '매우 붐빔';
 export type CrowdConfidence = '높음' | '중간' | '낮음' | '없음';
 export type IndoorOutdoor = '실내' | '야외' | '반야외';
-/** SDD 5.2의 USER_SELECTED는 D6 결정으로 쓰지 않는다. */
+/** places 테이블의 장소는 공공 DB만 해당한다. SDD 5.2의 USER_SELECTED는 D6 결정으로 쓰지 않는다. */
 export type PlaceSource = 'PUBLIC';
 export type BlockOrigin = 'USER' | 'SUGGESTED';
 export type LegSource = 'TMAP' | 'ODSAY' | 'CACHE' | 'ESTIMATED';
@@ -38,9 +41,28 @@ export type PlaceBadge = 'DETAIL' | 'BASIC';
 /** @provisional 영업시간 없음('확인 필요')은 매칭 배지와 동시에 나올 수 있어 분리한다. */
 export type HoursStatus = 'KNOWN' | 'NEEDS_CHECK';
 
-export interface PlaceSearchItem {
-  /** @provisional 공공 DB 매칭 시 places.id. 미매칭이면 null이며 일정에 담을 수 없다(D6). */
+/** @provisional 카카오 장소 키. D6에 따라 서버에 저장할 수 있는 값은 이 둘뿐이다. */
+export interface KakaoPlaceKey {
+  kakaoPlaceId: string;
+  /** 앱 안이 아니라 외부 브라우저로 연다. */
+  placeUrl: string;
+}
+
+/**
+ * 카카오 장소별 좌표. 키는 `kakaoPlaceId`.
+ * @provisional 일정 계산 요청에 함께 보내며, 서버는 저장·캐시·로그하지 않는다.
+ */
+export type SessionCoords = Record<string, Coords>;
+
+/** @provisional 서버에 좌표가 없는 카카오 장소를 계산하기 위해 요청에 붙는 필드 */
+export interface WithSessionCoords {
+  sessionCoords?: SessionCoords;
+}
+
+export interface PlaceSearchItem extends KakaoPlaceKey {
+  /** @provisional 공공 DB 매칭 시 places.id, 미매칭이면 null */
   placeId: Uuid | null;
+  /** 카카오 응답 값이다. 미매칭 장소는 메모리에서만 쓴다. */
   name: string;
   coords: Coords;
   /** @provisional 목업 UI-01에 표시되어 추가 */
@@ -203,11 +225,22 @@ export interface Violation {
   cause: string;
 }
 
+/**
+ * @provisional 카카오 장소 블록. 서버는 이름·좌표를 모르므로 화면에서
+ * `resolveBlockPlace`로 이번 접속의 메모리를 찾고, 없으면 '다시 선택 필요'로 표시한다.
+ */
+export interface KakaoBlockPlace extends KakaoPlaceKey {
+  source: 'KAKAO';
+}
+
+/** 공공 DB 장소는 `source: 'PUBLIC'`, 카카오 장소는 `source: 'KAKAO'`로 구분한다. */
+export type BlockPlace = PlaceSummary | KakaoBlockPlace;
+
 export interface Block {
   id: Uuid;
   dayNo: number;
   seq: number;
-  place: PlaceSummary;
+  place: BlockPlace;
   isFixed: boolean;
   fixedStart: LocalTime | null;
   fixedEnd: LocalTime | null;
@@ -269,20 +302,28 @@ export interface ScheduleMutationResponse {
   violations: Violation[];
 }
 
-/** API-006 */
-export interface AddBlockRequest {
-  /** 공공 DB 장소만 담는다(D6). */
-  place: { placeId: Uuid };
+/** @provisional 공공 DB 장소는 ID로, 카카오 장소는 키로 담는다. 카카오 장소의 이름은 보내지 않는다. */
+export type BlockPlaceInput = { placeId: Uuid } | KakaoPlaceKey;
+
+/** API-006. 클라이언트가 `sessionCoords`를 자동으로 붙인다. */
+export interface AddBlockRequest extends WithSessionCoords {
+  place: BlockPlaceInput;
   isFixed: boolean;
   fixedWindow?: { dayNo: number; start: LocalTime; end: LocalTime };
   origin: BlockOrigin;
+  /**
+   * @provisional 경유지를 넣을 인접한 두 블록(정현빈 제안). 이웃하지 않으면 ERR-001.
+   * 핵심지 추가처럼 위치를 엔진이 정할 때는 생략한다.
+   */
+  fromBlockId?: Uuid;
+  toBlockId?: Uuid;
 }
 
-/** API-007 */
-export type UpdateBlockRequest = { isFixed: boolean } | { seq: number } | { stayMin: number };
+/** API-007. 클라이언트가 `sessionCoords`를 자동으로 붙인다. */
+export type UpdateBlockRequest = ({ isFixed: boolean } | { seq: number } | { stayMin: number }) & WithSessionCoords;
 
-/** API-009 */
-export interface GenerateScheduleRequest {
+/** API-009. 클라이언트가 `sessionCoords`를 자동으로 붙인다. */
+export interface GenerateScheduleRequest extends WithSessionCoords {
   options?: Record<string, unknown>;
 }
 
@@ -291,8 +332,8 @@ export interface UndoResponse {
   schedule: Schedule;
 }
 
-/** API-011 */
-export interface SuggestWaypointsRequest {
+/** API-011. 클라이언트가 `sessionCoords`를 자동으로 붙인다. */
+export interface SuggestWaypointsRequest extends WithSessionCoords {
   fromBlockId: Uuid;
   toBlockId: Uuid;
   thresholdMin: WaypointThresholdMin;

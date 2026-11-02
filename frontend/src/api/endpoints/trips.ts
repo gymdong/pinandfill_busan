@@ -21,7 +21,20 @@ import type {
   UpdateBlockRequest,
 } from '@/types/api';
 import { apiRequest, type CallOptions } from '../client';
+import { getSessionCoords } from '../kakaoSession';
 import { setSessionKey } from '../session';
+
+/** 서버가 저장하지 않는 카카오 장소 좌표를 일정 계산 요청에 붙인다(D6). 기억한 장소가 없으면 그대로 둔다. */
+function withSessionCoords<T extends object>(body: T): T {
+  const sessionCoords = getSessionCoords();
+  return sessionCoords ? { ...body, sessionCoords } : body;
+}
+
+/** 본문이 없던 요청용. 붙일 좌표가 없으면 본문을 보내지 않는다. */
+function sessionCoordsBody(): object | undefined {
+  const sessionCoords = getSessionCoords();
+  return sessionCoords ? { sessionCoords } : undefined;
+}
 
 export const tripsApi = {
   /** API-001 한 줄 텍스트를 여행 조건으로 해석 */
@@ -39,37 +52,52 @@ export const tripsApi = {
   get: (tripId: string, options?: CallOptions) =>
     apiRequest<TripDetailResponse>({ method: 'GET', path: `/trips/${tripId}`, ...options }),
 
-  /** API-006 블록 추가 */
+  /** API-006 블록 추가. 카카오 장소는 먼저 `rememberKakaoPlace`로 기억해 두어야 좌표가 함께 간다. */
   addBlock: (tripId: string, body: AddBlockRequest, options?: CallOptions) =>
-    apiRequest<ScheduleMutationResponse>({ method: 'POST', path: `/trips/${tripId}/blocks`, body, ...options }),
+    apiRequest<ScheduleMutationResponse>({
+      method: 'POST',
+      path: `/trips/${tripId}/blocks`,
+      body: withSessionCoords(body),
+      ...options,
+    }),
 
   /** API-007 블록 편집(고정·순서·체류시간) */
   updateBlock: (tripId: string, blockId: string, body: UpdateBlockRequest, options?: CallOptions) =>
     apiRequest<ScheduleMutationResponse>({
       method: 'PATCH',
       path: `/trips/${tripId}/blocks/${blockId}`,
-      body,
+      body: withSessionCoords(body),
       ...options,
     }),
 
-  /** API-008 블록 삭제 */
+  /** API-008 블록 삭제. @provisional 뒤 블록 재계산에 좌표가 필요해 DELETE에도 본문을 보낼 수 있다. */
   deleteBlock: (tripId: string, blockId: string, options?: CallOptions) =>
-    apiRequest<ScheduleMutationResponse>({ method: 'DELETE', path: `/trips/${tripId}/blocks/${blockId}`, ...options }),
+    apiRequest<ScheduleMutationResponse>({
+      method: 'DELETE',
+      path: `/trips/${tripId}/blocks/${blockId}`,
+      body: sessionCoordsBody(),
+      ...options,
+    }),
 
   /** API-009 일정 생성·검증. 시간 부족은 ERR-009(409)로 온다. */
   generateSchedule: (tripId: string, body: GenerateScheduleRequest = {}, options?: CallOptions) =>
-    apiRequest<Schedule>({ method: 'POST', path: `/trips/${tripId}/schedule`, body, ...options }),
+    apiRequest<Schedule>({
+      method: 'POST',
+      path: `/trips/${tripId}/schedule`,
+      body: withSessionCoords(body),
+      ...options,
+    }),
 
   /** API-010 직전 편집 1단계 되돌리기 */
   undo: (tripId: string, options?: CallOptions) =>
-    apiRequest<UndoResponse>({ method: 'POST', path: `/trips/${tripId}/undo`, ...options }),
+    apiRequest<UndoResponse>({ method: 'POST', path: `/trips/${tripId}/undo`, body: sessionCoordsBody(), ...options }),
 
   /** API-011 경유지 후보 제안 */
   suggestWaypoints: (tripId: string, body: SuggestWaypointsRequest, options?: CallOptions) =>
     apiRequest<SuggestWaypointsResponse>({
       method: 'POST',
       path: `/trips/${tripId}/waypoints/suggest`,
-      body,
+      body: withSessionCoords(body),
       ...options,
     }),
 

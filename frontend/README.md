@@ -114,6 +114,9 @@ try {
 | API-002 시작·종료 위치 | `startPlaceId`, `endPlaceId` 추가 제안 | 정현빈 |
 | API-003 배지 | `badge`와 `hoursStatus` 분리, `placeId`·`category`·`address` 추가 | 박범찬 |
 | API-013 `avoid` 요청 필드 | 피할 조건 수정을 위해 추가 제안 | 박범찬 |
+| API-006 장소·삽입 위치 | `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 경유지는 `fromBlockId`·`toBlockId` | 정현빈 |
+| 카카오 장소 좌표 전달 | API-006~011 요청의 `sessionCoords`(`kakaoPlaceId` → 좌표). DELETE에도 본문 사용 | 정현빈 |
+| 블록의 카카오 장소 | `place: {source: 'KAKAO', kakaoPlaceId, placeUrl}`, 좌표 없는 구간은 `durationMin: null` | 정현빈·김동현 |
 
 ## 화면 규칙 (NFR-007·008·012)
 
@@ -128,7 +131,11 @@ try {
 
 카카오 데브톡 공식 답변과 2026-11-02 팀 결정에 따른다.
 
-- 일정에는 공공 DB 장소만 담는다. 공공 DB에 없는 장소는 검색 결과에 '기본 정보만'으로 보이되 담기 버튼을 두지 않는다.
-- 카카오 응답의 장소명·주소·좌표는 서버, 브라우저 저장소(localStorage·sessionStorage), 로그 어디에도 남기지 않는다. 화면 표시를 위해 메모리에 두는 것만 허용된다.
+- 공공 DB에 없는 카카오 장소도 일정에 담는다. 서버에 저장하는 값은 카카오 장소 ID와 place_url뿐이다.
+- 카카오 장소의 이름·좌표는 이번 접속 동안 `@/api`의 `kakaoSession` 메모리에만 둔다. 새로고침하거나 탭을 닫으면 사라지며, localStorage·sessionStorage·서버 로그로 옮기지 않는다.
+- 카카오 장소를 담을 때는 `useTripDraft().addPinned`로 담는다. 메모리에 자동으로 기억되고, 이후 API-006~011 요청에 좌표가 `sessionCoords`로 붙는다. 이름은 서버에 보내지 않는다.
+- 서버는 `sessionCoords`를 계산에만 쓰고 DB·캐시·로그에 남기지 않는다.
+- 블록 장소의 이름은 `resolveBlockPlace(block.place)`로 찾는다. `null`이면 이번 접속에서 고르지 않은 카카오 장소이므로 '다시 선택 필요'와 카카오맵 링크를 보여 준다. mock 일정의 마지막 블록이 이 상태다.
+- 사용자가 직접 이름을 쓰고 핀을 찍는 입력은 두지 않는다. 검색 결과를 보고 다시 입력하면 우회 저장으로 볼 수 있다.
 - 카카오 응답을 Gemini 등 외부 LLM에 보내지 않는다.
 - 카카오 place_url은 앱 안이 아니라 외부 브라우저로 연다.
