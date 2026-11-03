@@ -1,0 +1,92 @@
+name: CI
+
+# dev·main 으로 가는 PR 과 dev 직접 반영(병합)에서 돈다.
+# 보호 규칙의 필수 체크는 `ci-ok` 하나만 지정한다. 바뀐 영역의 잡만 돌고, 안 돈 잡은 건너뛴 것으로 통과 처리된다.
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      # 백엔드 설정(pyproject.toml)이 들어오기 전에는 검사할 것이 없다.
+      - id: project
+        run: echo "exists=$([ -f pyproject.toml ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - if: steps.project.outputs.exists == 'true'
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - if: steps.project.outputs.exists == 'true'
+        run: uv sync --locked
+      - if: steps.project.outputs.exists == 'true'
+        run: uv run ruff check .
+      - if: steps.project.outputs.exists == 'true'
+        run: uv run ruff format --check .
+      - if: steps.project.outputs.exists == 'true'
+        run: uv run pytest
+
+  # 보호 규칙에는 이 잡만 필수 체크로 등록한다. 실패·취소가 하나라도 있으면 실패한다.
+  ci-ok:
+    if: always()
+    needs: [changes, frontend, backend]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "CI failed"; exit 1
+          fi
