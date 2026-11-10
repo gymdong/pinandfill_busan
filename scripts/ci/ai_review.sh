@@ -33,8 +33,15 @@ response=$(curl -sS --fail-with-body https://api.anthropic.com/v1/messages \
   -H "content-type: application/json" \
   -d "$payload")
 
+# 응답에는 thinking 등 텍스트가 아닌 블록이 섞일 수 있어 text 블록만 모은다.
+text=$(echo "$response" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n")')
+if [ -z "$text" ]; then
+  echo "리뷰 텍스트를 받지 못했습니다. 응답 형태: $(echo "$response" | jq -c '{type, error, stop_reason, blocks: [.content[]?.type]}')" >&2
+  exit 1
+fi
+
 echo "## 🤖 AI 리뷰 (${MODEL})"
 echo
-echo "$response" | jq -r '.content[0].text'
+echo "$text"
 echo
 echo "_자동 생성된 참고 의견입니다. 사람 리뷰를 대체하지 않습니다. ${truncated}_"
