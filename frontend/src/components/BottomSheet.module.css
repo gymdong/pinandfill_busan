@@ -1,0 +1,69 @@
+.sheet {
+  width: 100%;
+  max-width: var(--app-max-width);
+  max-height: 90dvh;
+  margin: auto auto 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-l) var(--radius-l) 0 0;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  box-shadow: var(--shadow-sheet);
+}
+
+.sheet::backdrop {
+  background: rgb(20 32 44 / 45%);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 90dvh;
+}
+
+.handle {
+  width: 44px;
+  height: 4px;
+  margin: var(--space-3) auto 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+.title {
+  font-size: var(--text-l);
+  font-weight: 800;
+}
+
+.description {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+}
+
+.close {
+  flex: none;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) 0 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.footer {
+  padding: var(--space-3) var(--space-4) max(var(--space-3), env(safe-area-inset-bottom));
+  border-top: 1px solid var(--color-border);
+}
