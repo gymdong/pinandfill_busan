@@ -1,0 +1,57 @@
+name: CD
+
+# main 에 병합되면 서버(Docker Compose 1대)에 배포한다. 수동 실행(workflow_dispatch)도 가능하다.
+# 아래가 갖춰지기 전에는 배포 없이 건너뛴다(실패하지 않음).
+#   - 저장소 루트의 docker-compose.yml
+#   - Environment `production` 의 secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS
+#   - Environment `production` 의 variable: DEPLOY_PATH (서버의 저장소 경로)
+# `production` 환경에 필수 리뷰어를 지정하면 배포 전에 사람이 승인한다.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 배포끼리는 겹치지 않게 순서대로 돌리고, 진행 중인 배포는 취소하지 않는다.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ready
+        run: |
+          missing=""
+          [ -f docker-compose.yml ] || missing="$missing docker-compose.yml"
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS DEPLOY_PATH; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "배포 준비가 안 되어 건너뜀. 없는 항목:$missing"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.ready.outputs.run == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      # 서버가 저장소를 받아 이 커밋으로 맞춘 뒤 compose 로 빌드·재시작한다. .env 는 서버에만 두고 저장소에 올리지 않는다.
+      - if: steps.ready.outputs.run == 'true'
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -e; cd '$DEPLOY_PATH'; git fetch origin main; git checkout --detach '$GITHUB_SHA'; docker compose up -d --build --remove-orphans; docker image prune -f"
