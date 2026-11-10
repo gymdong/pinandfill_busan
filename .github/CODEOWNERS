@@ -1,0 +1,40 @@
+# 변경 영역 담당자를 PR 리뷰어로 자동 지정한다 (docs/TEAM.md 의 담당·공동 소유 표 기준).
+# 뒤에 오는 규칙이 앞의 규칙보다 우선한다.
+# GitHub 계정 ↔ 담당자: @jhb113 정현빈, @02chan 박범찬, @gymdong 김동현, @halswl1230 홍민지
+
+# 기본: 김동현(PM)
+*                                   @gymdong
+
+# 정현빈: 일정 엔진, 경로, 공통 백엔드, 인프라
+/backend/app/core/                  @jhb113
+/backend/app/db/                    @jhb113
+/backend/app/api/                   @jhb113
+/backend/app/modules/engine/        @jhb113
+/backend/app/modules/trips/         @jhb113 @gymdong
+/backend/app/adapters/route/        @jhb113
+/infra/                             @jhb113
+/.github/                           @jhb113
+/docker-compose.yml                 @jhb113
+
+# 박범찬: 장소 탐색, AI, 프런트 기본 틀
+/backend/app/modules/places/        @02chan
+/backend/app/modules/ai/            @02chan
+/backend/app/adapters/kakao/        @02chan
+/frontend/src/app/                  @02chan
+/frontend/src/components/           @02chan
+/frontend/src/api/                  @02chan
+
+# 김동현: 타임라인, 편집, 지도
+/frontend/src/pages/timeline/       @gymdong
+/frontend/src/pages/map-view/       @gymdong
+/frontend/src/map/                  @gymdong
+
+# 홍민지: 데이터, 혼잡, 관리자
+/backend/app/modules/crowd/         @halswl1230
+/backend/app/modules/admin/         @halswl1230
+/backend/app/adapters/public_data/  @halswl1230
+/backend/app/batch/                 @halswl1230
+/backend/alembic/versions/          @halswl1230
+/data/                              @halswl1230
+/frontend/src/features/crowd/       @halswl1230
+/frontend/src/pages/admin/          @halswl1230
