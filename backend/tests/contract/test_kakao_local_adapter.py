@@ -98,6 +98,14 @@ async def test_blank_query_is_rejected_without_calling(adapter, respx_mock):
     assert route.call_count == 0
 
 
+async def test_region_filter_prefers_lot_address(adapter, respx_mock):
+    # 지번 주소가 있으면 도로명 주소가 부산이어도 지번 주소를 기준으로 한다.
+    document = {**FIXTURE["documents"][0], "address_name": "경남 양산시 예시동 1", "road_address_name": "부산 예시로 1"}
+    respx_mock.get(URL).respond(json={"documents": [document]})
+
+    assert await adapter.search_keyword("예시") == []
+
+
 @pytest.mark.parametrize(
     ("status", "body", "reason"),
     [

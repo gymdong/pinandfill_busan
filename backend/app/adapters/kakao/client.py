@@ -41,7 +41,14 @@ class KakaoLocalAdapter:
         self._settings = settings
 
     async def search_keyword(self, query: str, *, category_group_code: str | None = None) -> list[KakaoPlace]:
-        """검색어로 부산의 장소를 찾는다. 결과는 카카오의 정확도순 첫 페이지다."""
+        """검색어로 부산의 장소를 찾는다. 결과는 카카오의 정확도순 첫 페이지다.
+
+        부산 여부는 지번 주소로 가리고, 지번 주소가 없을 때만 도로명 주소를 본다.
+
+        Raises:
+            ValueError: 검색어가 비어 있을 때. 호출하는 쪽이 먼저 입력을 검증(ERR-001)한다.
+            KakaoLocalError: 카카오 호출이 실패했을 때.
+        """
         query = query.strip()
         if not query:
             raise ValueError("검색어가 비어 있다")
@@ -78,7 +85,6 @@ class KakaoLocalAdapter:
 
         places = [place for place in map(_to_place, documents) if place is not None]
         skipped = len(documents) - len(places)
-        # 지번 주소가 없는 장소는 도로명 주소로 지역을 가린다.
         prefix = settings.region_prefix
         places = [place for place in places if (place.address or place.road_address).startswith(prefix)]
         logger.info(
