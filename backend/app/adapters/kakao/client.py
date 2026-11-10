@@ -10,8 +10,29 @@ from .settings import KakaoSettings
 
 logger = logging.getLogger(__name__)
 
-# httpx 는 INFO 로 요청 URL 전체(검색어 포함)를 남긴다. 로그 규칙(NFR-010)을 지키도록 낮춘다.
-logging.getLogger("httpx").setLevel(logging.WARNING)
+
+class _HttpxUrlQueryRedactor(logging.Filter):
+    """httpx 요청 로그의 URL 에서 쿼리 문자열(검색어·좌표)을 지운다.
+
+    httpx 는 INFO 로 요청 URL 전체를 남긴다. 로거 수준에 기대면 공통 로깅 설정이 수준을 바꿀 때
+    다시 노출되므로, 수준과 무관하게 동작하는 필터로 막는다(NFR-010). core 의 공통 로깅이 같은 정책을
+    갖추면 그쪽으로 옮긴다.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(arg.copy_with(query=None) if isinstance(arg, httpx.URL) else arg for arg in record.args)
+        return True
+
+
+def install_httpx_url_redaction() -> None:
+    """여러 번 불러도 필터는 하나만 붙는다."""
+    httpx_logger = logging.getLogger("httpx")
+    if not any(isinstance(item, _HttpxUrlQueryRedactor) for item in httpx_logger.filters):
+        httpx_logger.addFilter(_HttpxUrlQueryRedactor())
+
+
+install_httpx_url_redaction()
 
 KEYWORD_SEARCH_PATH = "/v2/local/search/keyword.json"
 QUOTA_EXCEEDED_CODE = -10
@@ -85,6 +106,9 @@ class KakaoLocalAdapter:
 
         places = [place for place in map(_to_place, documents) if place is not None]
         skipped = len(documents) - len(places)
+        # 결과가 있는데 하나도 읽지 못했다면 '검색 결과 없음'이 아니라 응답 형식 문제다.
+        if documents and not places:
+            raise self._failure("invalid_response", started, response.status_code)
         prefix = settings.region_prefix
         places = [place for place in places if (place.address or place.road_address).startswith(prefix)]
         logger.info(
@@ -117,7 +141,7 @@ def _documents(response: httpx.Response) -> list[object] | None:
 
 
 def _to_place(document: object) -> KakaoPlace | None:
-    """형식이 맞지 않는 장소 하나 때문에 검색 전체가 실패하지 않도록 건너뛴다."""
+    """형식이 맞지 않는 장소 일부 때문에 검색 전체가 실패하지 않도록 건너뛴다."""
     try:
         return KakaoPlace.model_validate(document)
     except ValidationError:

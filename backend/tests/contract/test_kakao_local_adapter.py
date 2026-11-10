@@ -161,6 +161,28 @@ async def test_skips_malformed_documents(adapter, respx_mock, caplog):
     assert "좌표없음" not in caplog.text
 
 
+async def test_all_documents_malformed_is_an_error_not_empty_result(adapter, respx_mock):
+    respx_mock.get(URL).respond(json={"documents": [{"id": "1"}, "문자열"]})
+
+    with pytest.raises(KakaoLocalError) as error:
+        await adapter.search_keyword("예시")
+
+    assert error.value.reason == "invalid_response"
+
+
+@pytest.mark.parametrize(
+    ("x", "y"),
+    [("NaN", "35.1"), ("129.1", "inf"), ("-inf", "35.1"), ("181", "35.1"), ("129.1", "90.5"), ("129.1", "-91")],
+)
+async def test_skips_documents_with_invalid_coordinates(adapter, respx_mock, x, y):
+    bad = {**FIXTURE["documents"][1], "x": x, "y": y}
+    respx_mock.get(URL).respond(json={"documents": [FIXTURE["documents"][0], bad]})
+
+    places = await adapter.search_keyword("예시")
+
+    assert [place.kakao_place_id for place in places] == ["900000001"]
+
+
 async def test_region_filter_falls_back_to_road_address(adapter, respx_mock):
     document = {**FIXTURE["documents"][0], "address_name": "", "road_address_name": "부산 수영구 예시해변로 1"}
     outside = {**FIXTURE["documents"][2], "address_name": ""}
@@ -185,6 +207,33 @@ async def test_logs_only_status_duration_and_count(adapter, respx_mock, caplog):
     assert "count=2" in caplog.text
     for leaked in _leaks("비밀검색어"):
         assert leaked not in caplog.text
+
+
+async def test_query_stays_out_of_logs_even_if_httpx_logging_is_enabled(adapter, respx_mock, caplog):
+    """공통 로깅 설정이 httpx 를 INFO·DEBUG 로 바꿔도 URL 의 검색어·검색 범위가 남지 않아야 한다."""
+    respx_mock.get(URL).respond(json=FIXTURE)
+    httpx_logger = logging.getLogger("httpx")
+    previous = httpx_logger.level
+    httpx_logger.setLevel(logging.DEBUG)
+    try:
+        with caplog.at_level(logging.DEBUG):
+            await adapter.search_keyword("비밀검색어")
+    finally:
+        httpx_logger.setLevel(previous)
+
+    # httpx 요청 로그 자체는 남되 쿼리 문자열만 빠진다.
+    assert "HTTP Request: GET https://dapi.kakao.com/v2/local/search/keyword.json " in caplog.text
+    for leaked in (*_leaks("비밀검색어"), "rect", "128.74"):
+        assert leaked not in caplog.text
+
+
+def test_httpx_url_redaction_is_installed_once():
+    from app.adapters.kakao.client import install_httpx_url_redaction
+
+    before = len(logging.getLogger("httpx").filters)
+    install_httpx_url_redaction()
+
+    assert len(logging.getLogger("httpx").filters) == before >= 1
 
 
 @pytest.mark.parametrize(
