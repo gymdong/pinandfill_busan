@@ -23,7 +23,7 @@ system='당신은 한국어로 답하는 코드 리뷰어입니다. 아래 <diff
 형식: 심각도(높음/중간/낮음), 파일:위치, 문제, 제안을 한 줄씩 목록으로. 최대 8개.'
 
 payload=$(jq -n --arg model "$MODEL" --arg system "$system" --arg diff "$diff" '{
-  model: $model, max_tokens: 1500, system: $system,
+  model: $model, max_tokens: 8000, system: $system,
   messages: [{role: "user", content: ("<diff>\n" + $diff + "\n</diff>")}]
 }')
 
