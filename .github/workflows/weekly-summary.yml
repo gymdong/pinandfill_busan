@@ -1,0 +1,32 @@
+name: Weekly summary
+
+# 매주 월요일 오전 9시(KST, 일요일 00:00 UTC)에 PR 현황을 Slack 으로 보낸다.
+# 필요: repository secret SLACK_WEBHOOK_URL (Slack Incoming Webhook). 없으면 건너뛴다.
+on:
+  schedule:
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build summary
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then echo "SLACK_WEBHOOK_URL 없음, 건너뜀"; exit 0; fi
+          scripts/ci/weekly_summary.sh > summary.txt
+          cat summary.txt
+      - name: Send to Slack
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then exit 0; fi
+          jq -n --rawfile text summary.txt '{text: $text}' \
+            | curl -sS --fail-with-body -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL"
