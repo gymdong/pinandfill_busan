@@ -1,6 +1,6 @@
 name: Weekly summary
 
-# 매주 월요일 오전 9시(KST, 일요일 00:00 UTC)에 PR 현황을 Discord 로 보낸다.
+# 매주 월요일 오전 9시(KST = 월요일 00:00 UTC)에 PR 현황을 Discord 로 보낸다.
 # 필요: repository secret DISCORD_WEBHOOK_URL (채널 설정 → 연동 → 웹후크). 없으면 건너뛴다.
 on:
   schedule:

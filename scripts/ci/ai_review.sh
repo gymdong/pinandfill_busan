@@ -10,6 +10,8 @@ MAX_CHARS="${REVIEW_MAX_CHARS:-60000}"
 diff=$(gh pr diff "$PR_NUMBER" | awk '
   /^diff --git/ { skip = ($0 ~ /package-lock\.json|uv\.lock|\.xlsx|\.docx|\.png|\.jpg/) }
   !skip { print }')
+# diff 안의 닫는 태그가 데이터 경계를 깨지 못하게 무력화한다.
+diff=${diff//<\/diff>/<\/ diff>}
 truncated=""
 if [ "${#diff}" -gt "$MAX_CHARS" ]; then
   diff="${diff:0:$MAX_CHARS}"
