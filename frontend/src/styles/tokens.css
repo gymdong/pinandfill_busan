@@ -1,0 +1,57 @@
+/* 색은 SRS 6.2 목업(UI-01~UI-08)에서 추출했다. '매우 붐빔'은 시안에 없어 붐빔보다 어둡게 정했다. */
+:root {
+  --color-page: #f3f3f1;
+  --color-surface: #ffffff;
+  --color-ink: #14202c;
+  --color-ink-muted: #56616b;
+  --color-border: #dfe2df;
+  --color-border-strong: #14202c;
+  --color-neutral-soft: #edefec;
+  --color-segment: #e7e9e6;
+
+  --color-accent: #0e599c;
+  --color-accent-soft: #e8f1f8;
+  --color-on-accent: #ffffff;
+
+  --color-warn: #a33d14;
+  --color-warn-soft: #faece4;
+
+  --color-crowd-free: #0b5a9e;
+  --color-crowd-free-soft: #e8f1f8;
+  --color-crowd-normal: #56616b;
+  --color-crowd-normal-soft: #edefec;
+  --color-crowd-busy: #b7471a;
+  --color-crowd-busy-soft: #faece4;
+  --color-crowd-very-busy: #7f2c0c;
+  --color-crowd-very-busy-soft: #f6dccf;
+  --color-crowd-empty: #c9ced2;
+
+  --radius-s: 8px;
+  --radius-m: 12px;
+  --radius-l: 20px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* NFR-008: 탭 영역 최소 높이·너비 */
+  --tap-min: 44px;
+  --app-max-width: 480px;
+
+  --font-sans: 'Pretendard', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
+    'Malgun Gothic', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'D2Coding', ui-monospace, Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-s: 14px;
+  --text-m: 16px;
+  --text-l: 18px;
+  --text-xl: 22px;
+
+  --shadow-sheet: 0 -8px 24px rgb(20 32 44 / 16%);
+  --z-toast: 100;
+}
