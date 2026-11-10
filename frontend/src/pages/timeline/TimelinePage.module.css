@@ -1,0 +1,8 @@
+.page { max-width: 760px; margin: 0 auto; padding: 24px 16px 80px; }
+.header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.day { margin-top: 28px; }
+.list { list-style: none; padding: 0; }
+.list li { margin: 12px 0; }
+.block { display: flex; flex-direction: column; gap: 6px; width: 100%; min-height: 56px; padding: 12px; text-align: left; border: 1px solid #aaa; border-radius: 8px; background: #fff; color: inherit; }
+.block[aria-pressed='true'] { border-color: #176b72; background: #edf8f7; }
+.leg { margin: 10px 12px; }
