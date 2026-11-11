@@ -51,6 +51,13 @@ describe('지도 보기', () => {
     expect(screen.getByText(/선택한 장소: 감천/)).toBeInTheDocument();
   });
 
+  it('이번 접속에서 고르지 않은 카카오 장소는 카카오맵 링크를 새 창으로 제공한다', async () => {
+    renderPage();
+    const link = await screen.findByRole('link', { name: '카카오맵에서 장소 확인 (새 창)' });
+    expect(link).toHaveAttribute('href', 'https://example.com/mock-kakao-place/3');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
   it('지도에서 찾은 카카오 장소를 핵심지로 추가한다', async () => {
     renderPage();
     fireEvent.click(await screen.findByText('지도 길게 누르기'));

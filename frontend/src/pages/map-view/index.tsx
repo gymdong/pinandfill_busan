@@ -79,6 +79,8 @@ function MapViewContent({ tripId }: { tripId: string }) {
       return <li key={block.id}>
         {leg ? <p className={styles.leg}>{leg.mode === 'TRANSIT' ? '대중교통' : leg.mode === 'WALK' ? '도보' : '자동차'} · {leg.durationMin === null ? '이동시간 확인 필요' : `${leg.durationMin}분`}{leg.source === 'ESTIMATED' ? ' (추정)' : ''}</p> : null}
         <button type="button" className={selectedId === block.id ? styles.selected : ''} aria-pressed={selectedId === block.id} onClick={() => setSelectedId(block.id)}>{index + 1}. {place?.name ?? '다시 선택 필요'} · {block.arriveAt ?? '시각 미정'}</button>
+        {/* D6: 이번 접속에서 고르지 않은 카카오 장소는 place_url을 외부 브라우저로 연다. */}
+        {!place && block.place.source === 'KAKAO' ? <a className={styles.placeLink} href={block.place.placeUrl} target="_blank" rel="noopener noreferrer">카카오맵에서 장소 확인 (새 창)</a> : null}
       </li>;
     })}</ol>{selected ? <p className={styles.notice}>선택한 장소: {resolveBlockPlace(selected.place)?.name ?? '다시 선택 필요'}</p> : null}</section>
   </main>;

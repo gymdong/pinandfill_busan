@@ -61,13 +61,16 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       return <section className={styles.day} aria-label={`${day.dayNo}일차`} key={day.dayNo}>
         <h2>{day.dayNo}일차 · {day.date}</h2>
         <ol className={styles.list}>{blocks.map((block, index) => {
-          const name = resolveBlockPlace(block.place)?.name ?? '다시 선택 필요';
+          const resolved = resolveBlockPlace(block.place);
+          const name = resolved?.name ?? '다시 선택 필요';
           const crowd = day.crowd.find((item) => item.blockId === block.id);
           const leg = day.legs.find((item) => item.fromBlockId === block.id && item.toBlockId === blocks[index + 1]?.id);
           return <li key={block.id}>
             <button className={styles.block} aria-pressed={selected === block.id} onClick={() => setSelected(selected === block.id ? null : block.id)}>
               <strong>{name}</strong><span>{block.arriveAt ?? '시각 미정'} – {block.departAt ?? '시각 미정'} · 체류 {block.stayMin}분 {block.isFixed && '· 고정'}</span>
             </button>
+            {/* D6: 이번 접속에서 고르지 않은 카카오 장소는 place_url을 외부 브라우저로 연다. */}
+            {!resolved && block.place.source === 'KAKAO' && <a className={styles.placeLink} href={block.place.placeUrl} target="_blank" rel="noopener noreferrer">카카오맵에서 장소 확인 (새 창)</a>}
             {crowd && <CrowdBadge grade={crowd.grade} confidence={crowd.confidence} />}
             {block.warnings.map((item, i) => <p role="alert" key={i}>{item.cause}</p>)}
             {leg && <p className={styles.leg}>{leg.mode === 'TRANSIT' ? '대중교통' : leg.mode === 'WALK' ? '도보' : '자동차'} · {leg.durationMin === null ? '이동시간 확인 필요' : `${leg.durationMin}분`}{leg.source === 'ESTIMATED' && ' (추정)'}</p>}

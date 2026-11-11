@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { schedule } from '@/api/mock/fixtures/schedule';
 import { KakaoMap } from '@/map/KakaoMap';
@@ -19,13 +19,17 @@ describe('카카오맵 SDK 래퍼', () => {
       getLng() { return this.lng; }
     }
     const handlers = new Map<string, (event: { latLng: LatLng }) => void>();
+    class Point { constructor(public x: number, public y: number) {} }
+    // 컨테이너 좌표 (x, y)를 (35 + y/1000, 129 + x/1000)으로 바꾸는 가짜 투영
+    const coordsFromContainerPoint = vi.fn((point: Point) => new LatLng(35 + point.y / 1000, 129 + point.x / 1000));
     class MapView {
       constructor(_node: HTMLElement, options: { center: LatLng }) { mapConstructor(options.center); }
       setCenter() {}
       setBounds() {}
+      getProjection() { return { coordsFromContainerPoint }; }
     }
     Object.defineProperty(window, 'kakao', { configurable: true, value: { maps: {
-      load: (callback: () => void) => callback(), LatLng, Map: MapView,
+      load: (callback: () => void) => callback(), LatLng, Map: MapView, Point,
       LatLngBounds: class { extend() {} }, Marker: class { setMap() {} },
       Polyline: class { setMap() {} },
       event: {
@@ -35,20 +39,31 @@ describe('카카오맵 SDK 래퍼', () => {
     } } });
     const onLongPress = vi.fn();
     render(<KakaoMap blocks={[]} legs={[]} selectedId={null} onSelect={vi.fn()} onLongPress={onLongPress} />);
-    await screen.findByRole('img', { name: '일정 경로 지도' });
+    const container = await screen.findByRole('img', { name: '일정 경로 지도' });
     await act(async () => { await Promise.resolve(); });
     expect(mapConstructor).toHaveBeenCalledWith(expect.objectContaining({ lat: 35.1796, lng: 129.0756 }));
-    await act(async () => {
-      handlers.get('mousedown')?.({ latLng: new LatLng(35, 129) });
-      await new Promise((resolve) => setTimeout(resolve, 700));
-    });
-    expect(onLongPress).toHaveBeenCalledWith({ lat: 35, lng: 129 });
-    await act(async () => {
-      handlers.get('mousedown')?.({ latLng: new LatLng(35.1, 129.1) });
-      handlers.get('dragstart')?.({ latLng: new LatLng(35.1, 129.1) });
-      await new Promise((resolve) => setTimeout(resolve, 700));
-    });
+    // jsdom의 getBoundingClientRect는 0을 돌려주므로 clientX/Y가 곧 컨테이너 좌표다.
+    const hold = async (events: () => void) => {
+      await act(async () => { events(); await new Promise((resolve) => setTimeout(resolve, 700)); });
+    };
+
+    // 터치로 길게 누르면 누른 지점의 컨테이너 좌표를 지도 좌표로 바꿔 전달한다.
+    await hold(() => fireEvent.pointerDown(container, { clientX: 100, clientY: 50, pointerType: 'touch', isPrimary: true }));
+    expect(coordsFromContainerPoint).toHaveBeenLastCalledWith(expect.objectContaining({ x: 100, y: 50 }));
+    expect(onLongPress).toHaveBeenCalledWith({ lat: 35.05, lng: 129.1 });
+
+    // 손을 일찍 떼거나, 크게 움직이거나, 지도를 끌면 취소한다.
+    await hold(() => { fireEvent.pointerDown(container, { clientX: 10, clientY: 10, isPrimary: true }); fireEvent.pointerUp(container); });
+    await hold(() => { fireEvent.pointerDown(container, { clientX: 10, clientY: 10, isPrimary: true }); fireEvent.pointerMove(container, { clientX: 40, clientY: 10 }); });
+    await hold(() => { fireEvent.pointerDown(container, { clientX: 10, clientY: 10, isPrimary: true }); handlers.get('dragstart')?.({ latLng: new LatLng(35, 129) }); });
+    // 마우스 오른쪽 버튼과 두 번째 손가락은 길게 누르기로 보지 않는다.
+    await hold(() => fireEvent.pointerDown(container, { clientX: 10, clientY: 10, pointerType: 'touch', isPrimary: false }));
+    await hold(() => fireEvent.pointerDown(container, { clientX: 10, clientY: 10, pointerType: 'mouse', button: 2, isPrimary: true }));
     expect(onLongPress).toHaveBeenCalledTimes(1);
+
+    // 작은 떨림은 허용한다.
+    await hold(() => { fireEvent.pointerDown(container, { clientX: 10, clientY: 10, isPrimary: true }); fireEvent.pointerMove(container, { clientX: 13, clientY: 12 }); });
+    expect(onLongPress).toHaveBeenCalledTimes(2);
   });
 
   it('좌표 없는 장소나 구간 없는 장소 사이에는 선을 잇지 않는다', async () => {

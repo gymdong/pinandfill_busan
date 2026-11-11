@@ -10,7 +10,9 @@ type KakaoMaps = {
   Map: new (node: HTMLElement, options: { center: LatLng; level: number }) => {
     setCenter(center: LatLng): void;
     setBounds(bounds: unknown): void;
+    getProjection(): { coordsFromContainerPoint(point: unknown): LatLng };
   };
+  Point: new (x: number, y: number) => unknown;
   LatLngBounds: new () => { extend(point: LatLng): void };
   Marker: new (options: { map: unknown; position: LatLng; title: string }) => MapObject;
   Polyline: new (options: { map: unknown; path: LatLng[]; strokeWeight: number; strokeColor: string }) => MapObject;
@@ -25,6 +27,10 @@ declare global {
 }
 
 let loading: Promise<KakaoMaps> | null = null;
+
+const LONG_PRESS_MS = 650;
+/** 손가락 떨림은 허용하고 지도를 끄는 동작은 길게 누르기로 보지 않는다. */
+const MOVE_TOLERANCE_PX = 8;
 
 /** 지도 JS 키는 도메인 제한된 브라우저 키만 사용한다. 서버 키를 전달하지 않는다. */
 function loadMap(): Promise<KakaoMaps> {
@@ -106,20 +112,38 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress }: Ka
       const selected = latest.points.find(({ block }) => block.id === latest.selectedId)?.place;
       if (selected) map.setCenter(new maps.LatLng(selected.coords.lat, selected.coords.lng));
 
-      // SDK 지도 이벤트의 좌표를 사용한다. 이동 중에는 길게 누르기를 취소한다.
+      // 카카오 Map 이벤트에는 mousedown/mouseup이 없으므로 컨테이너 DOM의 pointer 이벤트로
+      // 마우스·터치 길게 누르기를 감지하고, 컨테이너 좌표를 지도 좌표로 변환한다.
+      const container = node.current;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const cancel = () => { if (timer) clearTimeout(timer); timer = undefined; };
-      const down = (event: { latLng: LatLng }) => {
+      let start: { x: number; y: number } | null = null;
+      const cancel = () => { if (timer) clearTimeout(timer); timer = undefined; start = null; };
+      const down = (event: PointerEvent) => {
         cancel();
-        timer = setTimeout(() => onLongPress({ lat: event.latLng.getLat(), lng: event.latLng.getLng() }), 650);
+        if (event.isPrimary === false || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        const rect = container.getBoundingClientRect();
+        const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        start = { x: event.clientX, y: event.clientY };
+        timer = setTimeout(() => {
+          timer = undefined; start = null;
+          const latLng = map.getProjection().coordsFromContainerPoint(new maps.Point(point.x, point.y));
+          onLongPress({ lat: latLng.getLat(), lng: latLng.getLng() });
+        }, LONG_PRESS_MS);
       };
-      maps.event.addListener(map, 'mousedown', down);
-      maps.event.addListener(map, 'mouseup', cancel);
+      const move = (event: PointerEvent) => {
+        if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > MOVE_TOLERANCE_PX) cancel();
+      };
+      // 길게 누를 때 모바일 브라우저의 기본 메뉴가 뜨지 않게 한다.
+      const blockMenu = (event: Event) => event.preventDefault();
+      const domEvents: [string, EventListener][] = [
+        ['pointerdown', down as EventListener], ['pointermove', move as EventListener],
+        ['pointerup', cancel], ['pointercancel', cancel], ['pointerleave', cancel], ['contextmenu', blockMenu],
+      ];
+      domEvents.forEach(([name, handler]) => container.addEventListener(name, handler));
       maps.event.addListener(map, 'dragstart', cancel);
       cleanup = () => {
         cancel();
-        maps.event.removeListener(map, 'mousedown', down);
-        maps.event.removeListener(map, 'mouseup', cancel);
+        domEvents.forEach(([name, handler]) => container.removeEventListener(name, handler));
         maps.event.removeListener(map, 'dragstart', cancel);
       };
     }).catch((cause: unknown) => { if (!cancelled) setError(cause instanceof Error ? cause.message : '지도를 불러오지 못했어요.'); });

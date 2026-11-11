@@ -20,6 +20,16 @@ describe('코스 타임라인', () => {
     expect(screen.queryByRole('button', { name: '고정 해제' })).not.toBeInTheDocument();
   });
 
+  it('이번 접속에서 고르지 않은 카카오 장소는 카카오맵 링크를 새 창으로 제공한다', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    const link = await screen.findByRole('link', { name: '카카오맵에서 장소 확인 (새 창)' });
+    expect(link).toHaveAttribute('href', 'https://example.com/mock-kakao-place/3');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getAllByRole('link', { name: '카카오맵에서 장소 확인 (새 창)' })).toHaveLength(1);
+  });
+
   it('인접한 블록 사이에 검색한 경유지를 삽입 요청한다', async () => {
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
     vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
