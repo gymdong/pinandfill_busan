@@ -8,6 +8,8 @@ from collections import deque
 from collections.abc import Callable
 from threading import Lock
 
+MAX_PAUSE_SECONDS = 3_600.0
+
 
 class CallBudget:
     def __init__(
@@ -50,4 +52,4 @@ class CallBudget:
             now = self._clock()
             if not math.isfinite(now):
                 return
-            self._paused_until = max(self._paused_until, now + seconds)
+            self._paused_until = max(self._paused_until, now + min(seconds, MAX_PAUSE_SECONDS))

@@ -55,7 +55,7 @@ def test_insert_http_renumbers_and_preserves_fixed_then_generate():
     payload = response.json()
     assert set(payload) == {"schedule", "violations"}
     blocks = payload["schedule"]["days"][0]["blocks"]
-    assert [b["seq"] for b in blocks] == [10, 20, 30]
+    assert [b["seq"] for b in blocks] == [1, 2, 3]
     assert [blocks[0]["id"], blocks[2]["id"]] == ["a", "b"]
     assert (blocks[0]["arriveAt"], blocks[2]["arriveAt"]) == ("09:00", "11:00")
     assert (blocks[1]["arriveAt"], blocks[1]["departAt"]) == ("09:45", "10:15")

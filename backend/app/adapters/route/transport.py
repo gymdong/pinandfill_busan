@@ -11,6 +11,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Literal, Protocol
 from urllib.parse import urlencode, urlsplit
 
+from app.adapters.route.quota import MAX_PAUSE_SECONDS
+
 _ALLOWED_HOSTS = frozenset({"apis.openapi.sk.com", "api.odsay.com"})
 _TMAP_VERSIONED_PATHS = frozenset({"/tmap/routes", "/tmap/routes/pedestrian", "/tmap/routes/prediction"})
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -56,9 +58,9 @@ def _retry_after(value: str | None) -> float | None:
             seconds = (target - datetime.now(UTC)).total_seconds()
         except (TypeError, ValueError, OverflowError):
             return None
-    if not math.isfinite(seconds):
+    if not math.isfinite(seconds) or seconds < 0:
         return None
-    return max(0.0, seconds)
+    return min(seconds, MAX_PAUSE_SECONDS)
 
 
 class SafeHTTPTransport:

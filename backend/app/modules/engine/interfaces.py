@@ -23,7 +23,7 @@ from app.modules.trips.schemas import Schedule
 @dataclass(frozen=True, slots=True)
 class RouteEstimate:
     duration_min: int | None
-    source: Literal["TMAP", "ODSAY", "CACHE", "ESTIMATED"]
+    source: Literal["TMAP", "ODSAY", "CACHE", "ESTIMATED", "UNKNOWN"]
     computed_at: datetime
     time_semantics: RouteTimeSemantics = "unspecified"
     lookup_failed: bool = False

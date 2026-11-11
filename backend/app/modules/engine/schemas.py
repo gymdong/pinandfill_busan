@@ -137,7 +137,7 @@ class StoredLeg(ContractModel):
     to_block_id: str = Field(min_length=1)
     mode: Literal["TRANSIT", "CAR", "WALK"]
     duration_min: int | None = Field(default=None, ge=0)
-    source: Literal["TMAP", "ODSAY", "CACHE", "ESTIMATED"]
+    source: Literal["TMAP", "ODSAY", "CACHE", "ESTIMATED", "UNKNOWN"]
     computed_at: datetime | None = None
     time_semantics: RouteTimeSemantics = "unspecified"
     lookup_failed: bool = False
@@ -190,6 +190,7 @@ class InsertInput(ContractModel):
     from_block_id: str | None = None
     to_block_id: str | None = None
     block_id: str | None = None
+    day_no: int | None = Field(default=None, ge=1)
 
 
 class RecomputeInput(ContractModel):

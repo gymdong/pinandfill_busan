@@ -39,8 +39,8 @@ def client_with_routes(
     engine = BasicItineraryEngine(places, routes, clock=lambda: NOW)
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(10), depart=time(10, 30)),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(10), depart=time(10, 30)),
         )
     )
     repository = FakeTripRepository({"trip": TripRecord(_trip(), state)})
@@ -90,9 +90,8 @@ def test_api009_all_providers_fail_without_inventing_duration() -> None:
     client, repository, _, _ = client_with_routes([HttpReply(500, {})], fallback_replies=[HttpReply(500, {})])
     response = client.post("/api/trips/trip/schedule", json={})
     assert response.status_code == 200
-    leg = response.json()["days"][0]["legs"][0]
-    assert leg["durationMin"] is None
-    assert leg["source"] == "ODSAY"
+    assert response.json()["days"][0]["legs"] == []
+    assert repository.get("trip").schedule.legs[0].source == "UNKNOWN"
     assert response.json()["days"][0]["blocks"][1]["arriveAt"] is None
     assert "TRAVEL_TIME_NEEDS_CHECK" in {item["type"] for item in response.json()["violations"]}
     assert repository.get("trip").schedule.legs[0].duration_min is None
@@ -141,7 +140,8 @@ def test_kakao_http_route_data_is_never_persisted_logged_or_reused(caplog, capsy
         again = client.post("/api/trips/trip/schedule", json={})
     assert response.status_code == again.status_code == 200
     assert response.json()["days"][0]["legs"][0]["durationMin"] == 10
-    assert again.json()["days"][0]["legs"][0]["durationMin"] is None
+    assert again.json()["days"][0]["legs"] == []
+    assert repository.get("trip").schedule.legs[0].duration_min is None
     assert primary.calls == ["transit"] and fallback.calls == []
     captured = capsys.readouterr()
     text = response.text + again.text + repository.get("trip").schedule.model_dump_json()

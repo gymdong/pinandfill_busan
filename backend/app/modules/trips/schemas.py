@@ -124,6 +124,7 @@ class PublicPlaceInput(ContractModel):
 
 
 class AddBlockRequest(WithSessionCoords):
+    day_no: int | None = Field(default=None, ge=1)
     place: PublicPlaceInput | KakaoPlaceKey
     is_fixed: bool
     fixed_window: FixedWindow | None = None

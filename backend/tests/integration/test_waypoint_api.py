@@ -98,8 +98,8 @@ def _setup(
     provider = FakeCandidates(candidates)
     schedule = state or ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(11), depart=time(11, 30), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(11), depart=time(11, 30), fixed=True),
         )
     )
     repository = FakeTripRepository({"trip": TripRecord(_trip(), schedule)})
@@ -242,9 +242,9 @@ def test_unverifiable_or_constrained_candidate_is_excluded(
 def test_fixed_time_conflict_excludes_candidate_and_keeps_state() -> None:
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(10), depart=time(10, 30), fixed=True),
-            _block("c", 30, arrive=time(11), depart=time(11, 30), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(10), depart=time(10, 30), fixed=True),
+            _block("c", 3, arrive=time(11), depart=time(11, 30), fixed=True),
         )
     )
     client, repository, _, _, routes = _setup(
@@ -286,8 +286,8 @@ def test_non_adjacent_or_missing_blocks_return_err001(body: dict[str, object]) -
 def test_cross_day_blocks_are_rejected() -> None:
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 10, arrive=time(11), depart=time(11, 30), fixed=True, day_no=2),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 1, arrive=time(11), depart=time(11, 30), fixed=True, day_no=2),
         )
     )
     client, repository, _, _, _ = _setup((_candidate("x"),), {}, state=state)
@@ -320,8 +320,8 @@ def test_kakao_coordinates_are_request_scoped_not_logged_or_stored(caplog: pytes
     )
     state = ScheduleState(
         blocks=(
-            _block("a", 10, ref=kakao, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(11), depart=time(11, 30), fixed=True),
+            _block("a", 1, ref=kakao, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(11), depart=time(11, 30), fixed=True),
         )
     )
     client, repository, _, _, routes = _setup(
@@ -392,12 +392,12 @@ def test_duplicate_candidate_ids_are_excluded_as_ambiguous() -> None:
 
 
 def test_stale_fixed_anchor_is_not_used_to_recommend_an_impossible_visit() -> None:
-    first = _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True)
+    first = _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True)
     first = first.model_copy(update={"arrive_at": time(8, 30), "depart_at": time(9)})
     state = ScheduleState(
         blocks=(
             first,
-            _block("b", 20, arrive=time(10), depart=time(10, 30), fixed=True),
+            _block("b", 2, arrive=time(10), depart=time(10, 30), fixed=True),
         )
     )
     client, repository, provider, _, routes = _setup(
@@ -417,9 +417,9 @@ def test_stale_fixed_anchor_is_not_used_to_recommend_an_impossible_visit() -> No
 def test_later_fixed_block_conflict_excludes_candidate() -> None:
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(9, 45), depart=time(10, 15)),
-            _block("c", 30, arrive=time(10, 30), depart=time(11), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(9, 45), depart=time(10, 15)),
+            _block("c", 3, arrive=time(10, 30), depart=time(11), fixed=True),
         )
     )
     client, repository, _, _, _ = _setup(

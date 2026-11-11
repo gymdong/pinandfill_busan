@@ -54,4 +54,5 @@ def insert_command(
         from_block_id=request.from_block_id,
         to_block_id=request.to_block_id,
         block_id=block_id,
+        day_no=request.day_no,
     )

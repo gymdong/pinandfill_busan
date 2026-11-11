@@ -4,7 +4,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
 
-from app.modules.engine.service import EngineInputError, NeedsConfirmationError, PolicyRequiredError
+from app.modules.engine.service import (
+    EngineInputError,
+    NeedsConfirmationError,
+    PolicyRequiredError,
+    SequenceNormalizationRequiredError,
+)
 from app.modules.trips.schemas import (
     AddBlockRequest,
     GenerateScheduleRequest,
@@ -41,8 +46,10 @@ def translate_error(exc: Exception) -> TripAPIError:
         return TripAPIError(404, "ERR-016", "여행을 찾을 수 없습니다.")
     if isinstance(exc, FixedScheduleConflictError):
         return TripAPIError(409, "ERR-009", "고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요.")
+    if isinstance(exc, SequenceNormalizationRequiredError):
+        return TripAPIError(400, "ERR-001", "기존 일정의 순서값을 별도 정규화한 뒤 다시 편집해 주세요.")
     if isinstance(exc, EngineInputError):
-        return TripAPIError(400, "ERR-001", "블록 식별자·순서·삽입 구간을 확인해 주세요.")
+        return TripAPIError(400, "ERR-001", "블록 식별자·순서·삽입 구간 또는 dayNo를 확인해 주세요.")
     if isinstance(exc, PolicyRequiredError):
         return TripAPIError(
             400, "ERR-001", "명시적 삽입 구간·시작 시각·체류시간이 필요하며 자동 배치 옵션은 지원하지 않습니다."

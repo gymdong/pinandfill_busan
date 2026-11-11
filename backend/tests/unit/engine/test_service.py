@@ -28,7 +28,6 @@ from app.modules.engine.service import (
     BasicItineraryEngine,
     EngineInputError,
     NeedsConfirmationError,
-    PolicyRequiredError,
 )
 
 
@@ -164,10 +163,10 @@ def test_recompute_preserves_prefix_fixed_sequence_and_applies_travel_plus_stay(
     engine, _, routes = _engine(("a", "b", "c", "d"), duration=20)
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(9, 50), depart=time(10, 20)),
-            _block("c", 30, arrive=time(11), depart=time(11, 30), fixed=True),
-            _block("d", 10, arrive=time(9), depart=time(9, 30), fixed=True, day_no=2),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(9, 50), depart=time(10, 20)),
+            _block("c", 3, arrive=time(11), depart=time(11, 30), fixed=True),
+            _block("d", 1, arrive=time(9), depart=time(9, 30), fixed=True, day_no=2),
         )
     )
 
@@ -175,10 +174,10 @@ def test_recompute_preserves_prefix_fixed_sequence_and_applies_travel_plus_stay(
 
     assert result.state.blocks[0] == state.blocks[0]
     assert [(block.id, block.seq) for block in result.state.blocks] == [
-        ("a", 10),
-        ("b", 20),
-        ("c", 30),
-        ("d", 10),
+        ("a", 1),
+        ("b", 2),
+        ("c", 3),
+        ("d", 1),
     ]
     assert (result.state.blocks[1].arrive_at, result.state.blocks[1].depart_at) == (time(9, 50), time(10, 20))
     assert (result.state.blocks[2].arrive_at, result.state.blocks[2].depart_at) == (time(11), time(11, 30))
@@ -190,8 +189,8 @@ def test_recompute_reports_fixed_arrival_that_travel_time_cannot_reach() -> None
     engine, _, _ = _engine(("a", "b"), duration=45)
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(10), depart=time(10, 30), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(10), depart=time(10, 30), fixed=True),
         )
     )
 
@@ -228,7 +227,7 @@ def test_validation_chain_checks_open_closed_break_and_unknown_hours(
     expected: str,
 ) -> None:
     engine, _, _ = _engine(("a",), details_factory=lambda place_id: _details(place_id, hours=hours))
-    state = ScheduleState(blocks=(_block("a", 10, arrive=arrive, depart=depart),))
+    state = ScheduleState(blocks=(_block("a", 1, arrive=arrive, depart=depart),))
 
     validation = engine.validate(ValidateInput(trip=_trip(), schedule=state))
 
@@ -243,8 +242,8 @@ def test_missing_kakao_coords_skips_route_and_marks_leg_unknown() -> None:
     engine, places, routes = _engine(("a",))
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("k", 20, ref=kakao, arrive=None, depart=None),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("k", 2, ref=kakao, arrive=None, depart=None),
         )
     )
 
@@ -265,8 +264,8 @@ def test_kakao_coords_are_request_scoped_need_no_name_and_are_not_serialized_or_
     engine, _, routes = _engine(("a",), duration=15)
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("k", 20, ref=kakao, arrive=None, depart=None),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("k", 2, ref=kakao, arrive=None, depart=None),
         )
     )
     secret_lat = 35.123456
@@ -300,12 +299,12 @@ def test_kakao_coords_are_request_scoped_need_no_name_and_are_not_serialized_or_
     assert without_context.state.legs[0].duration_min is None
 
 
-def test_insert_uses_explicit_adjacent_gap_without_renumbering_existing_blocks() -> None:
+def test_insert_shifts_only_suffix_sequence() -> None:
     engine, _, _ = _engine(("a", "new", "b"), duration=15)
     original = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(10, 30), depart=time(11), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(10, 30), depart=time(11), fixed=True),
         )
     )
     command = InsertInput(
@@ -324,7 +323,7 @@ def test_insert_uses_explicit_adjacent_gap_without_renumbering_existing_blocks()
 
     result = engine.insert(command)
 
-    assert [(block.id, block.seq) for block in result.state.blocks] == [("a", 10), ("new", 11), ("b", 20)]
+    assert [(block.id, block.seq) for block in result.state.blocks] == [("a", 1), ("new", 2), ("b", 3)]
     assert (result.state.blocks[1].arrive_at, result.state.blocks[1].depart_at) == (time(9, 45), time(10, 15))
     assert (result.state.blocks[2].arrive_at, result.state.blocks[2].depart_at) == (time(10, 30), time(11))
 
@@ -333,9 +332,9 @@ def test_wrong_adjacency_rejects_without_mutating_input() -> None:
     engine, _, _ = _engine(("a", "b", "c", "new"))
     original = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30)),
-            _block("b", 20, arrive=time(10), depart=time(10, 30)),
-            _block("c", 30, arrive=time(11), depart=time(11, 30)),
+            _block("a", 1, arrive=time(9), depart=time(9, 30)),
+            _block("b", 2, arrive=time(10), depart=time(10, 30)),
+            _block("c", 3, arrive=time(11), depart=time(11, 30)),
         )
     )
     before = original.model_dump(mode="json", by_alias=True)
@@ -357,8 +356,8 @@ def test_insert_without_slot_requires_unsettled_policy() -> None:
     engine, _, _ = _engine(("a", "b", "new"))
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30)),
-            _block("b", 20, arrive=time(10), depart=time(10, 30)),
+            _block("a", 1, arrive=time(9), depart=time(9, 30)),
+            _block("b", 2, arrive=time(10), depart=time(10, 30)),
         )
     )
     command = InsertInput(
@@ -367,16 +366,16 @@ def test_insert_without_slot_requires_unsettled_policy() -> None:
         block=BlockDraft(place_ref=_public_ref("new"), is_fixed=False, stay_min=30, origin="USER"),
     )
 
-    with pytest.raises(PolicyRequiredError, match="position"):
+    with pytest.raises(EngineInputError, match="position"):
         engine.insert(command)
 
 
-def test_insert_without_sequence_gap_renumbers_same_day_and_preserves_fixed_data() -> None:
+def test_insert_shifts_suffix_and_preserves_fixed_data() -> None:
     engine, _, _ = _engine(("a", "b", "new", "next-day"))
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 11, arrive=time(10), depart=time(10, 30), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(10), depart=time(10, 30), fixed=True),
             _block("next-day", 99, arrive=time(11), depart=time(11, 30), fixed=True, day_no=2),
         )
     )
@@ -392,9 +391,9 @@ def test_insert_without_sequence_gap_renumbers_same_day_and_preserves_fixed_data
     result = engine.insert(command)
 
     assert [(block.id, block.seq) for block in result.state.blocks] == [
-        ("a", 10),
-        ("new", 20),
-        ("b", 30),
+        ("a", 1),
+        ("new", 2),
+        ("b", 3),
         ("next-day", 99),
     ]
     assert result.state.blocks[0] == state.blocks[0]
@@ -403,12 +402,12 @@ def test_insert_without_sequence_gap_renumbers_same_day_and_preserves_fixed_data
     assert result.state.blocks[3] == state.blocks[2]
 
 
-def test_insert_uses_new_gap_after_renumbering_without_changing_existing_order() -> None:
+def test_consecutive_insertions_keep_contiguous_sequence_and_order() -> None:
     engine, _, _ = _engine(("a", "b", "first", "second"))
     initial = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 11, arrive=time(11), depart=time(11, 30), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(11), depart=time(11, 30), fixed=True),
         )
     )
     first = engine.insert(
@@ -434,10 +433,10 @@ def test_insert_uses_new_gap_after_renumbering_without_changing_existing_order()
     ).state
 
     assert [(block.id, block.seq) for block in second.blocks] == [
-        ("a", 10),
-        ("second", 11),
-        ("first", 20),
-        ("b", 30),
+        ("a", 1),
+        ("second", 2),
+        ("first", 3),
+        ("b", 4),
     ]
     assert second.blocks[0] == initial.blocks[0]
     assert second.blocks[3].id == initial.blocks[1].id
@@ -448,8 +447,8 @@ def test_recompute_reports_day_overflow_without_assigning_cross_day_times() -> N
     engine, _, _ = _engine(("a", "b"), duration=20)
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(23), depart=time(23, 30), fixed=True),
-            _block("b", 20, arrive=None, depart=None, stay=30),
+            _block("a", 1, arrive=time(23), depart=time(23, 30), fixed=True),
+            _block("b", 2, arrive=None, depart=None, stay=30),
         )
     )
 
@@ -471,8 +470,8 @@ def test_missing_public_display_fields_require_confirmation() -> None:
     )
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=None, depart=None),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=None, depart=None),
         )
     )
 
@@ -482,7 +481,7 @@ def test_missing_public_display_fields_require_confirmation() -> None:
 
 def test_block_day_must_be_inside_trip_date_range() -> None:
     engine, _, _ = _engine(("a",))
-    state = ScheduleState(blocks=(_block("a", 10, arrive=time(9), depart=time(9, 30), day_no=2),))
+    state = ScheduleState(blocks=(_block("a", 1, arrive=time(9), depart=time(9, 30), day_no=2),))
 
     with pytest.raises(EngineInputError, match="outside the trip dates"):
         engine.validate(ValidateInput(trip=_trip(), schedule=state))
@@ -492,8 +491,8 @@ def test_fixed_insert_keeps_designated_window_and_sequence() -> None:
     engine, _, _ = _engine(("a", "fixed", "b"), duration=15)
     state = ScheduleState(
         blocks=(
-            _block("a", 10, arrive=time(9), depart=time(9, 30), fixed=True),
-            _block("b", 20, arrive=time(11), depart=time(11, 30), fixed=True),
+            _block("a", 1, arrive=time(9), depart=time(9, 30), fixed=True),
+            _block("b", 2, arrive=time(11), depart=time(11, 30), fixed=True),
         )
     )
     command = InsertInput(
@@ -514,7 +513,7 @@ def test_fixed_insert_keeps_designated_window_and_sequence() -> None:
     result = engine.insert(command)
 
     inserted = result.state.blocks[1]
-    assert (inserted.seq, inserted.fixed_start, inserted.fixed_end) == (11, time(10), time(10, 30))
+    assert (inserted.seq, inserted.fixed_start, inserted.fixed_end) == (2, time(10), time(10, 30))
     assert (inserted.arrive_at, inserted.depart_at) == (time(10), time(10, 30))
 
 
@@ -531,10 +530,10 @@ def test_middle_anchor_preserves_prefix_legs_other_days_and_repeated_fixed_times
     )
     original = ScheduleState(
         blocks=(
-            _block("prefix", 10, arrive=time(8), depart=time(8, 30), fixed=True),
-            _block("anchor", 20, arrive=time(9), depart=time(9, 30)),
-            _block("fixed", 30, arrive=time(10), depart=time(10, 30), fixed=True),
-            _block("next-day", 10, arrive=time(9), depart=time(9, 30), fixed=True, day_no=2),
+            _block("prefix", 1, arrive=time(8), depart=time(8, 30), fixed=True),
+            _block("anchor", 2, arrive=time(9), depart=time(9, 30)),
+            _block("fixed", 3, arrive=time(10), depart=time(10, 30), fixed=True),
+            _block("next-day", 1, arrive=time(9), depart=time(9, 30), fixed=True, day_no=2),
         ),
         legs=(prefix_leg,),
     )
@@ -558,7 +557,7 @@ def test_middle_anchor_preserves_prefix_legs_other_days_and_repeated_fixed_times
 def test_validate_boundary_times_are_allowed_and_never_calls_routes_or_mutates(arrive: time, depart: time) -> None:
     hours = OpeningHours(open_time=time(9), close_time=time(18), break_start=time(12), break_end=time(13))
     engine, _, routes = _engine(("a",), details_factory=lambda pid: _details(pid, hours=hours))
-    state = ScheduleState(blocks=(_block("a", 10, arrive=arrive, depart=depart),))
+    state = ScheduleState(blocks=(_block("a", 1, arrive=arrive, depart=depart),))
     before = state.model_dump_json()
     report = engine.validate(ValidateInput(trip=_trip(), schedule=state))
     assert not report.violations

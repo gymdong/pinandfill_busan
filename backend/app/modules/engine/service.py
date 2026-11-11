@@ -39,6 +39,10 @@ class EngineInputError(ValueError):
     """Invalid identifiers/slot; messages contain no request payload."""
 
 
+class SequenceNormalizationRequiredError(EngineInputError):
+    """Legacy positions require a separate explicit migration, never an edit side effect."""
+
+
 class PolicyRequiredError(ValueError):
     """Unsupported placement/time policy; the input schedule remains intact."""
 
@@ -112,6 +116,23 @@ class BasicItineraryEngine:
         places = self._resolve(command.trip, command.schedule, context or CalculationContext())
         return validate_chain(command, places)
 
+    def normalize_sequences(self, trip: TripWindow, state: ScheduleState, *, day_no: int) -> ScheduleState:
+        """Explicit legacy migration only; callers must snapshot/commit it separately from edits.
+
+        Preserve IDs, times, legs and other dates. Never invoked by insert/recompute.
+        """
+        self._check(trip, state)
+        if not 1 <= day_no <= (trip.end_date - trip.start_date).days + 1:
+            raise EngineInputError("Normalization day is outside the trip dates")
+        position = 0
+        blocks = []
+        for block in state.blocks:
+            if block.day_no == day_no:
+                position += 1
+                block = block.model_copy(update={"seq": position})
+            blocks.append(block)
+        return ScheduleState(blocks=tuple(blocks), legs=state.legs)
+
     def recompute(self, command: RecomputeInput, *, context: CalculationContext | None = None) -> EngineResult:
         self._check(command.trip, command.schedule)
         anchor = next(
@@ -124,21 +145,40 @@ class BasicItineraryEngine:
 
     def insert(self, command: InsertInput, *, context: CalculationContext | None = None) -> EngineResult:
         self._check(command.trip, command.schedule)
-        if command.from_block_id is None and command.to_block_id is None:
-            raise PolicyRequiredError("Automatic insertion position is not agreed")
-        if command.from_block_id is None or command.to_block_id is None:
-            raise EngineInputError("Both insertion anchors are required")
         blocks = list(command.schedule.blocks)
-        index = next((i for i, b in enumerate(blocks) if b.id == command.from_block_id), None)
-        if index is None or index + 1 >= len(blocks) or blocks[index + 1].id != command.to_block_id:
-            raise EngineInputError("Insertion anchors must be adjacent")
-        before, after = blocks[index : index + 2]
-        if before.day_no != after.day_no:
-            raise EngineInputError("Insertion anchors must be on the same day")
-        needs_renumbering = after.seq - before.seq < 2
+        if command.from_block_id is None and command.to_block_id is None:
+            day_no = command.day_no
+            if day_no is None and command.block.fixed_window is not None:
+                day_no = command.block.fixed_window.day_no
+            if day_no is None:
+                raise EngineInputError("Insertion position or dayNo is required")
+            day_indices = [i for i, block in enumerate(blocks) if block.day_no == day_no]
+            index = (
+                day_indices[-1]
+                if day_indices
+                else next((i - 1 for i, block in enumerate(blocks) if block.day_no > day_no), len(blocks) - 1)
+            )
+        else:
+            if command.from_block_id is None or command.to_block_id is None:
+                raise EngineInputError("Both insertion anchors are required")
+            index = next((i for i, block in enumerate(blocks) if block.id == command.from_block_id), -1)
+            if index < 0 or index + 1 >= len(blocks) or blocks[index + 1].id != command.to_block_id:
+                raise EngineInputError("Insertion anchors must be adjacent")
+            day_no = blocks[index].day_no
+            if blocks[index + 1].day_no != day_no:
+                raise EngineInputError("Insertion anchors must be on the same day")
+            if command.day_no is not None and command.day_no != day_no:
+                raise EngineInputError("dayNo must match the insertion anchors")
+        if not 1 <= day_no <= (command.trip.end_date - command.trip.start_date).days + 1:
+            raise EngineInputError("Insertion day is outside the trip dates")
+        day_blocks = [block for block in blocks if block.day_no == day_no]
+        if [block.seq for block in day_blocks] != list(range(1, len(day_blocks) + 1)):
+            raise SequenceNormalizationRequiredError("Explicit legacy sequence migration is required")
+        first_on_day = not day_blocks
+        seq = blocks[index].seq + 1 if not first_on_day else 1
         draft = command.block
         window = draft.fixed_window
-        if window is not None and window.day_no != before.day_no:
+        if window is not None and window.day_no != day_no:
             raise EngineInputError("Fixed window must match the insertion day")
         if window is not None and not draft.is_fixed:
             raise EngineInputError("A fixed window requires a fixed block")
@@ -149,30 +189,30 @@ class BasicItineraryEngine:
             index + 1,
             StoredBlock(
                 id=block_id,
-                day_no=before.day_no,
-                seq=before.seq + 1 if not needs_renumbering else 0,
+                day_no=day_no,
+                seq=seq,
                 place_ref=draft.place_ref,
                 is_fixed=draft.is_fixed,
                 fixed_start=window.start if window else None,
                 fixed_end=window.end if window else None,
                 stay_min=draft.stay_min,
+                arrive_at=window.start if window else None,
+                depart_at=window.end if window else None,
                 origin=draft.origin,
             ),
         )
-        if needs_renumbering:
-            day_position = 0
-            for block_index, existing in enumerate(blocks):
-                if existing.day_no != before.day_no:
-                    continue
-                day_position += 1
-                blocks[block_index] = existing.model_copy(update={"seq": day_position * 10})
+        for block_index in range(index + 2, len(blocks)):
+            existing = blocks[block_index]
+            if existing.day_no == day_no:
+                blocks[block_index] = existing.model_copy(update={"seq": existing.seq + 1})
+        replaced_pair = (command.from_block_id, command.to_block_id)
         state = ScheduleState(
             blocks=tuple(blocks),
-            legs=tuple(
-                leg for leg in command.schedule.legs if (leg.from_block_id, leg.to_block_id) != (before.id, after.id)
-            ),
+            legs=tuple(leg for leg in command.schedule.legs if (leg.from_block_id, leg.to_block_id) != replaced_pair),
         )
-        return self._calculate(command.trip, state, index, context or CalculationContext())
+        return self._calculate(
+            command.trip, state, index + 1 if first_on_day else index, context or CalculationContext()
+        )
 
     def _calculate(
         self,
@@ -191,8 +231,8 @@ class BasicItineraryEngine:
             origin, destination = places[previous.id], places[block.id]
             pair = (previous.id, block.id)
             duration: int | None = None
-            source = "ESTIMATED"
-            computed_at = self.clock()
+            source = "UNKNOWN"
+            computed_at = None
             time_semantics = "unspecified"
             lookup_failed = False
             departure = departure_for(trip, previous)
@@ -211,7 +251,10 @@ class BasicItineraryEngine:
                     estimate.source,
                     estimate.computed_at,
                 )
-                time_semantics, lookup_failed = estimate.time_semantics, estimate.lookup_failed
+                time_semantics = estimate.time_semantics
+                lookup_failed = estimate.lookup_failed or duration is None
+                if duration is None or lookup_failed:
+                    duration, source = None, "UNKNOWN"
             legs[pair] = StoredLeg.model_validate(
                 {
                     "id": legs[pair].id if pair in legs else self.id_factory(),
@@ -295,6 +338,11 @@ class BasicItineraryEngine:
             response_legs: list[Leg] = []
             for leg in state.legs:
                 if leg.from_block_id in ids and leg.to_block_id in ids:
+                    # The existing wire enum has no UNKNOWN. Never emit a false source.
+                    # Missing legs are represented by block/schedule warnings until
+                    # frontend LegSource/nullable computedAt are jointly extended.
+                    if leg.duration_min is None or leg.source == "UNKNOWN" or leg.lookup_failed:
+                        continue
                     if leg.computed_at is None:
                         raise NeedsConfirmationError("Existing route computation timestamp needs confirmation")
                     response_legs.append(

@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from datetime import time
 
+from app.modules.engine.routing import departure_for
 from app.modules.engine.schemas import (
     ScheduleConflict,
     StoredBlock,
@@ -92,17 +93,17 @@ def validate_chain(command: ValidateInput, places: Mapping[str, TransientPlaceDe
         if previous.day_no != block.day_no:
             continue
         leg = legs.get((previous.id, block.id))
-        if previous.depart_at is None:
+        if departure_for(command.trip, previous) is None:
             report(
                 block,
                 "DEPARTURE_TIME_NEEDS_CHECK",
-                "출발시각이 없어 경로 조회를 수행할 수 없습니다.",
+                "출발 날짜·시각 또는 시간대 정보가 없어 경로 조회를 수행할 수 없습니다.",
             )
         if leg is not None and leg.lookup_failed:
             report(
                 block,
                 "ROUTE_LOOKUP_FAILED",
-                "경로 조회에 실패했습니다. source는 조회 대상이며 확인된 경로가 아닙니다.",
+                "경로 조회에 실패하여 이동시간을 확인할 수 없습니다.",
             )
         if (
             leg is not None

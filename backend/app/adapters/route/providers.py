@@ -14,6 +14,7 @@ from app.modules.engine.schemas import ContractModel, RouteTimeSemantics, Transi
 
 Mode = Literal["TRANSIT", "CAR", "WALK"]
 Source = Literal["TMAP", "ODSAY"]
+SEOUL_TIMEZONE = timezone(timedelta(hours=9), "Asia/Seoul")
 Failure = Literal[
     "invalid_input",
     "unsupported_mode",
@@ -130,7 +131,10 @@ class HTTPRouteAdapter:
         if reply.status in (401, 403):
             return self.failed("authentication")
         if reply.status == 429:
-            self.budget.pause(reply.retry_after if reply.retry_after is not None else 60.0)
+            pause = reply.retry_after
+            if isinstance(pause, bool) or not isinstance(pause, (int, float)) or not isfinite(pause) or pause < 0:
+                pause = 60.0
+            self.budget.pause(pause)
             return self.failed("quota")
         if not 200 <= reply.status < 300:
             return self.failed("upstream")
@@ -168,7 +172,7 @@ class TMAPAdapter(HTTPRouteAdapter):
             if query.departure_at is not None:
                 if query.departure_at.second or query.departure_at.microsecond:
                     return self.failed("unsupported_departure")
-                body["searchDttm"] = query.departure_at.astimezone(timezone(timedelta(hours=9))).strftime("%Y%m%d%H%M")
+                body["searchDttm"] = query.departure_at.astimezone(SEOUL_TIMEZONE).strftime("%Y%m%d%H%M")
             url = "https://apis.openapi.sk.com/transit/routes"
         elif query.departure_at is not None and query.mode == "CAR":
             body = {
@@ -180,7 +184,7 @@ class TMAPAdapter(HTTPRouteAdapter):
                         "lat": destination.lat,
                     },
                     "predictionType": "departure",
-                    "predictionTime": query.departure_at.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "predictionTime": query.departure_at.astimezone(SEOUL_TIMEZONE).strftime("%Y-%m-%dT%H:%M:%S%z"),
                     "searchOption": "00",
                     "tollgateCarType": "car",
                     "trafficInfo": "N",

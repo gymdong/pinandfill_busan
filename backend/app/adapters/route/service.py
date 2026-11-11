@@ -60,11 +60,11 @@ class LiveRouteProvider:
     ) -> RouteEstimate:
         # Legacy callers retain the untimed protocol. Engine code uses estimate_at.
         result = self.lookup(origin, destination, mode=mode)
-        # With duration=None, provider identifies the failed lookup, NOT an estimate.
-        # Existing wire source enum has no UNKNOWN; no invented ESTIMATED time is returned.
+        # Diagnostic LookupResult.provider records the attempted supplier; it is
+        # never a confirmed source when no duration was obtained.
         return RouteEstimate(
             result.duration_min,
-            result.provider,
+            result.provider if result.duration_min is not None and result.failure is None else "UNKNOWN",
             result.computed_at,
             time_semantics=result.time_semantics,
             lookup_failed=result.failure is not None,
@@ -80,11 +80,11 @@ class LiveRouteProvider:
     ) -> RouteEstimate:
         # This entry point must never use lookup's legacy current-time fallback.
         if departure_at is None or departure_at.utcoffset() is None:
-            return RouteEstimate(None, self.primary.name, self.clock(), lookup_failed=True)
+            return RouteEstimate(None, "UNKNOWN", self.clock(), lookup_failed=True)
         result = self.lookup(origin, destination, mode=mode, departure_at=departure_at, allow_time_context=True)
         return RouteEstimate(
             result.duration_min,
-            result.provider,
+            result.provider if result.duration_min is not None and result.failure is None else "UNKNOWN",
             result.computed_at,
             time_semantics=result.time_semantics,
             lookup_failed=result.failure is not None,

@@ -229,8 +229,8 @@ def test_all_failed_routes_are_explicitly_unconfirmed_after_revalidation():
     client, repository, _, _ = client_with_routes([HttpReply(500, {})], fallback_replies=[HttpReply(500, {})])
     response = client.post("/api/trips/trip/schedule", json={})
     assert response.status_code == 200
-    leg = response.json()["days"][0]["legs"][0]
-    assert leg["durationMin"] is None and leg["source"] == "ODSAY"
+    assert response.json()["days"][0]["legs"] == []
+    assert repository.get("trip").schedule.legs[0].source == "UNKNOWN"
     record = repository.get("trip")
     assert record.schedule.legs[0].lookup_failed
     assert "ROUTE_LOOKUP_FAILED" in {v["type"] for v in response.json()["violations"]}
