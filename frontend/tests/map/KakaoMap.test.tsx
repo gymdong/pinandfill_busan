@@ -5,6 +5,7 @@ import { KakaoMap } from '@/map/KakaoMap';
 
 describe('카카오맵 SDK 래퍼', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     Reflect.deleteProperty(window, 'kakao');
     document.querySelectorAll('script[src*="dapi.kakao.com/v2/maps/sdk.js"]').forEach((script) => script.remove());
@@ -43,8 +44,10 @@ describe('카카오맵 SDK 래퍼', () => {
     await act(async () => { await Promise.resolve(); });
     expect(mapConstructor).toHaveBeenCalledWith(expect.objectContaining({ lat: 35.1796, lng: 129.0756 }));
     // jsdom의 getBoundingClientRect는 0을 돌려주므로 clientX/Y가 곧 컨테이너 좌표다.
+    // 실제 시간으로 기다리면 느린 CI에서 테스트 시간 제한을 넘기므로 가짜 타이머로 650ms를 넘긴다.
+    vi.useFakeTimers();
     const hold = async (events: () => void) => {
-      await act(async () => { events(); await new Promise((resolve) => setTimeout(resolve, 700)); });
+      act(() => { events(); vi.advanceTimersByTime(700); });
     };
 
     // 터치로 길게 누르면 누른 지점의 컨테이너 좌표를 지도 좌표로 바꿔 전달한다.
