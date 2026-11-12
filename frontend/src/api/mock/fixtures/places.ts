@@ -65,9 +65,13 @@ export function crowd(grade: CrowdSummary['grade'], confidence: CrowdSummary['co
     : { grade, confidence, asOf: AS_OF, sources: ['행정동 생활인구', '도시철도 승하차'] };
 }
 
-/** 실제 카카오 장소가 아닌 예시 키. 링크는 어느 장소도 가리키지 않도록 예시 도메인을 쓴다. */
+/**
+ * 실제 카카오 장소가 아닌 예시 키. 백엔드가 받는 형식(숫자 ID, 표준 장소 URL)을 따른다.
+ * ID는 실제 장소와 겹치지 않도록 0으로 시작하는 값을 쓴다.
+ */
 export function mockKakaoKey(id: string) {
-  return { kakaoPlaceId: `mock-kakao-${id}`, placeUrl: `https://example.com/mock-kakao-place/${id}` };
+  const kakaoPlaceId = `00000000${id}`;
+  return { kakaoPlaceId, placeUrl: `https://place.map.kakao.com/${kakaoPlaceId}` };
 }
 
 export const searchItems: PlaceSearchItem[] = [
