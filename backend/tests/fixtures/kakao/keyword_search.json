@@ -1,0 +1,53 @@
+{
+  "_note": "실제 카카오 응답이 아니다. 공식 문서의 응답 형식에 맞춰 직접 작성한 가짜 값이다(카카오 응답은 저장하지 않는다).",
+  "meta": {
+    "total_count": 3,
+    "pageable_count": 3,
+    "is_end": true,
+    "same_name": { "region": [], "keyword": "예시", "selected_region": "" }
+  },
+  "documents": [
+    {
+      "id": "900000001",
+      "place_name": "예시해변공원",
+      "category_name": "여행 > 공원",
+      "category_group_code": "AT4",
+      "category_group_name": "관광명소",
+      "phone": "",
+      "address_name": "부산 수영구 예시동 1-1",
+      "road_address_name": "부산 수영구 예시해변로 1",
+      "x": "129.1200000",
+      "y": "35.1500000",
+      "place_url": "https://example.com/kakao-place/900000001",
+      "distance": ""
+    },
+    {
+      "id": "900000002",
+      "place_name": "예시회센터",
+      "category_name": "음식점 > 한식",
+      "category_group_code": "FD6",
+      "category_group_name": "음식점",
+      "phone": "",
+      "address_name": "부산 수영구 예시동 2-2",
+      "road_address_name": "",
+      "x": "129.1210000",
+      "y": "35.1510000",
+      "place_url": "https://example.com/kakao-place/900000002",
+      "distance": ""
+    },
+    {
+      "id": "900000003",
+      "place_name": "예시카페 김해점",
+      "category_name": "음식점 > 카페",
+      "category_group_code": "CE7",
+      "category_group_name": "카페",
+      "phone": "",
+      "address_name": "경남 김해시 예시동 3-3",
+      "road_address_name": "경남 김해시 예시로 3",
+      "x": "128.8800000",
+      "y": "35.2300000",
+      "place_url": "https://example.com/kakao-place/900000003",
+      "distance": ""
+    }
+  ]
+}
