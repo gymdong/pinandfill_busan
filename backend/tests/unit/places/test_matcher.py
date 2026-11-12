@@ -3,9 +3,10 @@
 import pytest
 
 from app.adapters.kakao import KakaoPlace
-from app.modules.places import InMemoryPublicPlaceRepository, PlaceMatcher, PlaceMatchSettings, PublicPlace
+from app.modules.places import PlaceMatcher, PlaceMatchSettings, PublicPlace
 from app.modules.places.geo import distance_m
 from app.modules.places.matcher import name_similarity, normalize_name
+from app.modules.places.repository import InMemoryPublicPlaceRepository
 
 BASE_LAT, BASE_LNG = 35.1500, 129.1200
 # 위도 0.001도는 약 111m 다.
@@ -155,6 +156,7 @@ def test_rechecks_radius_even_if_repository_returns_far_places():
 
 
 def test_settings_read_env(monkeypatch):
+    monkeypatch.delenv("PLACES_NAME_SIMILARITY_THRESHOLD", raising=False)
     monkeypatch.setenv("PLACES_MATCH_RADIUS_M", "50")
 
     assert PlaceMatchSettings().match_radius_m == 50
