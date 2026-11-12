@@ -67,16 +67,17 @@ export function crowd(grade: CrowdSummary['grade'], confidence: CrowdSummary['co
 
 /**
  * 실제 카카오 장소가 아닌 예시 키. 백엔드가 받는 형식(숫자 ID, 표준 장소 URL)을 따른다.
- * ID는 실제 장소와 겹치지 않도록 0으로 시작하는 값을 쓴다.
+ * 실제 장소를 가리킬 가능성을 낮추려고 현재 카카오 장소 ID보다 자릿수가 훨씬 큰 값을 쓴다.
+ * (앞자리를 0으로 채우면 작은 번호의 실제 장소로 해석될 수 있다.)
  */
-export function mockKakaoKey(id: string) {
-  const kakaoPlaceId = `00000000${id}`;
+export function mockKakaoKey(index: number) {
+  const kakaoPlaceId = `9999999999${String(index).padStart(2, '0')}`;
   return { kakaoPlaceId, placeUrl: `https://place.map.kakao.com/${kakaoPlaceId}` };
 }
 
 export const searchItems: PlaceSearchItem[] = [
   {
-    ...mockKakaoKey('1'),
+    ...mockKakaoKey(1),
     placeId: PLACE_IDS.millakPark,
     name: '민락수변공원',
     coords: { lat: 35.1548, lng: 129.1313 },
@@ -86,7 +87,7 @@ export const searchItems: PlaceSearchItem[] = [
     hoursStatus: 'NEEDS_CHECK',
   },
   {
-    ...mockKakaoKey('2'),
+    ...mockKakaoKey(2),
     placeId: PLACE_IDS.millakFish,
     name: '민락회타운',
     coords: { lat: 35.1555, lng: 129.1305 },
@@ -97,7 +98,7 @@ export const searchItems: PlaceSearchItem[] = [
   },
   {
     // 미매칭 사례: 공공 DB에 없어 placeId가 없다. 카카오 키로 담고 이름·좌표는 메모리에만 둔다(D6).
-    ...mockKakaoKey('3'),
+    ...mockKakaoKey(3),
     placeId: null,
     name: '민락 바다뷰 카페 (예시)',
     coords: { lat: 35.1561, lng: 129.1298 },

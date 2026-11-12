@@ -65,7 +65,7 @@ const blocks: Block[] = [
     id: BLOCK_IDS.kakaoCafe,
     dayNo: 1,
     seq: 4,
-    place: { source: 'KAKAO', ...mockKakaoKey('3') },
+    place: { source: 'KAKAO', ...mockKakaoKey(3) },
     isFixed: true,
     fixedStart: '16:00',
     fixedEnd: '17:00',
