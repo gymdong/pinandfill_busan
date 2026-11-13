@@ -183,6 +183,16 @@ async def test_skips_documents_with_invalid_coordinates(adapter, respx_mock, x, 
     assert [place.kakao_place_id for place in places] == ["900000001"]
 
 
+@pytest.mark.parametrize("bad_id", ["", "12/34", "12?x=1", "abc", "12 34"])
+async def test_skips_documents_with_non_numeric_id(adapter, respx_mock, bad_id):
+    bad = {**FIXTURE["documents"][1], "id": bad_id}
+    respx_mock.get(URL).respond(json={"documents": [FIXTURE["documents"][0], bad]})
+
+    places = await adapter.search_keyword("예시")
+
+    assert [place.kakao_place_id for place in places] == ["900000001"]
+
+
 async def test_region_filter_falls_back_to_road_address(adapter, respx_mock):
     document = {**FIXTURE["documents"][0], "address_name": "", "road_address_name": "부산 수영구 예시해변로 1"}
     outside = {**FIXTURE["documents"][2], "address_name": ""}

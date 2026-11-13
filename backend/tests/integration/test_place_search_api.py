@@ -3,6 +3,7 @@
 import logging
 from datetime import time
 
+import anyio
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -94,6 +95,18 @@ def test_successful_search_logs_no_query_or_place_data(caplog):
         assert leaked not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("category_name", "expected"),
+    [("여행 > 공원", "공원"), ("공원", "공원"), ("", None), ("음식점 > ", None), ("a > b > 카페", "카페")],
+)
+def test_unmatched_place_category_uses_last_kakao_segment(category_name, expected):
+    place = kakao_place("900000009", "예시가게", 35.2, 129.2, category_name=category_name)
+    with make_client(FakeKakao(places=[place])) as client:
+        response = client.get("/api/places/search", params={"q": "예시"})
+
+    assert response.json()["places"][0]["category"] == expected
+
+
 def test_no_results():
     with make_client(FakeKakao(places=[])) as client:
         response = client.get("/api/places/search", params={"q": "없는곳"})
@@ -168,7 +181,7 @@ def test_public_db_failure_is_err_017_without_leaking_kakao_data(caplog):
         assert leaked not in caplog.text
 
 
-def test_real_adapter_end_to_end_keeps_query_and_place_data_out_of_logs(respx_mock, caplog, monkeypatch):
+def test_real_adapter_end_to_end_keeps_query_and_place_data_out_of_logs(respx_mock, caplog):
     """실제 어댑터와 httpx 를 거쳐도(카카오만 가짜) 검색어와 장소 정보가 로그에 남지 않는다."""
     document = {
         "id": "900000001",
@@ -181,7 +194,6 @@ def test_real_adapter_end_to_end_keeps_query_and_place_data_out_of_logs(respx_mo
         "place_url": "http://place.map.kakao.com/900000001",
     }
     respx_mock.get("https://dapi.kakao.com/v2/local/search/keyword.json").respond(json={"documents": [document]})
-    monkeypatch.setattr(logging.getLogger("httpx"), "level", logging.DEBUG)
 
     async def run() -> httpx.Response:
         async with httpx.AsyncClient() as kakao_http:
@@ -192,9 +204,8 @@ def test_real_adapter_end_to_end_keeps_query_and_place_data_out_of_logs(respx_mo
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as api:
                 return await api.get("/api/places/search", params={"q": "비밀검색어"})
 
-    with caplog.at_level(logging.DEBUG):
-        import anyio
-
+    # httpx 요청 로그까지 켠 상태에서 확인한다. caplog 가 테스트 뒤에 수준을 되돌린다.
+    with caplog.at_level(logging.DEBUG), caplog.at_level(logging.DEBUG, logger="httpx"):
         response = anyio.run(run)
 
     assert response.status_code == 200
