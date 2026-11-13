@@ -141,9 +141,35 @@ class AddBlockRequest(WithSessionCoords):
         return self
 
 
+class UpdateBlockRequest(WithSessionCoords):
+    """API-007. 프런트 `UpdateBlockRequest` 처럼 isFixed·seq·stayMin 중 정확히 하나만 보낸다."""
+
+    is_fixed: bool | None = None
+    seq: int | None = Field(default=None, ge=1)
+    stay_min: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def exactly_one_change(self) -> Self:
+        if sum(value is not None for value in (self.is_fixed, self.seq, self.stay_min)) != 1:
+            raise ValueError("exactly one of isFixed, seq or stayMin is required")
+        return self
+
+
+class DeleteBlockRequest(WithSessionCoords):
+    """API-008 본문. 뒤 블록 재계산에 쓸 카카오 좌표만 담으며, 본문 없이 보내도 된다."""
+
+
+class UndoRequest(WithSessionCoords):
+    """API-010 본문. 되돌린 일정의 경고 판정에 쓸 카카오 좌표만 담으며, 본문 없이 보내도 된다."""
+
+
 class ScheduleMutationResponse(ContractModel):
     schedule: Schedule
     violations: tuple[Violation, ...] = ()
+
+
+class UndoResponse(ContractModel):
+    schedule: Schedule
 
 
 class SuggestWaypointsRequest(WithSessionCoords):
