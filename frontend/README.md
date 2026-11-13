@@ -114,7 +114,7 @@ try {
 | API-002 시작·종료 위치 | `startPlaceId`, `endPlaceId` 추가 제안 | 정현빈 |
 | API-003 배지 | `badge`와 `hoursStatus` 분리, `placeId`·`category`·`address` 추가 | 박범찬 |
 | API-013 `avoid` 요청 필드 | 피할 조건 수정을 위해 추가 제안 | 박범찬 |
-| API-006 장소·삽입 위치 | `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 경유지는 `fromBlockId`·`toBlockId` | 정현빈 |
+| API-006 장소·삽입 위치 | 백엔드(PR #11)와 맞춤. `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 위치는 `dayNo`(그날 마지막) 또는 `fromBlockId`·`toBlockId`(두 블록 사이). 카카오 ID는 숫자, URL은 `https://place.map.kakao.com/{id}`. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest` | 정현빈 (PR #11 병합) |
 | 카카오 장소 좌표 전달 | API-006~011 요청의 `sessionCoords`(`kakaoPlaceId` → 좌표). DELETE에도 본문 사용 | 정현빈 |
 | 블록의 카카오 장소 | `place: {source: 'KAKAO', kakaoPlaceId, placeUrl}`, 좌표 없는 구간은 `durationMin: null` | 정현빈·김동현 |
 
