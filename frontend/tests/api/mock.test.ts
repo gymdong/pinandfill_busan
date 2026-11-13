@@ -126,6 +126,19 @@ describe('mockRequest', () => {
     await expect(add(9)).rejects.toMatchObject({ id: 'ERR-001' });
   });
 
+  it('일정에 아직 없는 날이라도 여행 기간 안이면 그날을 만들어 추가한다', async () => {
+    resetMockSchedule(structuredClone(fixtureSchedule));
+    const add = (dayNo: number) => mockRequest<ScheduleMutationResponse>({
+      method: 'POST', path: `${TRIP}/blocks`, body: { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER', dayNo },
+    });
+    const result = await add(3);
+    expect(result.schedule.days.map((day) => [day.dayNo, day.date])).toEqual([[1, '2026-10-17'], [3, '2026-10-19']]);
+    expect(result.schedule.days[1]!.blocks.map((block) => [block.dayNo, block.seq])).toEqual([[3, 1]]);
+    // 여행 기간(10/17~19) 밖은 거절하고 일정을 바꾸지 않는다.
+    await expect(add(4)).rejects.toMatchObject({ id: 'ERR-001' });
+    await expect(add(0)).rejects.toMatchObject({ id: 'ERR-001' });
+  });
+
   it('앵커와 다른 dayNo이거나 위치 정보가 없으면 거절한다', async () => {
     const initial = structuredClone(fixtureSchedule);
     const [first, second] = initial.days[0]!.blocks;
