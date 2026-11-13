@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, HttpUrl, model_validator
+from pydantic import Field, HttpUrl, StrictBool, StrictInt, model_validator
 
 from app.modules.engine.schemas import (
     ContractModel,
@@ -144,13 +144,17 @@ class AddBlockRequest(WithSessionCoords):
 class UpdateBlockRequest(WithSessionCoords):
     """API-007. 프런트 `UpdateBlockRequest` 처럼 isFixed·seq·stayMin 중 정확히 하나만 보낸다."""
 
-    is_fixed: bool | None = None
-    seq: int | None = Field(default=None, ge=1)
-    stay_min: int | None = Field(default=None, gt=0)
+    # 문자열·실수·불리언을 다른 타입으로 바꿔 받지 않는다("3", 3.0, true 는 400).
+    is_fixed: StrictBool | None = None
+    seq: StrictInt | None = Field(default=None, ge=1)
+    # 상한 1440분(하루)은 잠정값이다. SRS 에 체류시간 상한이 정해지면 맞춘다.
+    stay_min: StrictInt | None = Field(default=None, gt=0, le=1440)
 
     @model_validator(mode="after")
     def exactly_one_change(self) -> Self:
-        if sum(value is not None for value in (self.is_fixed, self.seq, self.stay_min)) != 1:
+        # null 로 보낸 키도 보낸 것으로 센다: {"seq": null, "stayMin": 45} 는 400.
+        sent = self.model_fields_set & {"is_fixed", "seq", "stay_min"}
+        if len(sent) != 1 or getattr(self, sent.pop()) is None:
             raise ValueError("exactly one of isFixed, seq or stayMin is required")
         return self
 

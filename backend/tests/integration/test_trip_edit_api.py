@@ -75,6 +75,17 @@ def test_patch_seq_and_is_fixed(body, expected):
         {"seq": 0},
         {"isFixed": None},
         {"stayMin": 40, "unknown": 1},
+        {"stayMin": True},
+        {"stayMin": "45"},
+        {"stayMin": 1441},
+        {"seq": "3"},
+        {"seq": 3.0},
+        {"seq": True},
+        {"isFixed": "false"},
+        {"isFixed": 0},
+        {"seq": None, "stayMin": 45},
+        {"isFixed": False, "stayMin": 45},
+        {"isFixed": False, "seq": 3, "stayMin": 45},
     ],
 )
 def test_patch_requires_exactly_one_valid_change(body):
@@ -82,6 +93,13 @@ def test_patch_requires_exactly_one_valid_change(body):
     before = saved(repository)
     assert_error(client.patch(f"{BLOCKS}/b", json=body), 400, "ERR-001")
     assert saved(repository) == before
+
+
+def test_patch_stay_upper_bound_is_accepted():
+    client, _, _ = setup_api()
+    response = client.patch(f"{BLOCKS}/g", json={"stayMin": 1440})
+    assert response.status_code == 200
+    assert response.json()["schedule"]["days"][0]["blocks"][4]["stayMin"] == 1440
 
 
 @pytest.mark.parametrize(

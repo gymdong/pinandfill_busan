@@ -100,6 +100,25 @@ class EditHistory:
         """편집을 적용하기 전의 상태로 호출한다."""
         return self.record(trip_id, state, SnapshotReason.EDIT)
 
+    def latest_edit(self, trip_id: str) -> ScheduleSnapshot | None:
+        """지금 되돌릴 수 있는 EDIT 스냅샷. 저장 실패 시 `restore` 로 이 상태를 되살리려고 먼저 받아 둔다."""
+        return self.repository.latest(trip_id, SnapshotReason.EDIT)
+
+    def restore(self, trip_id: str, snapshot: ScheduleSnapshot | None) -> None:
+        """되돌리기 지점을 `latest_edit` 로 받아 둔 상태로 정확히 되돌린다(None 이면 없앤다).
+
+        일정 저장이 실패했을 때의 보상 동작이다. DB 구현에서는 같은 트랜잭션의 롤백이 대신한다.
+        """
+        current = self.repository.latest(trip_id, SnapshotReason.EDIT)
+        if current is not None:
+            self.repository.delete(current)
+        if snapshot is not None:
+            self.repository.save(snapshot)
+
+    def discard(self, trip_id: str) -> None:
+        """되돌리기 지점을 없앤다(없으면 아무것도 하지 않는다). 일정 생성(API-009)이 일정을 바꾼 뒤에 부른다."""
+        self.restore(trip_id, None)
+
     def undo(self, trip_id: str) -> ScheduleState:
         """직전 EDIT 스냅샷을 소비해 그 상태를 돌려준다. 호출자가 이 상태로 저장한다."""
         snapshot = self.repository.latest(trip_id, SnapshotReason.EDIT)

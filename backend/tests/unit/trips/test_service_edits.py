@@ -4,7 +4,13 @@ from datetime import date, time
 
 import pytest
 
-from app.modules.engine.schemas import RecomputeInput, ScheduleState
+from app.modules.engine.schemas import (
+    CalculationContext,
+    KakaoPlaceRef,
+    RecomputeInput,
+    ScheduleState,
+    SessionCoordinate,
+)
 from app.modules.engine.service import (
     EngineInputError,
     NeedsConfirmationError,
@@ -138,6 +144,36 @@ def test_move_renumbers_densely_and_recomputes_from_min_position(block_id, seq):
     assert ac006_violations(before, after, day_no=1, anchor_seq=1, edited_block_id=block_id) == set()
 
 
+@pytest.mark.parametrize(
+    ("block_id", "seq", "expected", "expected_times"),
+    [
+        (
+            "g",
+            2,
+            [("a", 1), ("g", 2), ("b", 3), ("c", 4), ("f", 5)],
+            {"g": (time(9, 45), time(10, 15)), "b": (time(10, 30), time(11)), "c": (time(11, 15), time(11, 45))},
+        ),
+        (
+            "b",
+            5,
+            [("a", 1), ("c", 2), ("f", 3), ("g", 4), ("b", 5)],
+            {"c": (time(9, 45), time(10, 15)), "g": (time(16, 15), time(16, 45)), "b": (time(17), time(17, 30))},
+        ),
+    ],
+)
+def test_move_from_or_to_last_position(block_id, seq, expected, expected_times):
+    service, repository, _ = setup_service()
+    before = saved(repository)
+
+    service.update_block(TRIP, block_id, UpdateBlockRequest(seq=seq))
+
+    after = saved(repository)
+    assert order(after, 1) == expected
+    assert {key: times(after, key) for key in expected_times} == expected_times
+    assert times(after, "f") == times(before, "f")
+    assert ac006_violations(before, after, day_no=1, anchor_seq=1, edited_block_id=block_id) == set()
+
+
 def test_move_to_first_position_takes_over_day_start():
     service, repository, _ = setup_service()
     before = saved(repository)
@@ -175,7 +211,8 @@ def test_release_fixed_keeps_times_clears_window_and_recomputes_later():
     assert (released.is_fixed, released.fixed_start, released.fixed_end) == (False, None, None)
     assert times(after, "f") == (time(15), time(16))
     assert times(after, "g") == (time(16, 15), time(16, 45))
-    assert ac006_violations(before, after, day_no=1, anchor_seq=3, edited_block_id="f") == set()
+    # 재계산 시작점은 이 블록 자신(seq 4)이다. 그 앞 블록은 모두 그대로여야 한다.
+    assert ac006_violations(before, after, day_no=1, anchor_seq=4, edited_block_id="f") == set()
 
 
 def test_fixing_without_designated_window_is_rejected_and_not_recorded():
@@ -249,6 +286,18 @@ def test_delete_pulls_later_blocks_and_recomputes_from_previous():
 
     service.undo(TRIP, UndoRequest())
     assert saved(repository) == before
+
+
+def test_delete_last_block_drops_its_leg_and_keeps_prefix():
+    service, repository, _ = setup_service()
+    before = saved(repository)
+
+    service.delete_block(TRIP, "g", DeleteBlockRequest())
+
+    after = saved(repository)
+    assert order(after, 1) == [("a", 1), ("b", 2), ("c", 3), ("f", 4)]
+    assert not any("g" in pair for pair in leg_pairs(after))
+    assert ac006_violations(before, after, day_no=1, anchor_seq=4, edited_block_id="g") == set()
 
 
 def test_delete_first_block_hands_day_start_to_next_block():
@@ -391,6 +440,33 @@ def test_generate_is_not_recorded():
         service.undo(TRIP, UndoRequest())
 
 
+def test_generate_that_changes_schedule_discards_earlier_undo_point():
+    service, repository, routes = setup_service()
+    service.update_block(TRIP, "b", stay(60))
+    routes.duration_min = 20
+
+    service.generate(TRIP, GenerateScheduleRequest())
+    generated = saved(repository)
+    assert times(generated, "b") == (time(9, 50), time(10, 50))
+
+    with pytest.raises(NothingToUndoError):
+        service.undo(TRIP, UndoRequest())
+    assert saved(repository) == generated
+
+
+def test_generate_without_changes_keeps_undo_point():
+    service, repository, _ = setup_service()
+    before = saved(repository)
+    service.update_block(TRIP, "b", stay(60))
+    after_first = saved(repository)
+
+    service.generate(TRIP, GenerateScheduleRequest())
+    assert saved(repository) == after_first
+
+    service.undo(TRIP, UndoRequest())
+    assert saved(repository) == before
+
+
 def test_undo_is_one_step_and_does_not_record_itself():
     service, repository, routes = setup_service()
     service.update_block(TRIP, "b", stay(60))
@@ -423,3 +499,157 @@ def test_undo_projection_failure_restores_snapshot_and_state(monkeypatch):
 
     service.undo(TRIP, UndoRequest())
     assert saved(repository) == before
+
+
+def test_edit_undo_edit_undo():
+    service, repository, _ = setup_service()
+    before = saved(repository)
+
+    service.update_block(TRIP, "b", stay(60))
+    service.undo(TRIP, UndoRequest())
+    assert saved(repository) == before
+
+    service.delete_block(TRIP, "c", DeleteBlockRequest())
+    assert order(saved(repository), 1) == [("a", 1), ("b", 2), ("f", 3), ("g", 4)]
+    service.undo(TRIP, UndoRequest())
+    assert saved(repository) == before
+    with pytest.raises(NothingToUndoError):
+        service.undo(TRIP, UndoRequest())
+
+
+# ---- 저장 실패 원자성 ----
+
+
+class FlakyRepository(FakeTripRepository):
+    """save 가 실패하는 저장소. 실패 중에는 아무것도 바꾸지 않는다."""
+
+    fail = False
+
+    def save(self, trip_id: str, record: TripRecord) -> None:
+        if self.fail:
+            raise RuntimeError("storage unavailable")
+        super().save(trip_id, record)
+
+
+def flaky_service():
+    service, repository, routes = setup_service()
+    flaky = FlakyRepository({TRIP: repository.get(TRIP)})
+    service.repository = flaky
+    return service, flaky
+
+
+@pytest.mark.parametrize("with_previous_edit", [True, False])
+def test_failed_save_keeps_exact_previous_undo_point(with_previous_edit):
+    service, repository = flaky_service()
+    before = saved(repository)
+    if with_previous_edit:
+        service.update_block(TRIP, "b", stay(60))
+    current = saved(repository)
+    point = service.history.latest_edit(TRIP)
+
+    repository.fail = True
+    with pytest.raises(RuntimeError):
+        service.delete_block(TRIP, "c", DeleteBlockRequest())
+    repository.fail = False
+
+    assert saved(repository) == current
+    assert service.history.latest_edit(TRIP) is point
+    if with_previous_edit:
+        service.undo(TRIP, UndoRequest())
+        assert saved(repository) == before
+    else:
+        with pytest.raises(NothingToUndoError):
+            service.undo(TRIP, UndoRequest())
+
+
+def test_failed_undo_save_keeps_snapshot():
+    service, repository = flaky_service()
+    before = saved(repository)
+    service.update_block(TRIP, "b", stay(60))
+    after_first = saved(repository)
+    point = service.history.latest_edit(TRIP)
+
+    repository.fail = True
+    with pytest.raises(RuntimeError):
+        service.undo(TRIP, UndoRequest())
+    repository.fail = False
+
+    assert saved(repository) == after_first
+    assert service.history.latest_edit(TRIP) is point
+    service.undo(TRIP, UndoRequest())
+    assert saved(repository) == before
+
+
+# ---- 수락 검사 범위 ----
+
+
+def test_existing_conflict_on_other_day_does_not_block_edit():
+    service, repository, _ = setup_service()
+    record = repository.get(TRIP)
+    # 3일차 고정 블록이 지정 시각(11:00)과 다른 시각(10:00)으로 저장된, 이미 충돌한 상태.
+    conflicted = tuple(
+        b.model_copy(update={"is_fixed": True, "fixed_start": time(11), "fixed_end": time(11, 30)})
+        if b.id == "h"
+        else b
+        for b in record.schedule.blocks
+    )
+    repository.save(TRIP, TripRecord(record.trip, ScheduleState(blocks=conflicted, legs=record.schedule.legs)))
+    before = saved(repository)
+
+    response = service.delete_block(TRIP, "b", DeleteBlockRequest())
+
+    assert "FIXED_TIME_CONFLICT" in {w.type for w in response.schedule.days[2].blocks[0].warnings}
+    assert order(saved(repository), 1) == [("a", 1), ("c", 2), ("f", 3), ("g", 4)]
+    assert ac006_violations(before, saved(repository), day_no=1, anchor_seq=1, edited_block_id="b") == set()
+    with pytest.raises(FixedScheduleConflictError):
+        service.update_block(TRIP, "h", stay(45))
+
+
+# ---- 카카오 블록(좌표는 요청에만) ----
+
+KAKAO_REF = KakaoPlaceRef.model_validate({"kakaoPlaceId": "123", "placeUrl": "https://place.map.kakao.com/123"})
+COORDS = {"123": SessionCoordinate(lat=35.1234567, lng=129.7654321)}
+
+
+def kakao_service():
+    """1일차: d(일반 09:00) k(카카오) e. 처음 상태는 좌표를 받아 계산해 둔다."""
+    engine, places, routes = _engine(("d", "e"))
+    trip = _trip()
+    state = ScheduleState(
+        blocks=(
+            _block("d", 1, arrive=time(9), depart=time(9, 30)),
+            _block("k", 2, ref=KAKAO_REF, arrive=None, depart=None),
+            _block("e", 3, arrive=None, depart=None),
+        )
+    )
+    state = engine.recompute(
+        RecomputeInput(trip=trip, schedule=state, from_block_id="d"), context=CalculationContext(session_coords=COORDS)
+    ).state
+    repository = FakeTripRepository({TRIP: TripRecord(trip, state)})
+    return TripService(repository, engine, lambda place: 30), repository, places
+
+
+@pytest.mark.parametrize("with_coords", [True, False])
+def test_edit_with_kakao_block_uses_request_coords_only(with_coords):
+    service, repository, places = kakao_service()
+    before = saved(repository)
+    assert times(before, "k") == (time(9, 45), time(10, 15))
+
+    request = UpdateBlockRequest(stay_min=60, session_coords=COORDS if with_coords else {})
+    response = service.update_block(TRIP, "d", request)
+
+    after = saved(repository)
+    assert times(after, "d") == (time(9), time(10))
+    if with_coords:
+        assert times(after, "k") == (time(10, 15), time(10, 45))
+        assert times(after, "e") == (time(11), time(11, 30))
+    else:
+        # 엔진 계약: 좌표가 없으면 카카오 블록으로 가는 이동시간을 모르므로 그 뒤 시각이 모두 비워진다.
+        assert times(after, "k") == (None, None)
+        assert times(after, "e") == (None, None)
+        assert "COORDS_NEEDS_CHECK" in {v.type for v in response.violations}
+        assert response.schedule.days[0].legs == ()
+    assert ac006_violations(before, after, day_no=1, anchor_seq=0, edited_block_id="d") == set()
+    assert "123" not in places.calls
+    for secret in ("35.1234567", "129.7654321"):
+        assert secret not in after.model_dump_json() + repr(after) + response.model_dump_json()

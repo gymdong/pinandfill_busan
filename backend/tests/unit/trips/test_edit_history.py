@@ -103,6 +103,39 @@ def test_version_increases_per_trip(history):
     assert history.repository.latest(TRIP, SnapshotReason.EDIT).version == 2
 
 
+# ---- 저장 실패 보상(restore)·생성 후 지점 제거(discard) ----
+
+
+def test_restore_puts_back_exact_previous_undo_point(history):
+    first = history.record_before_edit(TRIP, state(block("a", 1)))
+    previous = history.latest_edit(TRIP)
+    history.record_before_edit(TRIP, state(block("a", 1, stay=40)))
+
+    history.restore(TRIP, previous)
+
+    assert history.latest_edit(TRIP) is first
+    assert history.undo(TRIP) == state(block("a", 1))
+
+
+def test_restore_none_removes_new_point_and_keeps_plan_b(history):
+    history.record(TRIP, state(block("a", 1)), SnapshotReason.PLAN_B)
+    history.record_before_edit(TRIP, state(block("a", 1, stay=40)))
+    history.restore(TRIP, None)
+    with pytest.raises(NothingToUndoError):
+        history.undo(TRIP)
+    assert history.repository.latest(TRIP, SnapshotReason.PLAN_B) is not None
+
+
+def test_discard_removes_undo_point_and_is_noop_without_one(history):
+    history.discard(TRIP)
+    history.record_before_edit(TRIP, state(block("a", 1)))
+    history.record_before_edit("other", state(block("a", 1)))
+    history.discard(TRIP)
+    with pytest.raises(NothingToUndoError):
+        history.undo(TRIP)
+    assert history.undo("other") == state(block("a", 1))
+
+
 # ---- 변경 블록 ----
 
 

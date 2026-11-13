@@ -8,7 +8,7 @@ from app.modules.engine.schemas import CalculationContext, RecomputeInput, Sched
 from app.modules.engine.service import NeedsConfirmationError, PolicyRequiredError
 from app.modules.recommend.waypoints import WaypointRecommender
 from app.modules.trips.commands import calculation_context, delete_command, insert_command, update_command
-from app.modules.trips.edit_history import EditHistory, InMemorySnapshotRepository
+from app.modules.trips.edit_history import EditHistory, InMemorySnapshotRepository, changed_block_ids
 from app.modules.trips.repository import TripRecord, TripRepository
 from app.modules.trips.schemas import (
     AddBlockRequest,
@@ -68,8 +68,11 @@ class TripService:
             raise TripNotFoundError
         return record
 
-    def _accept(self, result: EngineResult) -> None:
-        """저장 전 수락 검사: 고정 블록의 시각을 지킬 수 없는 결과는 거절한다."""
+    def _accept(self, result: EngineResult, *, days: set[int] | None = None) -> None:
+        """저장 전 수락 검사: 고정 블록의 시각을 지킬 수 없는 결과는 거절한다.
+
+        `days` 를 주면 그 날만 본다. 편집은 편집한 날만 보아, 다른 날에 이미 있던 충돌이 편집을 막지 않게 한다.
+        """
         timing_errors = {
             "TRAVEL_TIME_CONFLICT",
             "FIXED_TIME_CONFLICT",
@@ -80,6 +83,7 @@ class TripService:
         if any(
             block.is_fixed and any(warning.type in timing_errors for warning in block.warnings)
             for day in result.schedule.days
+            if days is None or day.day_no in days
             for block in day.blocks
         ):
             raise FixedScheduleConflictError
@@ -93,12 +97,22 @@ class TripService:
         """편집 한 번을 확정한다: 수락 검사 → 편집 전 스냅샷 기록 → 저장.
 
         스냅샷은 수락 검사를 통과한 뒤에만 남기므로, 거절된 편집은 직전 EDIT 스냅샷을 바꾸지 않는다.
+        저장이 실패하면 되돌리기 지점을 편집 전으로 정확히 되돌린다(DB 구현에서는 트랜잭션 롤백).
         상태가 그대로인 편집은 저장도 기록도 하지 않는다(되돌리기 1단계를 소비하지 않게).
         """
         if result.state != record.schedule:
-            self._accept(result)
+            before = {block.id: block.day_no for block in record.schedule.blocks}
+            after = {block.id: block.day_no for block in result.state.blocks}
+            changed = changed_block_ids(record.schedule, result.state)
+            # 편집은 한 날 안에서만 일어난다. 바뀐 블록이 있던 날·있는 날만 검사한다.
+            self._accept(result, days={day_of[i] for day_of in (before, after) for i in changed if i in day_of})
+            previous = self.history.latest_edit(trip_id)
             self.history.record_before_edit(trip_id, record.schedule)
-            self.repository.save(trip_id, TripRecord(record.trip, result.state))
+            try:
+                self.repository.save(trip_id, TripRecord(record.trip, result.state))
+            except Exception:
+                self.history.restore(trip_id, previous)
+                raise
         return ScheduleMutationResponse(schedule=result.schedule, violations=result.schedule.violations)
 
     def _run(self, command: RecomputeInput | ValidateInput, context: CalculationContext) -> EngineResult:
@@ -132,16 +146,17 @@ class TripService:
         """직전 편집 전 상태를 다시 계산하지 않고 그대로 저장한다. 되돌리기 자체는 스냅샷을 남기지 않는다."""
         with self._lock:
             record = self._get(trip_id)
+            snapshot = self.history.latest_edit(trip_id)
             state = self.history.undo(trip_id)
             try:
                 result = self.engine.project(
                     ValidateInput(trip=record.trip, schedule=state), context=calculation_context(request)
                 )
+                self.repository.save(trip_id, TripRecord(record.trip, state))
             except Exception:
-                # 응답을 만들지 못하면 소비한 스냅샷을 되살린다. DB 구현에서는 같은 트랜잭션의 롤백이다.
-                self.history.record_before_edit(trip_id, state)
+                # 응답을 만들거나 저장하지 못하면 소비한 스냅샷을 그대로 되살린다. DB 구현에서는 트랜잭션 롤백이다.
+                self.history.restore(trip_id, snapshot)
                 raise
-            self.repository.save(trip_id, TripRecord(record.trip, state))
             return UndoResponse(schedule=result.schedule)
 
     def generate(self, trip_id: str, request: GenerateScheduleRequest) -> Schedule:
@@ -171,4 +186,8 @@ class TripService:
                     context=context,
                 )
                 state = result.state
-            return self._save(trip_id, record, result)
+            schedule = self._save(trip_id, record, result)
+            if result.state != record.schedule:
+                # 생성은 기록하지 않으므로, 그 전 편집의 스냅샷으로 되돌리면 생성 결과를 덮어쓴다. 지점을 없앤다.
+                self.history.discard(trip_id)
+            return schedule
