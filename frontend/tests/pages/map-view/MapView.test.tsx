@@ -53,8 +53,12 @@ describe('지도 보기', () => {
 
   it('이번 접속에서 고르지 않은 카카오 장소는 카카오맵 링크를 새 창으로 제공한다', async () => {
     renderPage();
+    // mock 키 형식이 바뀌어도 깨지지 않도록 일정의 카카오 블록에서 기대값을 읽는다.
+    const [kakaoPlaceUrl] = schedule.days
+      .flatMap((day) => day.blocks)
+      .flatMap((block) => (block.place.source === 'KAKAO' ? [block.place.placeUrl] : []));
     const link = await screen.findByRole('link', { name: '카카오맵에서 장소 확인 (새 창)' });
-    expect(link).toHaveAttribute('href', 'https://example.com/mock-kakao-place/3');
+    expect(link).toHaveAttribute('href', kakaoPlaceUrl);
     expect(link).toHaveAttribute('target', '_blank');
   });
 
