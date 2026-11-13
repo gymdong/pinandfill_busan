@@ -27,6 +27,8 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [mutationViolations, setMutationViolations] = useState<Violation[]>([]);
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
+  // 고른 일차가 일정에 없으면(다시 불러온 일정 등) 첫 일차로 보정한다.
+  const addDay = schedule?.days.some((day) => day.dayNo === addDayNo) ? addDayNo : (schedule?.days[0]?.dayNo ?? 1);
   const warnings = [...new Map(
     [...(schedule?.violations ?? []), ...mutationViolations].map((item) => [`${item.type}\u0000${item.cause}`, item]),
   ).values()];
@@ -85,7 +87,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       </section>;
     })}
     {!schedule?.days.length && <p>표시할 일정이 없습니다.</p>}
-    {schedule && schedule.days.length > 1 && <label>추가할 일차 <select value={addDayNo} onChange={(event) => setAddDayNo(Number(event.target.value))}>{schedule.days.map((day) => <option key={day.dayNo} value={day.dayNo}>{day.dayNo}일차</option>)}</select></label>}
-    <BlockEditor tripId={tripId} dayNo={addDayNo} disabled={pending} onChange={change} />
+    {schedule && schedule.days.length > 1 && <label>추가할 일차 <select value={addDay} onChange={(event) => setAddDayNo(Number(event.target.value))}>{schedule.days.map((day) => <option key={day.dayNo} value={day.dayNo}>{day.dayNo}일차</option>)}</select></label>}
+    <BlockEditor tripId={tripId} dayNo={addDay} disabled={pending} onChange={change} />
   </main>;
 }

@@ -118,8 +118,8 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
     const dayNo = anchored?.day.dayNo ?? body.dayNo ?? body.fixedWindow?.dayNo;
     if (dayNo === undefined) return invalid();
     if (anchored && body.dayNo !== undefined && body.dayNo !== dayNo) return invalid();
-    const day = draft.days.find((item) => item.dayNo === dayNo) ?? addEmptyDay(draft, dayNo);
     if (body.fixedWindow && body.fixedWindow.dayNo !== dayNo) return invalid();
+    const day = draft.days.find((item) => item.dayNo === dayNo) ?? addEmptyDay(draft, dayNo);
     const input = body.place;
     const place = 'placeId' in input
       ? Object.values(placeSummaries).find((item) => item.id === input.placeId)
