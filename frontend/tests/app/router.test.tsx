@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tripsApi } from '@/api';
+import { schedule, trip } from '@/api/mock/fixtures/schedule';
 import { paths } from '@/app/paths';
 import { routes } from '@/app/router';
 
@@ -10,14 +12,16 @@ function renderAt(path: string) {
 }
 
 describe('라우팅', () => {
+  afterEach(() => vi.restoreAllMocks());
   it.each([
     [paths.tripStart(), 'UI-01 여행 시작'],
-    [paths.timeline('t1'), 'UI-02 코스 타임라인'],
+    [paths.timeline('t1'), '코스 타임라인'],
     [paths.placeDetail('p1', '2026-10-17'), 'UI-04 장소 상세'],
     [paths.mapView('t1'), 'UI-06 지도 보기'],
     [paths.moodSearch(), 'UI-08 분위기로 찾기'],
     [paths.admin(), 'UI-09 관리자'],
   ])('%s에 %s 자리를 연다', async (path, title) => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
     renderAt(path);
     expect(await screen.findByText(title)).toBeInTheDocument();
   });

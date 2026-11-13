@@ -1,0 +1,9 @@
+.page { max-width: 760px; margin: 0 auto; padding: var(--space-5) var(--space-4) 80px; }
+.header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); }
+.day { margin-top: 28px; }
+.list { list-style: none; padding: 0; }
+.list li { margin: var(--space-3) 0; }
+.block { display: flex; flex-direction: column; gap: 6px; width: 100%; min-height: 56px; padding: var(--space-3); text-align: left; border: 1px solid var(--color-border); border-radius: var(--radius-s); background: var(--color-surface); color: inherit; }
+.block[aria-pressed='true'] { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.leg { margin: 10px var(--space-3); }
+.placeLink { display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--color-accent); }
