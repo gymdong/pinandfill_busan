@@ -73,6 +73,16 @@ describe('지도 보기', () => {
     expect(mocks.remember).toHaveBeenCalledWith('k1', { name: '새 장소', coords: { lat: 35, lng: 129 } });
   });
 
+  it('2일차로 전환한 뒤 추가하면 보고 있는 일차를 dayNo로 보낸다', async () => {
+    const dayTwo = { ...structuredClone(schedule.days[0]!), dayNo: 2, date: '2026-10-18', blocks: [], legs: [], crowd: [] };
+    mocks.get.mockResolvedValue({ trip, schedule: { ...schedule, days: [...schedule.days, dayTwo] } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '2일차' }));
+    fireEvent.click(await screen.findByText('지도 길게 누르기'));
+    fireEvent.click(await screen.findByText('핵심지에 추가'));
+    await waitFor(() => expect(mocks.addBlock).toHaveBeenCalledWith('t1', expect.objectContaining({ dayNo: 2 })));
+  });
+
   it('서버가 반환한 위반과 충돌을 숨기지 않는다', async () => {
     mocks.addBlock.mockResolvedValue({ schedule: { ...schedule, conflicts: [{ cause: '고정 블록과 충돌', blockIds: [] }] }, violations: [{ type: 'HOURS', cause: '영업시간 위반' }] });
     renderPage();

@@ -20,6 +20,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const loaded = useApi(fetchTrip);
   const [edited, setEdited] = useState<Schedule | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [addDayNo, setAddDayNo] = useState(1);
   const [slot, setSlot] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +85,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       </section>;
     })}
     {!schedule?.days.length && <p>표시할 일정이 없습니다.</p>}
-    <BlockEditor tripId={tripId} disabled={pending} onChange={change} />
+    {schedule && schedule.days.length > 1 && <label>추가할 일차 <select value={addDayNo} onChange={(event) => setAddDayNo(Number(event.target.value))}>{schedule.days.map((day) => <option key={day.dayNo} value={day.dayNo}>{day.dayNo}일차</option>)}</select></label>}
+    <BlockEditor tripId={tripId} dayNo={addDayNo} disabled={pending} onChange={change} />
   </main>;
 }

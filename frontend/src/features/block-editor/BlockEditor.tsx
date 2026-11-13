@@ -6,10 +6,12 @@ import styles from './BlockEditor.module.css';
 
 type Change = (action: () => Promise<{ schedule: Schedule }>) => Promise<void>;
 
-export function BlockEditor({ tripId, block, between, disabled, onChange }: {
+export function BlockEditor({ tripId, block, between, dayNo, disabled, onChange }: {
   tripId: string;
   block?: Block;
   between?: { fromBlockId: string; toBlockId: string };
+  /** 앵커 없이 추가할 때 끝에 붙일 일차 */
+  dayNo?: number;
   disabled: boolean;
   onChange: Change;
 }) {
@@ -50,7 +52,7 @@ export function BlockEditor({ tripId, block, between, disabled, onChange }: {
         if (!place.placeId) rememberKakaoPlace(place.kakaoPlaceId, { name: place.name, coords: place.coords });
         void onChange(() => tripsApi.addBlock(tripId, {
           place: place.placeId ? { placeId: place.placeId } : { kakaoPlaceId: place.kakaoPlaceId, placeUrl: place.placeUrl },
-          isFixed: false, origin: 'USER', ...between,
+          isFixed: false, origin: 'USER', ...(between ?? (dayNo === undefined ? {} : { dayNo })),
         }));
       }}>추가</Button>
     </li>)}</ul>}

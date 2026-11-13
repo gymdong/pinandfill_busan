@@ -112,7 +112,7 @@ describe('코스 타임라인', () => {
     await userEvent.click(screen.getByRole('button', { name: '검색' }));
     await userEvent.click(await screen.findByRole('button', { name: '추가' }));
     expect(placesApi.search).toHaveBeenCalledWith({ q: '민락' });
-    expect(add).toHaveBeenCalledWith('t1', { place: { placeId: searchItems[0]!.placeId }, isFixed: false, origin: 'USER' });
+    expect(add).toHaveBeenCalledWith('t1', { place: { placeId: searchItems[0]!.placeId }, isFixed: false, origin: 'USER', dayNo: 1 });
   });
   it('서버 일정을 보여 주고 편집 응답의 새 일정을 반영한다', async () => {
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });

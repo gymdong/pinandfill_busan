@@ -101,7 +101,10 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
   if (!body?.place) return invalid();
   return mutate(tripId, (draft, tripState) => {
     const anchored = body.fromBlockId ? findBlock(draft, body.fromBlockId) : null;
-    const dayNo = anchored?.day.dayNo ?? body.fixedWindow?.dayNo ?? 1;
+    // 백엔드와 동일: 앵커가 있으면 앵커의 일차, 없으면 dayNo → fixedWindow.dayNo, 모두 없으면 ERR-001
+    const dayNo = anchored?.day.dayNo ?? body.dayNo ?? body.fixedWindow?.dayNo;
+    if (dayNo === undefined) return invalid();
+    if (anchored && body.dayNo !== undefined && body.dayNo !== dayNo) return invalid();
     const day = draft.days.find((item) => item.dayNo === dayNo);
     if (!day) return invalid();
     if (body.fixedWindow && body.fixedWindow.dayNo !== dayNo) return invalid();
