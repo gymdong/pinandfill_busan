@@ -114,6 +114,19 @@ describe('코스 타임라인', () => {
     expect(placesApi.search).toHaveBeenCalledWith({ q: '민락' });
     expect(add).toHaveBeenCalledWith('t1', { place: { placeId: searchItems[0]!.placeId }, isFixed: false, origin: 'USER', dayNo: 1 });
   });
+  it('여러 날 일정에서는 고른 일차의 마지막에 추가한다', async () => {
+    const twoDays = { ...schedule, days: [schedule.days[0]!, { ...schedule.days[0]!, dayNo: 2, blocks: [], legs: [] }] };
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule: twoDays });
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
+    const add = vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule: twoDays, violations: [] });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    await userEvent.selectOptions(screen.getByLabelText('추가할 일차'), '2');
+    await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
+    await userEvent.click(screen.getByRole('button', { name: '검색' }));
+    await userEvent.click(await screen.findByRole('button', { name: '추가' }));
+    expect(add).toHaveBeenCalledWith('t1', expect.objectContaining({ dayNo: 2 }));
+  });
   it('서버 일정을 보여 주고 편집 응답의 새 일정을 반영한다', async () => {
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
     const changed = {
