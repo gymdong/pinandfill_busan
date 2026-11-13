@@ -46,7 +46,7 @@ function MapViewContent({ tripId }: { tripId: string }) {
       if (!place.placeId) rememberKakaoPlace(place.kakaoPlaceId, { name: place.name, coords: place.coords });
       const result = await tripsApi.addBlock(tripId, {
         place: place.placeId ? { placeId: place.placeId } : { kakaoPlaceId: place.kakaoPlaceId, placeUrl: place.placeUrl },
-        isFixed: false, origin: 'USER',
+        isFixed: false, origin: 'USER', dayNo: day?.dayNo ?? dayNo,
       });
       setSchedule(result.schedule); setViolations(result.violations); setCandidates([]);
       setNotice(`${place.name}을(를) 핵심지에 추가했어요.`);
