@@ -41,10 +41,11 @@ export type PlaceBadge = 'DETAIL' | 'BASIC';
 /** @provisional 영업시간 없음('확인 필요')은 매칭 배지와 동시에 나올 수 있어 분리한다. */
 export type HoursStatus = 'KNOWN' | 'NEEDS_CHECK';
 
-/** @provisional 카카오 장소 키. D6에 따라 서버에 저장할 수 있는 값은 이 둘뿐이다. */
+/** 카카오 장소 키. D6에 따라 서버에 저장할 수 있는 값은 이 둘뿐이다. */
 export interface KakaoPlaceKey {
+  /** 숫자로만 된 카카오 장소 ID */
   kakaoPlaceId: string;
-  /** 앱 안이 아니라 외부 브라우저로 연다. */
+  /** 백엔드는 `https://place.map.kakao.com/{kakaoPlaceId}` 형식만 받는다. 앱 안이 아니라 외부 브라우저로 연다. */
   placeUrl: string;
 }
 
@@ -307,13 +308,18 @@ export type BlockPlaceInput = { placeId: Uuid } | KakaoPlaceKey;
 
 /** API-006. 클라이언트가 `sessionCoords`를 자동으로 붙인다. */
 export interface AddBlockRequest extends WithSessionCoords {
+  /**
+   * 블록을 넣을 일차. `fromBlockId`·`toBlockId`가 없으면 그날 마지막에 붙는다(백엔드 API-006).
+   * 화면에서 보고 있는 일차를 보낸다.
+   */
+  dayNo?: number;
   place: BlockPlaceInput;
   isFixed: boolean;
   fixedWindow?: { dayNo: number; start: LocalTime; end: LocalTime };
   origin: BlockOrigin;
   /**
-   * @provisional 경유지를 넣을 인접한 두 블록(정현빈 제안). 이웃하지 않으면 ERR-001.
-   * 핵심지 추가처럼 위치를 엔진이 정할 때는 생략한다.
+   * 경유지를 넣을 인접한 두 블록. 둘을 함께 보내야 하며 이웃하지 않으면 ERR-001.
+   * 생략하면 `dayNo`의 마지막에 붙는다.
    */
   fromBlockId?: Uuid;
   toBlockId?: Uuid;
