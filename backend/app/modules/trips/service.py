@@ -107,8 +107,9 @@ class TripService:
             # 편집은 한 날 안에서만 일어난다. 바뀐 블록이 있던 날·있는 날만 검사한다.
             self._accept(result, days={day_of[i] for day_of in (before, after) for i in changed if i in day_of})
             previous = self.history.latest_edit(trip_id)
-            self.history.record_before_edit(trip_id, record.schedule)
             try:
+                # 기록은 이전 지점을 지운 뒤 새 지점을 저장하므로, 기록 단계의 실패도 함께 되돌린다.
+                self.history.record_before_edit(trip_id, record.schedule)
                 self.repository.save(trip_id, TripRecord(record.trip, result.state))
             except Exception:
                 self.history.restore(trip_id, previous)

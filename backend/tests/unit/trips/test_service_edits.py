@@ -17,7 +17,13 @@ from app.modules.engine.service import (
     SequenceNormalizationRequiredError,
 )
 from app.modules.trips.commands import FixedWindowRequiredError
-from app.modules.trips.edit_history import NothingToUndoError, ac006_violations
+from app.modules.trips.edit_history import (
+    EditHistory,
+    InMemorySnapshotRepository,
+    NothingToUndoError,
+    ScheduleSnapshot,
+    ac006_violations,
+)
 from app.modules.trips.repository import FakeTripRepository, TripRecord
 from app.modules.trips.schemas import (
     AddBlockRequest,
@@ -560,6 +566,40 @@ def test_failed_save_keeps_exact_previous_undo_point(with_previous_edit):
     else:
         with pytest.raises(NothingToUndoError):
             service.undo(TRIP, UndoRequest())
+
+
+class FlakySnapshots(InMemorySnapshotRepository):
+    """다음 스냅샷 저장 한 번이 실패하는 저장소. `record` 가 이전 지점을 지운 뒤 실패하는 경우를 만든다.
+
+    저장소가 계속 실패하면 보상 동작도 실패하므로, 그 경우는 DB 트랜잭션이 맡는다.
+    """
+
+    fail_next = False
+
+    def save(self, snapshot: ScheduleSnapshot) -> None:
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("snapshot storage unavailable")
+        super().save(snapshot)
+
+
+def test_failed_snapshot_record_keeps_previous_undo_point_and_state():
+    service, repository = flaky_service()
+    snapshots = FlakySnapshots()
+    service.history = EditHistory(snapshots)
+    before = saved(repository)
+    service.update_block(TRIP, "b", stay(60))
+    current = saved(repository)
+    point = service.history.latest_edit(TRIP)
+
+    snapshots.fail_next = True
+    with pytest.raises(RuntimeError):
+        service.delete_block(TRIP, "c", DeleteBlockRequest())
+
+    assert saved(repository) == current
+    assert service.history.latest_edit(TRIP) is point
+    service.undo(TRIP, UndoRequest())
+    assert saved(repository) == before
 
 
 def test_failed_undo_save_keeps_snapshot():
