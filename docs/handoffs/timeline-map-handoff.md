@@ -31,9 +31,12 @@
 | `DELETE` | 뒤 블록 seq 를 1씩 당기고 같은 날 앞 블록부터 재계산 | 같은 날 앞 블록 |
 | `POST undo` | 직전 편집 전 상태를 재계산 없이 복원 | - |
 
-- 본문: PATCH 는 `isFixed`·`seq`·`stayMin` 중 정확히 하나 + 선택 `sessionCoords`(아니면 400 ERR-001). DELETE·undo 본문은 없어도 되며 `sessionCoords` 만 받는다.
+- 본문: PATCH 는 `isFixed`·`seq`·`stayMin` 중 정확히 하나(null 로 보낸 키도 센다) + 선택 `sessionCoords`(아니면 400 ERR-001). 타입은 엄격하다: `"3"`·`3.0`·`true` 를 정수로, `"false"`·`0` 을 불리언으로 받지 않는다. `stayMin` 상한은 1440분(잠정). DELETE·undo 본문은 없어도 되며 `sessionCoords` 만 받는다.
 - 오류: 없는 블록·범위 밖 seq → 400 ERR-001, 기존 10·20 seq → 400 ERR-001, 고정 시각을 지킬 수 없는 결과 → 409 ERR-009, 없는 여행 → 404 ERR-016, 되돌릴 편집 없음 → 409 ERR-001(잠정).
-- 같은 값으로 바꾸는 편집(같은 seq·stayMin·isFixed)은 저장·스냅샷 없이 현재 일정을 돌려준다.
+- 고정 시각 수락 검사(ERR-009)는 편집(API-006·007·008)에서는 **편집한 날만** 본다. 다른 날에 이미 있던 충돌은 편집을 막지 않는다. API-009 는 지금처럼 모든 날을 본다.
+- **변경 없는 편집 규칙**: 같은 값으로 바꾸는 편집(같은 seq·stayMin·isFixed)은 저장도 스냅샷 기록도 하지 않고 현재 일정을 돌려준다. 되돌리기 1단계가 의미 없는 편집에 소비되지 않게 하려는 것이다. 프런트 mock 은 이 경우에도 항상 `previous` 를 기록하므로 동작이 다르다.
+- 카카오 블록이 있는 날을 편집할 때 요청에 `sessionCoords` 가 없으면, 엔진 기존 계약대로 그 블록으로 가는 이동시간을 알 수 없어 그 뒤 일반 블록 시각이 비워지고 `COORDS_NEEDS_CHECK` 경고가 붙는다(시험으로 고정해 둠).
+- 저장 실패: 편집 저장이 실패하면 되돌리기 지점을 편집 전 그대로(`EditHistory.latest_edit` 로 받아 둔 스냅샷을 `restore`) 되살리고, 되돌리기 저장이 실패하면 소비한 스냅샷을 되살린다. DB 구현에서는 한 트랜잭션의 롤백으로 대신한다.
 
 ### 미결 사항 (팀 확인 필요)
 
@@ -42,14 +45,16 @@
 3. **고정 해제 시 시각**: 블록이 움직이지 않도록 도착 시각을 유지한다(앞 블록 기준으로 당기지 않음). 프런트 mock 은 이 블록 시각을 비워 재계산 대상으로 둔다. 당기는 쪽이 낫다면 시작점만 바꾸면 된다.
 4. **고정 켜기**: API-007 이 시각을 받지 않아 사실상 다시 추가해야 한다. 고정 해제가 지정 시각을 지우므로 해제 후 다시 켜기도 400 이다. 시각을 함께 받을지(`fixedWindow`) 프런트와 정해야 한다.
 5. **되돌릴 편집 없음의 오류 ID**: SDD 8장에 전용 ID 가 없어 409 + ERR-001 을 잠정으로 쓴다. 프런트 `ERROR_CATALOG` 의 ERR-001 상태 목록은 [400] 뿐이다.
-6. **API-009 뒤 되돌리기**: 일정 생성은 기록하지 않으므로, 편집 → 일정 생성 → 되돌리기를 하면 생성 결과도 함께 사라지고 편집 전으로 돌아간다.
+6. **API-009 뒤 되돌리기**: 일정 생성은 기록하지 않는다. 생성이 일정을 실제로 바꾸면 `EditHistory.discard` 로 되돌리기 지점을 없애므로, 편집 → 일정 생성 → 되돌리기는 409 다(생성 결과를 편집 전 상태로 덮어쓰지 않게). 생성 결과가 그대로면 지점을 남긴다. 생성 자체를 되돌릴 수 있게 할지(GENERATE 스냅샷 사용)는 정해지지 않았다.
+7. **엔진 규칙 중복**: `trips/commands.py` 의 그날 시작 시각 이어받기와 자정 넘김 처리(`_starting_at`)는 엔진 `_calculate` 의 규칙(출발 = 도착 + 체류, 자정을 넘기면 비움)을 따라 쓴 것이다. 엔진 안으로 옮기는 것이 맞으며, 옮길지와 방식은 엔진 담당(정현빈)이 정한다. 이번 브랜치에서는 옮기지 않았다.
 
 ## 정현빈에게 (엔진·core/db)
 
 1. API-007·008·010 과 `TripService` 연결을 마쳤다. 편집 한 번의 처리 순서는 다음과 같다(이전 문서의 "스냅샷 먼저" 순서에서 바뀌었다). 지금은 `TripService` 의 RLock 안에서, DB 를 붙인 뒤에는 한 트랜잭션 안에서 처리한다.
-   `현재 상태 조회 → 엔진 편집 → 수락 검사(_accept: FixedScheduleConflictError 등) → EditHistory.record_before_edit(trip_id, record.schedule) → 저장`
-   엔진 오류나 수락 검사로 거절된 편집은 스냅샷을 남기지 않으므로 **직전 EDIT 스냅샷이 그대로** 남는다(시험: `tests/unit/trips/test_service_edits.py::test_rejected_edit_keeps_previous_snapshot`). 상태가 그대로인 편집(같은 값)은 저장도 기록도 하지 않는다. API-006(블록 추가)도 같은 경로로 기록되어 되돌릴 수 있다. API-009(일정 생성)는 기록하지 않는다.
-2. 되돌리기(API-010)는 `EditHistory.undo(trip_id)` 가 돌려준 `ScheduleState` 를 **다시 계산하지 않고** 저장하며, 응답 `{schedule}` 은 엔진 `project`(경로 조회 없이 `_present` 로 투영, 경고는 validate 규칙)로 만든다. 되돌리기 자체는 스냅샷을 남기지 않는다. 투영에 실패하면 소비한 스냅샷을 되살린다. 스냅샷이 없으면 `NothingToUndoError` → **409**.
+   `현재 상태 조회 → 엔진 편집 → 수락 검사(_accept, 편집한 날만: FixedScheduleConflictError 등) → EditHistory.record_before_edit(trip_id, record.schedule) → 저장`
+   엔진 오류나 수락 검사로 거절된 편집은 스냅샷을 남기지 않으므로 **직전 EDIT 스냅샷이 그대로** 남는다(시험: `tests/unit/trips/test_service_edits.py::test_rejected_edit_keeps_previous_snapshot`). 저장이 실패해도 `latest_edit`/`restore` 로 직전 지점을 정확히 되살린다. 상태가 그대로인 편집(같은 값)은 저장도 기록도 하지 않는다. API-006(블록 추가)도 같은 경로로 기록되어 되돌릴 수 있다. API-009(일정 생성)는 기록하지 않고, 일정을 바꾸면 `discard` 로 지점을 없앤다.
+2. 되돌리기(API-010)는 `EditHistory.undo(trip_id)` 가 돌려준 `ScheduleState` 를 **다시 계산하지 않고** 저장하며, 응답 `{schedule}` 은 엔진 `project`(경로 조회 없이 `_present` 로 투영, 경고는 validate 규칙)로 만든다. 되돌리기 자체는 스냅샷을 남기지 않는다. 투영이나 저장에 실패하면 소비한 스냅샷을 그대로 되살린다. 스냅샷이 없으면 `NothingToUndoError` → **409**.
+   DB 구현 시 `EditHistory` 의 `latest_edit`·`restore`·`discard` 보상 동작은 트랜잭션 롤백으로 대신할 수 있다.
 3. `TripService(history=...)` 를 주입하지 않으면 `EditHistory(InMemorySnapshotRepository())` 를 쓴다. 로컬 Fake 저장소와 짝을 이루는 기본값이므로 DB 저장소를 붙일 때 함께 바꿔야 한다.
 4. `core/db` 에 ORM(SQLAlchemy)·세션이 들어오면 `SnapshotRepository` Protocol(`next_version`·`save`·`latest`·`delete`)의 DB 구현을 내가 붙인다. `schedule_snapshots` 컬럼은 SDD 5.2 그대로다(id, trip_id, version, payload JSONB, reason, created_at). payload 는 `ScheduleState.model_dump(mode="json", by_alias=True)` 다.
 5. 경유지 시트(UI-03) 컴포넌트를 타임라인 경유지 슬롯에 붙여야 한다. 지금은 `BlockEditor` 의 경유지 추가 폼이 임시로 그 자리에 있다. 시트 컴포넌트가 나오면 교체한다. props 형태를 알려 달라.
