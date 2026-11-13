@@ -116,6 +116,19 @@ class BasicItineraryEngine:
         places = self._resolve(command.trip, command.schedule, context or CalculationContext())
         return validate_chain(command, places)
 
+    def project(self, command: ValidateInput, *, context: CalculationContext | None = None) -> EngineResult:
+        """저장된 상태를 다시 계산하지 않고 응답 일정으로만 바꾼다(되돌리기·변경 없는 편집).
+
+        경로를 조회하지 않고 상태(시각·구간·seq)를 그대로 돌려준다. 경고는 validate 와 같은 규칙으로 붙는다.
+        """
+        self._check(command.trip, command.schedule)
+        places = self._resolve(command.trip, command.schedule, context or CalculationContext())
+        validation = validate_chain(command, places)
+        return EngineResult(
+            state=command.schedule,
+            schedule=self._present(command.trip, command.schedule, places, validation),
+        )
+
     def normalize_sequences(self, trip: TripWindow, state: ScheduleState, *, day_no: int) -> ScheduleState:
         """Explicit legacy migration only; callers must snapshot/commit it separately from edits.
 
