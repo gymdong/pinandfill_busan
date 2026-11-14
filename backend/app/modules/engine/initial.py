@@ -187,9 +187,6 @@ class InitialSchedulePlanner:
         for day_no, items in by_day.items():
             checked = self._day(command.trip, day_no, items, request_context, details_cache, retain_fixed=True)
             accepted[day_no] = checked
-            if checked.reason is not None:
-                extra_violations.append(checked.reason)
-                extra_conflicts.extend(checked.conflicts)
 
         for selection in flexible:
             allowed = selection.allowed_days or tuple(range(1, day_count + 1))
@@ -241,6 +238,11 @@ class InitialSchedulePlanner:
             blocks.extend(checked.blocks)
             legs.extend(checked.legs)
             exact = exact and checked.exact and checked.feasible
+            # Only accepted final routes describe the resulting day. A later
+            # insertion can resolve an earlier direct-leg timing conflict.
+            if checked.reason is not None:
+                extra_violations.append(checked.reason)
+            extra_conflicts.extend(checked.conflicts)
         state = ScheduleState(blocks=tuple(blocks), legs=tuple(legs))
         self.engine._check(command.trip, state)
         # Resolve through the sanitizing boundary used during placement.  A

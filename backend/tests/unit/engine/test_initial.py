@@ -401,3 +401,30 @@ def test_second_day_route_receives_second_day_kst():
     assert result.confirmed
     assert all(value.date() == date(2026, 11, 15) for value in routes.departures)
     assert all(value.utcoffset().total_seconds() == 32400 for value in routes.departures)
+
+
+def test_insertion_resolving_direct_route_conflict_does_not_retain_stale_warning(monkeypatch):
+    planner, _, routes, _ = setup()
+
+    def estimate(origin, destination, *, mode, departure_at):
+        pair = (origin.place_ref.place_id, destination.place_ref.place_id)
+        duration = 60 if pair == ("a", "b") else 10
+        return RouteEstimate(duration, "TMAP", datetime(2026, 11, 1, tzinfo=UTC), "prediction")
+
+    monkeypatch.setattr(routes, "estimate_at", estimate)
+    result = planner.plan(
+        command(
+            selection("a", fixed_window=FixedWindow(day_no=1, start=time(10), end=time(10, 30))),
+            selection("b", fixed_window=FixedWindow(day_no=1, start=time(11), end=time(11, 30))),
+            selection("c", stay_min=10),
+        )
+    )
+    assert [(block.id, block.arrive_at, block.depart_at) for block in result.state.blocks] == [
+        ("a", time(10), time(10, 30)),
+        ("c", time(10, 40), time(10, 50)),
+        ("b", time(11), time(11, 30)),
+    ]
+    assert result.confirmed
+    assert not result.violations
+    assert not result.conflicts
+    assert not result.unplaced
