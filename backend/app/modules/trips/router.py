@@ -63,8 +63,8 @@ def translate_error(exc: Exception) -> TripAPIError:
     if isinstance(exc, FixedScheduleConflictError):
         return TripAPIError(409, "ERR-009", "고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요.")
     if isinstance(exc, NothingToUndoError):
-        # SDD 8장에 '되돌릴 편집 없음' 전용 ID 가 없어 잠정으로 ERR-001 을 쓴다(상태 충돌이므로 409).
-        return TripAPIError(409, "ERR-001", "되돌릴 직전 편집이 없습니다.")
+        # SDD 8장에 '되돌릴 편집 없음' 전용 ID 가 없어 ERR-001 을 쓴다. 프런트 ERROR_CATALOG·mock 과 같게 400 이다.
+        return TripAPIError(400, "ERR-001", "되돌릴 직전 편집이 없습니다.")
     if isinstance(exc, FixedWindowRequiredError):
         return TripAPIError(
             400, "ERR-001", "지정 시각이 없는 장소는 고정할 수 없습니다. 고정 장소로 다시 추가해 주세요."

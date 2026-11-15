@@ -43,7 +43,7 @@ def test_patch_stay_returns_mutation_and_undo_restores_schedule():
     assert set(undone.json()) == {"schedule"}
     assert undone.json()["schedule"]["days"] == original["days"]
     assert saved(repository) == before
-    assert_error(client.post(UNDO), 409, "ERR-001")
+    assert_error(client.post(UNDO), 400, "ERR-001")
 
 
 @pytest.mark.parametrize(
@@ -165,7 +165,7 @@ def test_undo_without_history_or_trip():
     client, repository, _ = setup_api()
     before = saved(repository)
     response = client.post(UNDO)
-    assert_error(response, 409, "ERR-001")
+    assert_error(response, 400, "ERR-001")
     assert "되돌릴" in response.json()["error"]["message"]
     assert_error(client.post("/api/trips/missing/undo"), 404, "ERR-016")
     assert saved(repository) == before

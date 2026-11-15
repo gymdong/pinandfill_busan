@@ -2,7 +2,7 @@
 
 from datetime import time
 
-from app.modules.engine.constraints.chain import minutes
+from app.modules.engine.constraints.chain import visit_end
 from app.modules.engine.schemas import (
     BlockDraft,
     CalculationContext,
@@ -81,11 +81,11 @@ def _day_of(schedule: ScheduleState, block_id: str) -> tuple[list[StoredBlock], 
 
 
 def _starting_at(block: StoredBlock, arrive: time | None) -> StoredBlock:
-    """재계산 시작점이 될 일반 블록의 시각. 엔진처럼 자정을 넘기면 출발 시각을 비운다."""
-    depart = None
-    if arrive is not None and minutes(arrive) + block.stay_min < 24 * 60:
-        end = minutes(arrive) + block.stay_min
-        depart = time(end // 60, end % 60)
+    """재계산 시작점이 될 일반 블록의 시각. 엔진과 같은 `visit_end` 로 출발 시각을 정한다.
+
+    자정을 넘기면 출발 시각을 비우고 도착 시각은 남긴다. 엔진 검증이 이 상태를 DAY_OVERFLOW 로 알린다.
+    """
+    depart = visit_end(arrive, block.stay_min) if arrive is not None else None
     return block.model_copy(update={"arrive_at": arrive, "depart_at": depart})
 
 

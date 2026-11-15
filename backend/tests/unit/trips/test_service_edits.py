@@ -620,6 +620,62 @@ def test_failed_undo_save_keeps_snapshot():
     assert saved(repository) == before
 
 
+class FlakyDeletes(InMemorySnapshotRepository):
+    """다음 스냅샷 삭제 한 번이 실패하는 저장소. 일정 생성의 되돌리기 지점 삭제(`discard`) 실패를 만든다."""
+
+    fail_next = False
+
+    def delete(self, snapshot: ScheduleSnapshot) -> None:
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("snapshot storage unavailable")
+        super().delete(snapshot)
+
+
+@pytest.mark.parametrize("failure", ["discard", "save"])
+def test_failed_generate_keeps_schedule_and_undo_point(failure):
+    service, base, routes = setup_service()
+    repository, snapshots = FlakyRepository({TRIP: base.get(TRIP)}), FlakyDeletes()
+    service.repository, service.history = repository, EditHistory(snapshots)
+    before = saved(repository)
+    service.update_block(TRIP, "b", stay(60))
+    current = saved(repository)
+    point = service.history.latest_edit(TRIP)
+    routes.duration_min = 20  # 생성이 일정을 실제로 바꾸게 한다.
+
+    if failure == "discard":
+        snapshots.fail_next = True
+    else:
+        repository.fail = True
+    with pytest.raises(RuntimeError):
+        service.generate(TRIP, GenerateScheduleRequest())
+    repository.fail = False
+
+    # 일정도 되돌리기 지점도 생성 전 그대로여야, 뒤이은 되돌리기가 생성 결과를 덮어쓰지 않는다.
+    assert saved(repository) == current
+    assert service.history.latest_edit(TRIP) is point
+    service.undo(TRIP, UndoRequest())
+    assert saved(repository) == before
+
+
+# ---- 자정 초과 ----
+
+
+def test_first_block_stay_past_midnight_reports_day_overflow():
+    # 그날 첫 블록(여기서는 유일한 블록)은 앞 블록이 없어도 도착 + 체류로 확인된 자정 초과를 충돌로 알린다.
+    engine, _, _ = _engine(("x",))
+    state = ScheduleState(blocks=(_block("x", 1, arrive=time(23), depart=time(23, 30)),))
+    repository = FakeTripRepository({TRIP: TripRecord(_trip(), state)})
+    service = TripService(repository, engine, lambda place: 30)
+
+    response = service.update_block(TRIP, "x", stay(120))
+
+    assert times(saved(repository), "x") == (time(23), None)
+    warnings = {w.type for w in response.schedule.days[0].blocks[0].warnings}
+    assert {"TIME_NEEDS_CHECK", "DAY_OVERFLOW"} <= warnings
+    assert any(conflict.block_ids == ("x",) for conflict in response.schedule.conflicts)
+
+
 # ---- 수락 검사 범위 ----
 
 

@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, time, timedelta
 from uuid import uuid4
 
-from app.modules.engine.constraints.chain import minutes, validate_chain
+from app.modules.engine.constraints.chain import minutes, validate_chain, visit_end
 from app.modules.engine.interfaces import EngineResult, PlaceDataProvider, RouteProvider
 from app.modules.engine.routing import departure_for, estimate_departing
 from app.modules.engine.schemas import (
@@ -288,9 +288,10 @@ class BasicItineraryEngine:
                 arrive = depart = None
                 if previous.depart_at is not None and duration is not None:
                     start = minutes(previous.depart_at) + duration
-                    end = start + block.stay_min
-                    if end < 24 * 60:
-                        arrive, depart = time(start // 60, start % 60), time(end // 60, end % 60)
+                    if start < 24 * 60:
+                        arrival = time(start // 60, start % 60)
+                        if (end := visit_end(arrival, block.stay_min)) is not None:
+                            arrive, depart = arrival, end
             blocks[index] = block.model_copy(update={"arrive_at": arrive, "depart_at": depart})
         updated = ScheduleState(blocks=tuple(blocks), legs=tuple(legs.values()))
         validation = validate_chain(ValidateInput(trip=trip, schedule=updated), places)

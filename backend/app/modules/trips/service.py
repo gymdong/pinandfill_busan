@@ -88,11 +88,6 @@ class TripService:
         ):
             raise FixedScheduleConflictError
 
-    def _save(self, trip_id: str, record: TripRecord, result: EngineResult) -> Schedule:
-        self._accept(result)
-        self.repository.save(trip_id, TripRecord(record.trip, result.state))
-        return result.schedule
-
     def _commit_edit(self, trip_id: str, record: TripRecord, result: EngineResult) -> ScheduleMutationResponse:
         """편집 한 번을 확정한다: 수락 검사 → 편집 전 스냅샷 기록 → 저장.
 
@@ -187,8 +182,18 @@ class TripService:
                     context=context,
                 )
                 state = result.state
-            schedule = self._save(trip_id, record, result)
-            if result.state != record.schedule:
-                # 생성은 기록하지 않으므로, 그 전 편집의 스냅샷으로 되돌리면 생성 결과를 덮어쓴다. 지점을 없앤다.
+            self._accept(result)
+            if result.state == record.schedule:
+                self.repository.save(trip_id, TripRecord(record.trip, result.state))
+                return result.schedule
+            # 생성은 기록하지 않으므로, 그 전 편집의 스냅샷으로 되돌리면 생성 결과를 덮어쓴다. 지점을 없앤다.
+            # 지점 삭제와 일정 저장은 함께 확정한다: 일정을 마지막에 저장하고, 어느 쪽이든 실패하면
+            # 되돌리기 지점을 생성 전으로 되살린다(일정은 아직 바뀌지 않았다). DB 구현에서는 트랜잭션 롤백이다.
+            previous = self.history.latest_edit(trip_id)
+            try:
                 self.history.discard(trip_id)
-            return schedule
+                self.repository.save(trip_id, TripRecord(record.trip, result.state))
+            except Exception:
+                self.history.restore(trip_id, previous)
+                raise
+            return result.schedule
