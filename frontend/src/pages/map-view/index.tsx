@@ -109,7 +109,8 @@ function MapViewContent({ tripId }: { tripId: string }) {
           <Badge kind={selected.place.source === 'PUBLIC' ? 'detail' : 'basic'} />
           <CrowdBadge {...crowdOf(selected.id)} />
           {selected.isFixed ? <span className={styles.fixed}><LockIcon />고정</span> : null}
-          {selected.warnings.map((item, i) => <Badge key={i} kind="needsCheck" label={item.cause} />)}
+          {/* 공통 Badge 는 줄바꿈하지 않으므로 긴 경고 문구는 줄바꿈되는 칩으로 그린다(360px). */}
+          {selected.warnings.map((item, i) => <span key={i} className={styles.warnChip}>{item.cause}</span>)}
         </div>
         <div className={styles.actions}>
           <Button variant="outline" onClick={() => setSelectedId(null)}>닫기</Button>

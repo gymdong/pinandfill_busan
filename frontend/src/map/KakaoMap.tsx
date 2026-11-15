@@ -103,11 +103,13 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, clas
         maps.event.addListener(marker, 'click', () => onSelect(block.id));
         return marker;
       });
+      // SDK 는 CSS 변수를 읽지 못하므로 토큰 값을 꺼내 넘긴다.
+      const lineColor = getComputedStyle(document.documentElement).getPropertyValue('--color-ink').trim() || '#14202c';
       for (let index = 1; index < points.length; index++) {
         const from = points[index - 1]!, to = points[index]!;
         if (!legs.some((leg) => leg.fromBlockId === from.block.id && leg.toBlockId === to.block.id)) continue;
         const start = locations.get(from.block.id), end = locations.get(to.block.id);
-        if (start && end) overlays.push(new maps.Polyline({ map, path: [start, end], strokeWeight: 4, strokeColor: '#14202c' }));
+        if (start && end) overlays.push(new maps.Polyline({ map, path: [start, end], strokeWeight: 4, strokeColor: lineColor }));
       }
       // SDK가 늦게 로드되어도 마지막으로 선택한 블록에 중심을 맞춘다.
       const latest = selectionRef.current;
@@ -155,8 +157,8 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, clas
   // 바깥 div 의 크기·위치는 호출한 쪽이 정하고(없으면 높이 300px 카드), 안쪽 div 가 지도와 안내의 기준이 된다.
   return <div className={className} style={className ? undefined : { height: 300, borderRadius: 12, overflow: 'hidden' }}>
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <div ref={node} role="img" aria-label="일정 경로 지도" style={{ position: 'absolute', inset: 0, background: '#e8f1f8' }} />
-      {error ? <p role="status" style={{ position: 'absolute', inset: '35% 24px auto', textAlign: 'center', color: '#56616b', fontSize: 14 }}>{error} 아래 목록에서 장소를 선택할 수 있어요.</p> : null}
+      <div ref={node} role="img" aria-label="일정 경로 지도" style={{ position: 'absolute', inset: 0, background: 'var(--color-accent-soft)' }} />
+      {error ? <p role="status" style={{ position: 'absolute', inset: '35% 24px auto', textAlign: 'center', color: 'var(--color-ink-muted)', fontSize: 'var(--text-s)' }}>{error} 아래 목록에서 장소를 선택할 수 있어요.</p> : null}
     </div>
   </div>;
 }

@@ -89,7 +89,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     </nav>}
 
     {error && <Banner tone="warn">{error}</Banner>}
-    {notices.length > 0 && <section className={styles.notice} aria-label="일정 확인 필요">
+    {notices.length > 0 && <section role="alert" className={styles.notice} aria-label="일정 확인 필요">
       <p className={styles.noticeHead}><AlertIcon /><span>일정에서 확인할 것</span><span className={styles.countChip}>확인 필요 {notices.length}건</span></p>
       <ul>{notices.map((cause, index) => <li key={`${index}-${cause}`}>{cause}</li>)}</ul>
     </section>}
@@ -163,12 +163,14 @@ function BlockCard({ block, crowd, selected, onSelect, children }: {
       </span>
       {block.isFixed && <span className={styles.lock}><LockIcon /><span className={styles.srOnly}>고정</span></span>}
     </button>
-    {(crowd || block.warnings.length > 0 || kakaoLink) && <div className={styles.cardExtras}>
-      {crowd && <CrowdBadge grade={crowd.grade} confidence={crowd.confidence} />}
-      {block.warnings.map((item, i) => <span role="alert" className={styles.warnChip} key={i}>{item.cause}</span>)}
+    <div className={styles.cardExtras}>
+      {/* 혼잡 신호가 없는 블록도 '정보 부족'으로 표시한다(NFR-012, 지도 화면과 같음). */}
+      <CrowdBadge grade={crowd?.grade ?? null} confidence={crowd?.confidence} />
+      {/* 화면을 열 때 모든 칩을 읽지 않도록 알림(role=alert)은 위 요약 카드에만 둔다. */}
+      {block.warnings.map((item, i) => <span className={styles.warnChip} key={i}>{item.cause}</span>)}
       {/* D6: 이번 접속에서 고르지 않은 카카오 장소는 place_url을 외부 브라우저로 연다. */}
       {kakaoLink && <a className={styles.placeLink} href={kakaoLink} target="_blank" rel="noopener noreferrer">카카오맵에서 장소 확인 (새 창)</a>}
-    </div>}
+    </div>
     {children}
   </article>;
 }

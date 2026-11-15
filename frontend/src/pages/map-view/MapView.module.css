@@ -291,6 +291,19 @@
   color: var(--color-accent);
 }
 
+.warnChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 10px;
+  border: 1px solid var(--color-warn);
+  border-radius: var(--radius-m);
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
 .fixed {
   display: inline-flex;
   align-items: center;

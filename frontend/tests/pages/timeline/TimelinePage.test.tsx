@@ -147,6 +147,16 @@ describe('코스 타임라인', () => {
     await userEvent.click(await screen.findByRole('button', { name: '추가' }));
     await waitFor(() => expect(screen.queryByLabelText('장소 검색')).not.toBeInTheDocument());
   });
+  it('혼잡 신호가 없는 블록은 정보 부족으로 표시하고, 블록 경고 칩은 알림으로 읽지 않는다', async () => {
+    const noCrowd = { ...schedule, days: [{ ...schedule.days[0]!, crowd: [] }] };
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule: noCrowd });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    expect(screen.getAllByText('정보 부족')).toHaveLength(noCrowd.days[0]!.blocks.length);
+    const [warning] = noCrowd.days[0]!.blocks.flatMap((block) => block.warnings);
+    expect(screen.getByText(warning!.cause)).not.toHaveAttribute('role');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
   it('서버 일정을 보여 주고 편집 응답의 새 일정을 반영한다', async () => {
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
     const changed = {

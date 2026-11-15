@@ -133,6 +133,12 @@
   white-space: nowrap;
 }
 
+/* 긴 경고 문구가 카드 폭 안에서 줄바꿈되도록 둥근 사각형으로 둔다. */
+.warnChip {
+  max-width: 100%;
+  border-radius: var(--radius-m);
+}
+
 /* ---------- 블록 목록 ---------- */
 .list {
   margin: var(--space-4) 0 0;
