@@ -152,8 +152,10 @@ def ac006_violations(
     - 시작점 뒤의 고정 블록은 seq(위치)만 바뀔 수 있고 지정 시각·도착·출발 시각은 그대로여야 한다.
     - 시작점 뒤의 일반 블록은 재계산 대상이다.
     - 편집한 블록 자체(`edited_block_id`, 예: 삭제·순서 변경 대상)는 보존 검사에서 뺀다.
-    - 편집 후에 있는 블록 중 새로 생긴 블록과 편집한 블록은 편집한 날의 시작점 뒤(`seq > anchor_seq`)에
-      있어야 한다. 다른 날이나 시작점 앞에 들어가면 위반이다.
+    - 새로 생긴 블록은 편집한 날의 시작점 뒤(`seq > anchor_seq`)에 있어야 한다. 다른 날이나 시작점
+      앞에 들어가면 위반이다.
+    - 편집한 블록은 편집한 날에 머물러야 하고, 위치가 바뀌었다면 새 위치가 시작점 뒤여야 한다.
+      고정 해제처럼 블록 자신이 시작점이면 위치는 그대로이므로 허용한다.
 
     빈 날의 첫 블록 추가처럼 앞쪽 블록이 없으면 `anchor_seq=0` 으로 부른다.
     """
@@ -170,8 +172,13 @@ def ac006_violations(
             if current is None or current.model_copy(update={"seq": old.seq}) != old:
                 violations.add(old.id)
     for placed in after.blocks:
-        if placed.id in old_blocks and placed.id != edited_block_id:
-            continue
-        if placed.day_no != day_no or placed.seq <= anchor_seq:
-            violations.add(placed.id)
+        previous = old_blocks.get(placed.id)
+        if previous is None:
+            if placed.day_no != day_no or placed.seq <= anchor_seq:
+                violations.add(placed.id)
+        elif placed.id == edited_block_id:
+            if placed.day_no != day_no or previous.day_no != day_no:
+                violations.add(placed.id)
+            elif placed.seq != previous.seq and placed.seq <= anchor_seq:
+                violations.add(placed.id)
     return violations
