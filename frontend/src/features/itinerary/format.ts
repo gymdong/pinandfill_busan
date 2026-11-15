@@ -16,13 +16,13 @@ export function formatDayDate(date: IsoDate): string {
   return `${month}월 ${day}일 (${weekday})`;
 }
 
-/** 여행 기간과 이동수단. 예: '부산 2박 3일 · 대중교통' */
+/** 여행 기간과 이동수단. 예: '부산 2박 3일 · 대중교통'. 날짜를 해석할 수 없으면 기간을 지어내지 않고 뺀다. */
 export function tripSummary(trip: Trip): string {
   const start = Date.parse(`${trip.dates.start}T00:00:00Z`);
   const end = Date.parse(`${trip.dates.end}T00:00:00Z`);
-  const days = Number.isNaN(start) || Number.isNaN(end) ? 1 : Math.round((end - start) / 86_400_000) + 1;
-  const length = days > 1 ? `${days - 1}박 ${days}일` : '당일';
-  return `부산 ${length} · ${modeLabel(trip.mode)}`;
+  const days = Math.round((end - start) / 86_400_000) + 1;
+  if (!Number.isFinite(days) || days < 1) return `부산 · ${modeLabel(trip.mode)}`;
+  return `부산 ${days > 1 ? `${days - 1}박 ${days}일` : '당일'} · ${modeLabel(trip.mode)}`;
 }
 
 /** 90 → '1시간 30분', 40 → '40분', 120 → '2시간' */

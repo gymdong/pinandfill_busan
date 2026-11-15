@@ -155,7 +155,25 @@ describe('코스 타임라인', () => {
     expect(screen.getAllByText('정보 부족')).toHaveLength(noCrowd.days[0]!.blocks.length);
     const [warning] = noCrowd.days[0]!.blocks.flatMap((block) => block.warnings);
     expect(screen.getByText(warning!.cause)).not.toHaveAttribute('role');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // 칩 대신 요약 카드가 이 날 카드 경고 수를 한 번에 알린다.
+    const onCards = noCrowd.days[0]!.blocks.reduce((count, block) => count + block.warnings.length, 0);
+    expect(screen.getByRole('alert', { name: '일정 확인 필요' })).toHaveTextContent(`확인 필요 ${onCards}건`);
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('장소 추가가 실패하면 추가 패널과 검색 결과를 그대로 두고 오류를 보여 준다', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
+    vi.spyOn(tripsApi, 'addBlock').mockRejectedValue(new Error('추가 실패'));
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    await userEvent.click(screen.getByRole('button', { name: '장소 추가' }));
+    await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
+    await userEvent.click(screen.getByRole('button', { name: '검색' }));
+    await userEvent.click(await screen.findByRole('button', { name: '추가' }));
+    await waitFor(() => expect(tripsApi.addBlock).toHaveBeenCalled());
+    expect(screen.getByLabelText('장소 검색')).toHaveValue('민락');
+    expect(screen.getByRole('button', { name: '추가' })).toBeInTheDocument();
   });
   it('서버 일정을 보여 주고 편집 응답의 새 일정을 반영한다', async () => {
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });

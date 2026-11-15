@@ -22,6 +22,8 @@ describe('일정 표기', () => {
   it('여행 기간을 박·일로, 하루 여행은 당일로 쓴다', () => {
     expect(tripSummary(trip)).toBe('부산 2박 3일 · 대중교통');
     expect(tripSummary({ ...trip, dates: { start: '2026-10-17', end: '2026-10-17' }, mode: 'CAR' })).toBe('부산 당일 · 자동차');
+    expect(tripSummary({ ...trip, dates: { start: '2026-10-19', end: '2026-10-17' } })).toBe('부산 · 대중교통');
+    expect(tripSummary({ ...trip, dates: { start: '잘못된 값', end: '2026-10-17' } })).toBe('부산 · 대중교통');
   });
 
   it('체류시간을 시간·분으로 쓴다', () => {

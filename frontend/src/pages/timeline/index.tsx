@@ -38,6 +38,9 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   // 보고 있는 날의 블록 카드에 이미 보이는 경고는 위 안내에서 뺀다(다른 날 경고는 남긴다).
   const warnings = scheduleLevelViolations([...(schedule?.violations ?? []), ...mutationViolations], day ? [day] : []);
   const notices = [...warnings.map((item) => item.cause), ...(schedule?.conflicts.map((item) => item.cause) ?? [])];
+  // 카드 칩은 알림으로 읽지 않으므로, 이 날 카드에 붙은 경고 수도 요약 건수에 넣어 한 번에 알린다.
+  const onCards = day?.blocks.reduce((count, block) => count + block.warnings.length, 0) ?? 0;
+  const noticeCount = notices.length + onCards;
 
   // 추가 패널은 목록 끝에 열리므로 하단 버튼을 누른 사용자가 볼 수 있게 화면으로 끌어온다.
   useEffect(() => {
@@ -89,9 +92,12 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     </nav>}
 
     {error && <Banner tone="warn">{error}</Banner>}
-    {notices.length > 0 && <section role="alert" className={styles.notice} aria-label="일정 확인 필요">
-      <p className={styles.noticeHead}><AlertIcon /><span>일정에서 확인할 것</span><span className={styles.countChip}>확인 필요 {notices.length}건</span></p>
-      <ul>{notices.map((cause, index) => <li key={`${index}-${cause}`}>{cause}</li>)}</ul>
+    {noticeCount > 0 && <section role="alert" className={styles.notice} aria-label="일정 확인 필요">
+      <p className={styles.noticeHead}><AlertIcon /><span>일정에서 확인할 것</span><span className={styles.countChip}>확인 필요 {noticeCount}건</span></p>
+      <ul>
+        {notices.map((cause, index) => <li key={`${index}-${cause}`}>{cause}</li>)}
+        {onCards > 0 && <li>아래 장소 카드에 표시된 {onCards}건</li>}
+      </ul>
     </section>}
 
     {day ? <DayTimeline
