@@ -190,6 +190,13 @@ def test_edited_block_moved_before_anchor_is_a_violation():
     assert ac006_violations(before, after, day_no=1, anchor_seq=1, edited_block_id="b") == {"a", "b"}
 
 
+def test_edited_block_that_is_its_own_anchor_is_allowed():
+    # 고정 해제처럼 블록 자신이 재계산 시작점이면 위치는 그대로이고 고정 정보만 바뀐다.
+    before = state(block("a", 1, at=9), block("f", 2, fixed=True, at=15))
+    after = state(block("a", 1, at=9), block("f", 2, at=15))
+    assert ac006_violations(before, after, day_no=1, anchor_seq=2, edited_block_id="f") == set()
+
+
 def test_edited_block_inside_range_is_allowed():
     before = state(block("a", 1, at=9), block("b", 2, at=10), block("c", 3, at=11))
     after = state(block("a", 1, at=9), block("c", 2, at=10), block("b", 3, at=11))
