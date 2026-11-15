@@ -162,3 +162,35 @@ def test_first_block_on_empty_day_has_no_prefix():
     before = state(block("c", 1, day=2, at=9))
     after = state(block("n", 1), block("c", 1, day=2, at=9))
     assert ac006_violations(before, after, day_no=1, anchor_seq=0) == set()
+
+
+def test_new_block_on_another_day_is_a_violation():
+    before = state(block("a", 1, at=9), block("c", 1, day=2, at=9))
+    after = state(block("a", 1, at=9), block("c", 1, day=2, at=9), block("n", 2, day=2))
+    assert ac006_violations(before, after, day_no=1, anchor_seq=1) == {"n"}
+
+
+def test_new_block_at_or_before_anchor_is_a_violation():
+    before = state(block("a", 1, at=9), block("b", 2, at=10))
+    after = state(block("n", 1), block("a", 2, at=9), block("b", 3, at=10))
+    # 앞쪽 블록 a 가 밀린 것과 별개로 새 블록 n 자체도 시작점 앞이라 위반이다.
+    assert ac006_violations(before, after, day_no=1, anchor_seq=1) == {"a", "n"}
+
+
+def test_edited_block_moved_to_another_day_is_a_violation():
+    # edited_block_id 를 넘겨도 그 블록이 다른 날에 놓이면 위반이다.
+    before = state(block("a", 1, at=9), block("b", 2, at=10))
+    after = state(block("a", 1, at=9), block("b", 1, day=2))
+    assert ac006_violations(before, after, day_no=1, anchor_seq=1, edited_block_id="b") == {"b"}
+
+
+def test_edited_block_moved_before_anchor_is_a_violation():
+    before = state(block("a", 1, at=9), block("b", 2, at=10))
+    after = state(block("b", 1), block("a", 2, at=9))
+    assert ac006_violations(before, after, day_no=1, anchor_seq=1, edited_block_id="b") == {"a", "b"}
+
+
+def test_edited_block_inside_range_is_allowed():
+    before = state(block("a", 1, at=9), block("b", 2, at=10), block("c", 3, at=11))
+    after = state(block("a", 1, at=9), block("c", 2, at=10), block("b", 3, at=11))
+    assert ac006_violations(before, after, day_no=1, anchor_seq=1, edited_block_id="b") == set()

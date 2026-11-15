@@ -28,7 +28,7 @@ class SnapshotReason(StrEnum):
 
 
 class NothingToUndoError(Exception):
-    """되돌릴 직전 편집이 없다. API-010 은 409 로 변환한다."""
+    """되돌릴 직전 편집이 없다. API-010 은 400 ERR-001 로 변환한다."""
 
 
 @dataclass(frozen=True)
@@ -132,11 +132,13 @@ def ac006_violations(
     - 다른 날 블록과, 편집한 날의 재계산 시작점(`anchor_seq`) 이하 블록은 seq 를 포함해 그대로여야 한다.
     - 시작점 뒤의 고정 블록은 seq(위치)만 바뀔 수 있고 지정 시각·도착·출발 시각은 그대로여야 한다.
     - 시작점 뒤의 일반 블록은 재계산 대상이다.
-    - 편집한 블록 자체(`edited_block_id`, 예: 삭제·순서 변경 대상)는 판정에서 뺀다.
+    - 편집한 블록 자체(`edited_block_id`, 예: 삭제·순서 변경 대상)는 보존 검사에서 뺀다.
+    - 편집 후에 있는 블록 중 새로 생긴 블록과 편집한 블록은 편집한 날의 시작점 뒤(`seq > anchor_seq`)에
+      있어야 한다. 다른 날이나 시작점 앞에 들어가면 위반이다.
 
     빈 날의 첫 블록 추가처럼 앞쪽 블록이 없으면 `anchor_seq=0` 으로 부른다.
     """
-    new = _blocks(after)
+    old_blocks, new = _blocks(before), _blocks(after)
     violations: set[str] = set()
     for old in before.blocks:
         if old.id == edited_block_id:
@@ -148,4 +150,9 @@ def ac006_violations(
         elif old.is_fixed:
             if current is None or current.model_copy(update={"seq": old.seq}) != old:
                 violations.add(old.id)
+    for placed in after.blocks:
+        if placed.id in old_blocks and placed.id != edited_block_id:
+            continue
+        if placed.day_no != day_no or placed.seq <= anchor_seq:
+            violations.add(placed.id)
     return violations
