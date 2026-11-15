@@ -16,7 +16,7 @@
 ## 합의된 계약 (PR #11)
 
 - **seq**: 같은 날 안의 순서 번호 1..n(빈틈 없음). 편집은 편집 지점 뒤 블록의 seq 만 ±1 한다. 기존 10·20 형식 데이터는 편집 중에 바꾸지 않고 400 으로 거절하며, `BasicItineraryEngine.normalize_sequences` 로 따로 정규화한다.
-- **AC-006 판정**: 다른 날 블록과 재계산 시작점까지의 앞쪽 블록은 seq 를 포함해 그대로여야 한다. 뒤쪽 고정 블록은 seq(위치)만 바뀔 수 있다. `ac006_violations(before, after, day_no=, anchor_seq=, edited_block_id=)` 가 이 규칙을 검사한다.
+- **AC-006 판정**: 다른 날 블록과 재계산 시작점까지의 앞쪽 블록은 seq 를 포함해 그대로여야 한다. 뒤쪽 고정 블록은 seq(위치)만 바뀔 수 있다. 새로 생긴 블록과 편집한 블록은 편집한 날의 시작점 뒤에 있어야 한다. `ac006_violations(before, after, day_no=, anchor_seq=, edited_block_id=)` 가 이 규칙을 검사한다.
 - **API-006 위치**: `fromBlockId`·`toBlockId` 가 있으면 그 사이에 삽입하고, 없으면 `dayNo`(없으면 `fixedWindow.dayNo`) 날짜의 마지막에 붙인다.
 - **미조회 구간**: 엔진 내부는 `source="UNKNOWN"`, `durationMin=null`. 응답 `days[].legs` 에서는 빠지고 블록 경고로 확인 필요를 알린다. 외부 `LegSource` 에 `UNKNOWN` 을 넣을지는 프런트와 따로 정한다.
 
