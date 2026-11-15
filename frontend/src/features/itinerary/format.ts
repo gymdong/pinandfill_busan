@@ -1,4 +1,4 @@
-import type { Block, IsoDate, Leg, TransportMode, Trip } from '@/types/api';
+import type { Block, IsoDate, Leg, ScheduleDay, TransportMode, Trip, Violation } from '@/types/api';
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'] as const;
 
@@ -47,4 +47,15 @@ export function blockRole(block: Block): string {
 export function legBetween(legs: Leg[], from: Block | undefined, to: Block | undefined): Leg | undefined {
   if (!from || !to) return undefined;
   return legs.find((leg) => leg.fromBlockId === from.id && leg.toBlockId === to.id);
+}
+
+/**
+ * 일정 전체 경고 중 `days`(화면에 보이는 날)의 블록 카드에 이미 붙은 경고를 뺀다.
+ * 서버는 블록 경고를 `schedule.violations` 에도 함께 담으므로 그대로 쓰면 같은 경고가 두 번 보인다.
+ * 같은 type·cause 는 한 번만 남긴다.
+ */
+export function scheduleLevelViolations(violations: Violation[], days: ScheduleDay[]): Violation[] {
+  const key = (item: Violation) => `${item.type}\u0000${item.cause}`;
+  const onBlocks = new Set(days.flatMap((day) => day.blocks.flatMap((block) => block.warnings.map(key))));
+  return [...new Map(violations.filter((item) => !onBlocks.has(key(item))).map((item) => [key(item), item])).values()];
 }

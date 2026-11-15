@@ -130,6 +130,23 @@ describe('코스 타임라인', () => {
     await userEvent.click(await screen.findByRole('button', { name: '추가' }));
     expect(add).toHaveBeenCalledWith('t1', expect.objectContaining({ dayNo: 2 }));
   });
+  it('블록을 편집해도 열어 둔 장소 추가 패널은 닫지 않고, 추가가 성공하면 닫는다', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    vi.spyOn(tripsApi, 'updateBlock').mockResolvedValue({ schedule, violations: [] });
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
+    vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    await userEvent.click(screen.getByRole('button', { name: '장소 추가' }));
+    await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
+    await userEvent.click(screen.getByRole('button', { name: /감천/ }));
+    await userEvent.click(screen.getByRole('button', { name: '체류시간 변경' }));
+    await waitFor(() => expect(tripsApi.updateBlock).toHaveBeenCalled());
+    expect(screen.getByLabelText('장소 검색')).toHaveValue('민락');
+    await userEvent.click(screen.getByRole('button', { name: '검색' }));
+    await userEvent.click(await screen.findByRole('button', { name: '추가' }));
+    await waitFor(() => expect(screen.queryByLabelText('장소 검색')).not.toBeInTheDocument());
+  });
   it('서버 일정을 보여 주고 편집 응답의 새 일정을 반영한다', async () => {
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
     const changed = {

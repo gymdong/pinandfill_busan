@@ -5,7 +5,7 @@ import { rememberKakaoPlace, resolveBlockPlace } from '@/api/kakaoSession';
 import { paths } from '@/app/paths';
 import { Badge, Button, EmptyState, ErrorState, LoadingState } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
-import { blockRole, formatDuration, legBetween, legLabel } from '@/features/itinerary/format';
+import { blockRole, formatDuration, legBetween, legLabel, scheduleLevelViolations } from '@/features/itinerary/format';
 import { BackIcon, LockIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
 import { KakaoMap } from '@/map/KakaoMap';
@@ -68,9 +68,7 @@ function MapViewContent({ tripId }: { tripId: string }) {
   if (!currentSchedule || !day) return <EmptyState title="일정을 불러오지 못했어요" action={<Link to={paths.timeline(tripId)}>일정으로 돌아가기</Link>} />;
 
   const selected = blocks.find((block) => block.id === selectedId);
-  const visibleViolations = [...violations, ...currentSchedule.violations].filter((item, index, all) =>
-    all.findIndex((candidate) => candidate.type === item.type && candidate.cause === item.cause) === index,
-  );
+  const visibleViolations = scheduleLevelViolations([...violations, ...currentSchedule.violations], [day]);
   // 혼잡 신호가 없으면 grade=null 로 '정보 부족'을 보여 준다(NFR-012).
   const crowdOf = (blockId: string) => {
     const crowd = day.crowd.find((item) => item.blockId === blockId);
@@ -153,8 +151,8 @@ function MapViewContent({ tripId }: { tripId: string }) {
             {!place && block.place.source === 'KAKAO' ? <a className={styles.placeLink} href={block.place.placeUrl} target="_blank" rel="noopener noreferrer">카카오맵에서 장소 확인 (새 창)</a> : null}
           </li>;
         })}</ol>
-        <p className={styles.footnote}>선은 방문 순서만 이어요. 실제 도로·대중교통 경로가 아니에요.</p>
       </section>}
+      <p className={styles.footnote}>선은 방문 순서만 이어요. 실제 도로·대중교통 경로가 아니에요.</p>
     </section>
   </main>;
 }

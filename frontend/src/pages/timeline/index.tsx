@@ -6,7 +6,7 @@ import { paths } from '@/app/paths';
 import { Banner, Button } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
 import { BlockEditor } from '@/features/block-editor/BlockEditor';
-import { blockRole, formatDayDate, formatDuration, legBetween, legLabel, tripSummary } from '@/features/itinerary/format';
+import { blockRole, formatDayDate, formatDuration, legBetween, legLabel, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
 import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, UndoIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
 import type { Block, BlockCrowd, Schedule, ScheduleDay, Violation } from '@/types/api';
@@ -35,9 +35,8 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
   // 고른 일차가 일정에 없으면(다시 불러온 일정 등) 첫 일차를 보여 준다.
   const day = schedule?.days.find((item) => item.dayNo === dayNo) ?? schedule?.days[0];
-  const warnings = [...new Map(
-    [...(schedule?.violations ?? []), ...mutationViolations].map((item) => [`${item.type}\u0000${item.cause}`, item]),
-  ).values()];
+  // 보고 있는 날의 블록 카드에 이미 보이는 경고는 위 안내에서 뺀다(다른 날 경고는 남긴다).
+  const warnings = scheduleLevelViolations([...(schedule?.violations ?? []), ...mutationViolations], day ? [day] : []);
   const notices = [...warnings.map((item) => item.cause), ...(schedule?.conflicts.map((item) => item.cause) ?? [])];
 
   // 추가 패널은 목록 끝에 열리므로 하단 버튼을 누른 사용자가 볼 수 있게 화면으로 끌어온다.
@@ -45,7 +44,8 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     if (adding) addPanel.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' });
   }, [adding]);
 
-  const change: Change = async (action, isUndo = false) => {
+  /** 요청을 보내고 성공 여부를 돌려준다. 패널은 그 패널에서 보낸 추가가 성공했을 때만 닫는다. */
+  const run = async (action: Parameters<Change>[0], isUndo = false) => {
     setPending(true);
     setError(null);
     try {
@@ -53,14 +53,17 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       setEdited(result.schedule);
       setMutationViolations(result.violations ?? []);
       setUndoAvailable(!isUndo);
-      setAdding(false);
-      setSlot(null);
+      return true;
     } catch (cause) {
       setError(toApiError(cause).message);
+      return false;
     } finally {
       setPending(false);
     }
   };
+  const change: Change = async (action, isUndo) => { await run(action, isUndo); };
+  const addAndClose: Change = async (action) => { if (await run(action)) setAdding(false); };
+  const slotAndClose: Change = async (action) => { if (await run(action)) setSlot(null); };
 
   if (!tripId) return <Banner tone="warn">여행 ID가 없습니다.</Banner>;
   if (loaded.status === 'loading') return <p role="status" className={styles.status}>일정을 불러오는 중…</p>;
@@ -93,11 +96,11 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
 
     {day ? <DayTimeline
       key={day.dayNo} tripId={tripId} day={day} selected={selected} slot={slot} pending={pending}
-      onSelect={(id) => setSelected(selected === id ? null : id)} onSlot={(id) => setSlot(slot === id ? null : id)} onChange={change}
+      onSelect={(id) => setSelected(selected === id ? null : id)} onSlot={(id) => setSlot(slot === id ? null : id)} onChange={change} onSlotChange={slotAndClose}
     /> : <p className={styles.empty}>표시할 일정이 없습니다.</p>}
 
     {adding && <section ref={addPanel} className={styles.addPanel}>
-      <BlockEditor tripId={tripId} dayNo={day?.dayNo ?? 1} disabled={pending} onChange={change} />
+      <BlockEditor tripId={tripId} dayNo={day?.dayNo ?? 1} disabled={pending} onChange={addAndClose} />
     </section>}
 
     <footer className={styles.bottomBar}>
@@ -107,7 +110,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   </main>;
 }
 
-function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, onChange }: {
+function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, onChange, onSlotChange }: {
   tripId: string;
   day: ScheduleDay;
   selected: string | null;
@@ -116,6 +119,7 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
   onSelect(id: string): void;
   onSlot(id: string): void;
   onChange: Change;
+  onSlotChange: Change;
 }) {
   const blocks = [...day.blocks].sort((a, b) => a.seq - b.seq);
   if (blocks.length === 0) return <p className={styles.empty}>이 날은 아직 장소가 없어요. 아래 ‘장소 추가’로 담아 보세요.</p>;
@@ -132,7 +136,7 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
         <button type="button" className={styles.slotButton} aria-expanded={slot === block.id} onClick={() => onSlot(block.id)}>
           <PlusIcon />사이에 들를 곳 찾기
         </button>
-        {slot === block.id && <BlockEditor key={`slot-${block.id}`} tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending} onChange={onChange} />}
+        {slot === block.id && <BlockEditor key={`slot-${block.id}`} tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending} onChange={onSlotChange} />}
       </div>}
     </li>;
   })}</ol>;

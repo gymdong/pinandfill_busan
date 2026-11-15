@@ -152,9 +152,11 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, clas
     return () => { cancelled = true; cleanup?.(); overlays.forEach((overlay) => overlay.setMap(null)); mapRef.current = null; mapsRef.current = null; };
   }, [points, legs, onSelect, onLongPress]);
 
-  // className 을 주면 크기·위치는 호출한 쪽이 정한다(전체 화면 지도는 absolute). 없으면 높이 300px 카드다.
-  return <div className={className} style={className ? undefined : { position: 'relative', height: 300, borderRadius: 12, overflow: 'hidden' }}>
-    <div ref={node} role="img" aria-label="일정 경로 지도" style={{ position: 'absolute', inset: 0, background: '#e8f1f8' }} />
-    {error ? <p role="status" style={{ position: 'absolute', inset: '35% 24px auto', textAlign: 'center', color: '#56616b', fontSize: 14 }}>{error} 아래 목록에서 장소를 선택할 수 있어요.</p> : null}
+  // 바깥 div 의 크기·위치는 호출한 쪽이 정하고(없으면 높이 300px 카드), 안쪽 div 가 지도와 안내의 기준이 된다.
+  return <div className={className} style={className ? undefined : { height: 300, borderRadius: 12, overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div ref={node} role="img" aria-label="일정 경로 지도" style={{ position: 'absolute', inset: 0, background: '#e8f1f8' }} />
+      {error ? <p role="status" style={{ position: 'absolute', inset: '35% 24px auto', textAlign: 'center', color: '#56616b', fontSize: 14 }}>{error} 아래 목록에서 장소를 선택할 수 있어요.</p> : null}
+    </div>
   </div>;
 }
