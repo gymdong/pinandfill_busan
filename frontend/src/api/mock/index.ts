@@ -11,6 +11,7 @@ import type {
   PlaceSearchResponse,
   PlacesAtResponse,
   Schedule,
+  ScheduleDay,
   ScheduleMutationResponse,
   SuggestWaypointsRequest,
   SuggestWaypointsResponse,
@@ -97,14 +98,28 @@ function findBlock(draft: Schedule, blockId: string) {
   return invalid();
 }
 
+/** 백엔드와 같이 여행 기간 안의 빈 날에도 추가할 수 있게 그날을 만든다. 기간 밖이면 ERR-001 */
+function addEmptyDay(draft: Schedule, dayNo: number): ScheduleDay {
+  const start = Date.parse(`${trip.dates.start}T00:00:00Z`);
+  const days = Math.round((Date.parse(`${trip.dates.end}T00:00:00Z`) - start) / 86_400_000) + 1;
+  if (!Number.isInteger(dayNo) || dayNo < 1 || dayNo > days) return invalid();
+  const date = new Date(start + (dayNo - 1) * 86_400_000).toISOString().slice(0, 10);
+  const day: ScheduleDay = { dayNo, date, blocks: [], legs: [], crowd: [], weather: [] };
+  draft.days.push(day);
+  draft.days.sort((a, b) => a.dayNo - b.dayNo);
+  return day;
+}
+
 function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationResponse {
   if (!body?.place) return invalid();
   return mutate(tripId, (draft, tripState) => {
     const anchored = body.fromBlockId ? findBlock(draft, body.fromBlockId) : null;
-    const dayNo = anchored?.day.dayNo ?? body.fixedWindow?.dayNo ?? 1;
-    const day = draft.days.find((item) => item.dayNo === dayNo);
-    if (!day) return invalid();
+    // 백엔드와 동일: 앵커가 있으면 앵커의 일차, 없으면 dayNo → fixedWindow.dayNo, 모두 없으면 ERR-001
+    const dayNo = anchored?.day.dayNo ?? body.dayNo ?? body.fixedWindow?.dayNo;
+    if (dayNo === undefined) return invalid();
+    if (anchored && body.dayNo !== undefined && body.dayNo !== dayNo) return invalid();
     if (body.fixedWindow && body.fixedWindow.dayNo !== dayNo) return invalid();
+    const day = draft.days.find((item) => item.dayNo === dayNo) ?? addEmptyDay(draft, dayNo);
     const input = body.place;
     const place = 'placeId' in input
       ? Object.values(placeSummaries).find((item) => item.id === input.placeId)
