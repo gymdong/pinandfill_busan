@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, tripsApi } from '@/api';
 import { schedule } from '@/api/mock/fixtures/schedule';
-import { createCourse, toAddBlockRequest, validatePlans } from '@/features/trip-start/createCourse';
+import {
+  CourseIncompleteError,
+  createCourse,
+  toAddBlockRequest,
+  validatePlans,
+} from '@/features/trip-start/createCourse';
 import type { PinnedPlace } from '@/store/tripDraft';
 import type { TripConditions } from '@/types/api';
 
@@ -65,12 +70,39 @@ describe('코스 만들기', () => {
     await expect(createCourse(conditions, [park], {})).resolves.toEqual({ tripId: 't9', scheduleError: error });
   });
 
-  it('장소 추가가 실패하면 일정 계산을 하지 않고 실패를 알린다', async () => {
+  it('여행 생성이 실패하면 그 오류를 그대로 알리고 장소를 추가하지 않는다', async () => {
+    const { create, addBlock } = mockApis();
+    create.mockRejectedValue(new ApiError({ id: 'NETWORK' }));
+    await expect(createCourse(conditions, [park], {})).rejects.toMatchObject({ name: 'ApiError', id: 'NETWORK' });
+    expect(addBlock).not.toHaveBeenCalled();
+  });
+
+  it('장소 추가가 중간에 실패하면 일정 계산을 하지 않고, 만든 여행과 추가된 장소를 함께 알린다', async () => {
     const { addBlock, generate } = mockApis();
-    addBlock.mockRejectedValue(new ApiError({ id: 'ERR-001', status: 400 }));
-    await expect(createCourse(conditions, [park, cafe], {})).rejects.toMatchObject({ id: 'ERR-001' });
-    expect(addBlock).toHaveBeenCalledTimes(1);
+    addBlock
+      .mockResolvedValueOnce({ schedule, violations: [] })
+      .mockRejectedValue(new ApiError({ id: 'ERR-001', status: 400 }));
+
+    const error = await createCourse(conditions, [park, cafe], {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CourseIncompleteError);
+    expect(error).toMatchObject({
+      progress: { tripId: 't9', addedKeys: ['public:p1'] },
+      apiError: { id: 'ERR-001' },
+    });
+    expect(addBlock).toHaveBeenCalledTimes(2);
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('이어서 시도하면 여행을 새로 만들지 않고 남은 장소만 추가한다', async () => {
+    const { create, addBlock, generate } = mockApis();
+    const result = await createCourse(conditions, [park, cafe], {}, { tripId: 't7', addedKeys: ['public:p1'] });
+
+    expect(result).toEqual({ tripId: 't7', scheduleError: null });
+    expect(create).not.toHaveBeenCalled();
+    expect(addBlock.mock.calls.map(([tripId, body]) => [tripId, body.place])).toEqual([
+      ['t7', { kakaoPlaceId: '123', placeUrl: 'https://place.map.kakao.com/123' }],
+    ]);
+    expect(generate).toHaveBeenCalledWith('t7');
   });
 });
 

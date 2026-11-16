@@ -12,7 +12,12 @@ import {
   tripLengthLabel,
   validateConditions,
 } from '@/features/trip-start/conditions';
-import { createCourse, validatePlans } from '@/features/trip-start/createCourse';
+import {
+  CourseIncompleteError,
+  createCourse,
+  validatePlans,
+  type CourseProgress,
+} from '@/features/trip-start/createCourse';
 import { pinnedKey, planOf, useTripDraft, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
 import { formatDate } from '@/utils/format';
 import styles from './TripStartPage.module.css';
@@ -43,6 +48,8 @@ export default function TripStartPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingTrip | null>(null);
   const startDateRef = useRef<HTMLInputElement>(null);
+  // 장소 추가가 중간에 실패한 여행. 같은 입력으로 다시 시도하면 새 여행을 만들지 않고 이어 간다.
+  const unfinished = useRef<{ progress: CourseProgress; inputKey: string } | null>(null);
 
   // 여행 기간을 줄이면 사라진 일차에 둔 장소는 마지막 날로 옮겨 보여 준다.
   const effectivePlans = useMemo(() => {
@@ -101,11 +108,19 @@ export default function TripStartPage() {
     }
     setSubmitting(true);
     try {
-      const { tripId, scheduleError } = await createCourse(validation.value, pinned, effectivePlans);
+      const resume = unfinished.current?.inputKey === inputKey ? unfinished.current.progress : undefined;
+      const { tripId, scheduleError } = await createCourse(validation.value, pinned, effectivePlans, resume);
+      unfinished.current = null;
       if (scheduleError) setPending({ tripId, message: scheduleError.message, inputKey });
       else goToTimeline(tripId);
     } catch (error) {
-      setSubmitError(toApiError(error).message);
+      if (error instanceof CourseIncompleteError) {
+        unfinished.current = { progress: error.progress, inputKey };
+        setSubmitError(`${error.apiError.message} 다시 누르면 남은 장소부터 이어서 담아요.`);
+      } else {
+        unfinished.current = null;
+        setSubmitError(toApiError(error).message);
+      }
     } finally {
       setSubmitting(false);
     }

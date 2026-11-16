@@ -241,6 +241,46 @@ describe('UI-01 여행 시작', () => {
       expect(screen.getByRole('button', { name: '코스 만들기' })).toBeEnabled();
     });
 
+    it('장소 추가가 중간에 실패한 뒤 다시 누르면 같은 여행에 남은 장소만 이어서 담는다', async () => {
+      const { create, addBlock } = mockCourseApis();
+      addBlock
+        .mockResolvedValueOnce({ schedule, violations: [] })
+        .mockRejectedValueOnce(new ApiError({ id: 'NETWORK' }))
+        .mockResolvedValue({ schedule, violations: [] });
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('다시 누르면 남은 장소부터 이어서 담아요');
+
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+      expect(create).toHaveBeenCalledTimes(1);
+      // 첫 장소는 한 번만, 실패한 둘째 장소는 다시, 셋째 장소는 처음 보낸다.
+      expect(addBlock.mock.calls.map(([tripId, body]) => [tripId, body.place])).toEqual([
+        ['t9', { placeId: searchItems[0]!.placeId }],
+        ['t9', { placeId: searchItems[1]!.placeId }],
+        ['t9', { placeId: searchItems[1]!.placeId }],
+        ['t9', { kakaoPlaceId: searchItems[2]!.kakaoPlaceId, placeUrl: searchItems[2]!.placeUrl }],
+      ]);
+    });
+
+    it('장소 추가 실패 뒤 입력을 바꾸면 이어 쓰지 않고 새 여행을 만든다', async () => {
+      const { create, addBlock } = mockCourseApis();
+      addBlock.mockRejectedValueOnce(new ApiError({ id: 'NETWORK' })).mockResolvedValue({ schedule, violations: [] });
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      await screen.findByRole('alert');
+
+      await userEvent.click(screen.getByRole('radio', { name: '자동차' }));
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      await screen.findByText('타임라인 t9');
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(create.mock.calls[1]![0]).toMatchObject({ mode: 'CAR' });
+    });
+
     it('일정 계산만 실패하면(ERR-009) 만든 여행의 타임라인으로 갈 수 있게 한다', async () => {
       const { create, generate } = mockCourseApis();
       generate.mockRejectedValue(new ApiError({ id: 'ERR-009', status: 409 }));

@@ -34,23 +34,54 @@ export interface CourseResult {
   scheduleError: ApiError | null;
 }
 
+/** 만들다 만 여행. 다시 시도할 때 넘기면 같은 여행에 남은 장소만 이어서 추가한다. */
+export interface CourseProgress {
+  tripId: string;
+  /** 이미 블록으로 추가한 장소의 `pinnedKey` */
+  addedKeys: string[];
+}
+
+/** 여행은 만들었지만 장소 추가(API-006)가 중간에 실패했다. `progress`로 이어서 시도할 수 있다. */
+export class CourseIncompleteError extends Error {
+  readonly progress: CourseProgress;
+  readonly apiError: ApiError;
+
+  constructor(progress: CourseProgress, apiError: ApiError) {
+    super(apiError.message);
+    this.name = 'CourseIncompleteError';
+    this.progress = progress;
+    this.apiError = apiError;
+  }
+}
+
 /**
  * '코스 만들기': 여행 생성(API-002) → 담은 장소를 블록으로 추가(API-006) → 일정 계산(API-009).
  *
  * @provisional 현재 합의된 API만 쓴다. API-006은 일차(`dayNo`)가 필요해 화면에서 일차를 고르게 했다.
  * API-009가 담은 장소 목록을 한 번에 받아 배치하도록 바뀌면(PR #18 제안) 이 함수만 바꾸면 된다.
  *
- * 여행 생성이나 장소 추가가 실패하면 예외를 던진다. 다시 시도하면 새 여행을 만든다.
+ * 여행 생성이 실패하면 그 오류를 그대로 던진다. 장소 추가가 중간에 실패하면 `CourseIncompleteError`를 던지며,
+ * 그 `progress`를 `resume`으로 넘기면 여행을 새로 만들지 않고 남은 장소부터 이어 간다.
+ * 이어 가기는 조건과 담은 장소가 실패했을 때와 같을 때만 쓴다(호출한 쪽이 보장한다).
  */
 export async function createCourse(
   conditions: TripConditions,
   pinned: PinnedPlace[],
   plans: Record<string, PinnedPlan>,
+  resume?: CourseProgress,
 ): Promise<CourseResult> {
-  const { tripId } = await tripsApi.create(conditions);
+  const tripId = resume?.tripId ?? (await tripsApi.create(conditions)).tripId;
+  const addedKeys = [...(resume?.addedKeys ?? [])];
   // 같은 날 안의 순서가 담은 순서대로 되도록 차례로 보낸다.
   for (const place of pinned) {
-    await tripsApi.addBlock(tripId, toAddBlockRequest(place, planOf(plans, pinnedKey(place))));
+    const key = pinnedKey(place);
+    if (addedKeys.includes(key)) continue;
+    try {
+      await tripsApi.addBlock(tripId, toAddBlockRequest(place, planOf(plans, key)));
+    } catch (error) {
+      throw new CourseIncompleteError({ tripId, addedKeys }, toApiError(error));
+    }
+    addedKeys.push(key);
   }
   try {
     await tripsApi.generateSchedule(tripId);
