@@ -3,7 +3,7 @@ import type { ApiRequest } from '@/api';
 import { INTERPRETABLE_TEXT, mockRequest, resetMockSchedule } from '@/api/mock';
 import { PLACE_IDS } from '@/api/mock/fixtures/places';
 import { schedule as fixtureSchedule } from '@/api/mock/fixtures/schedule';
-import type { MoodResponse, PlaceDetailResponse, PlaceSearchResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, UndoResponse } from '@/types/api';
+import type { CreateTripResponse, MoodResponse, PlaceDetailResponse, PlaceSearchResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, TripDetailResponse, UndoResponse } from '@/types/api';
 
 const TRIP = '/trips/t1';
 const BLOCK_ID = '00000000-0000-4000-8000-000000000302';
@@ -147,6 +147,23 @@ describe('mockRequest', () => {
     await expect(mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body })).rejects.toMatchObject({ id: 'ERR-001' });
     const ok = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, dayNo: 1, fromBlockId: first!.id, toBlockId: second!.id } });
     expect(ok.schedule.days[0]!.blocks[1]!.seq).toBe(2);
+  });
+
+  it('여행을 만들면 입력한 조건과 빈 일정에서 시작하고, 담은 장소가 그 일정에 들어간다', async () => {
+    const conditions = { dates: { start: '2026-11-20', end: '2026-11-21' }, dayStart: '09:00', dayEnd: '18:00', mode: 'CAR' };
+    const { tripId } = await mockRequest<CreateTripResponse>({ method: 'POST', path: '/trips', body: conditions });
+    const created = await mockRequest<TripDetailResponse>({ method: 'GET', path: `/trips/${tripId}` });
+    expect(created.trip).toMatchObject({ id: tripId, ...conditions });
+    expect(created.schedule?.days).toEqual([]);
+
+    const body = { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER' as const };
+    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `/trips/${tripId}/blocks`, body: { ...body, dayNo: 2 } });
+    expect(added.schedule.days.map((day) => [day.dayNo, day.date, day.blocks.length])).toEqual([[2, '2026-11-21', 1]]);
+    // 만든 여행의 기간 밖 일차는 거절한다.
+    await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/blocks`, body: { ...body, dayNo: 3 } })).rejects.toMatchObject({ id: 'ERR-001' });
+    // 다른 여행 ID는 예시 일정을 그대로 본다.
+    const other = await mockRequest<TripDetailResponse>({ method: 'GET', path: '/trips/t2' });
+    expect(other.schedule?.days[0]!.blocks).toHaveLength(fixtureSchedule.days[0]!.blocks.length);
   });
 
   it('한 줄 해석 실패 시 폼 전환을 알린다', async () => {
