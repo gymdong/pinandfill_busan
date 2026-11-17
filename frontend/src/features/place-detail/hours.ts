@@ -6,11 +6,18 @@ export const DAY_LABEL: Record<DayType, string> = {
   MON: '월', TUE: '화', WED: '수', THU: '목', FRI: '금', SAT: '토', SUN: '일', HOLIDAY: '공휴일',
 };
 
-/** '2026-10-17' → 'SAT'. 형식이 다르면 null. 공휴일 여부는 화면에서 알 수 없어 요일로만 본다. */
+/**
+ * '2026-10-17' → 'SAT'. 형식이 다르거나 달력에 없는 날짜('2026-02-30')면 null.
+ * 화면에서는 공휴일 여부를 알 수 없어 요일로만 본다. 그래서 'HOLIDAY'는 돌려주지 않으며,
+ * 공휴일 영업시간은 요일별 표에만 보이고 그날 영업시간을 고르는 데는 쓰이지 않는다.
+ */
 export function dayTypeOf(date: IsoDate | null | undefined): DayType | null {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const time = Date.parse(`${date}T00:00:00Z`);
-  return Number.isNaN(time) ? null : DAY_TYPES[new Date(time).getUTCDay()]!;
+  if (Number.isNaN(time)) return null;
+  const parsed = new Date(time);
+  // 엔진에 따라 없는 날짜를 다음 달로 넘겨 읽을 수 있어, 다시 적은 값이 입력과 같을 때만 받는다.
+  return parsed.toISOString().slice(0, 10) === date ? DAY_TYPES[parsed.getUTCDay()]! : null;
 }
 
 export type HoursStatus =

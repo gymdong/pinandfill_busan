@@ -142,6 +142,31 @@ describe('영업시간 표시', () => {
     expect(dayTypeOf(null)).toBeNull();
   });
 
+  it('달력에 없는 날짜는 다른 날로 넘겨 읽지 않고, 윤년 2월 29일은 받는다', () => {
+    expect(dayTypeOf('2026-02-30')).toBeNull();
+    expect(dayTypeOf('2026-02-29')).toBeNull();
+    expect(dayTypeOf('2026-13-01')).toBeNull();
+    expect(dayTypeOf('2024-02-29')).toBe('THU');
+  });
+
+  it('공휴일 영업시간은 요일별 표에만 보이고 그날 영업시간에는 쓰지 않는다', async () => {
+    const holiday = { ...taejongdaeDetail.hours[0]!, dayType: 'HOLIDAY' as const, openTime: '10:00', closeTime: '16:00' };
+    mockDetail({ ...taejongdaeDetail, hours: [...taejongdaeDetail.hours, holiday] });
+    renderAt(`${PATH}?date=2026-10-17`);
+    const info = await screen.findByRole('region', { name: '운영 정보' });
+    expect(within(info).getByText('공휴일')).toBeInTheDocument();
+    expect(within(info).getAllByText('10:00 – 16:00')).toHaveLength(1);
+    // 그날(토요일) 줄과 요일별 표의 토요일 줄은 요일 기준 시간이다.
+    expect(within(info).getAllByText('09:00 – 18:00').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('주소의 날짜가 달력에 없으면 그날 영업시간 대신 요일별 안내를 보여 준다', async () => {
+    mockDetail(taejongdaeDetail);
+    renderAt(`${PATH}?date=2026-02-30`);
+    await screen.findByRole('heading', { name: '태종대' });
+    expect(screen.getByText('요일별 시간을 확인하세요')).toBeInTheDocument();
+  });
+
   it('휴게시간을 함께 적고, 시각이 비면 확인 필요로 둔다', () => {
     const base = { dayType: 'MON' as const, openTime: '09:00', closeTime: '18:00', breakStart: null, breakEnd: null, isClosed: false };
     expect(describeHours({ ...base, breakStart: '12:00', breakEnd: '13:00' })).toEqual({
