@@ -97,7 +97,7 @@ describe('UI-04 장소 상세', () => {
   it('장소 정보의 출처와 기준일, 혼잡 근거를 표시한다(NFR-007)', async () => {
     mockDetail(taejongdaeDetail);
     renderAt(PATH);
-    const sources = await screen.findByRole('contentinfo', { name: '출처' });
+    const sources = await screen.findByRole('region', { name: '출처' });
     expect(sources).toHaveTextContent('장소 정보 한국관광공사 · 10월 13일 (화) 기준');
     expect(sources).toHaveTextContent('혼잡 근거 행정동 생활인구, 도시철도 승하차');
   });

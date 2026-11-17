@@ -61,7 +61,7 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
 
   return (
     <>
-      <PhotoViewer photos={photos} placeName={place.name} />
+      <PhotoViewer key={place.id} photos={photos} placeName={place.name} />
 
       <header className={styles.header}>
         <p className={styles.meta}>{[place.category, place.indoorOutdoor].join(' · ')}</p>
@@ -114,7 +114,7 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
         </div>
       </section>
 
-      <footer className={styles.sources} aria-label="출처">
+      <section className={styles.sources} aria-label="출처">
         {sources.length > 0 ? (
           <ul>
             {sources.map((source) => (
@@ -127,7 +127,7 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
           <p>출처 정보 없음</p>
         )}
         {crowd?.grade && crowd.sources.length > 0 && <p>혼잡 근거 {crowd.sources.join(', ')}</p>}
-      </footer>
+      </section>
 
       <div className={styles.actions}>
         <Button block variant={isPinned ? 'outline' : 'primary'} onClick={() => (isPinned ? removePinned(key) : addPinned(asPinned))}>
