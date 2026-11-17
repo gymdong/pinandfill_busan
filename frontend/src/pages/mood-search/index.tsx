@@ -13,7 +13,11 @@ type Status = 'idle' | 'interpreting' | 'recommending' | 'done' | 'error';
 
 /** 여행 날짜가 정해져 있으면 그날, 아니면 오늘을 혼잡 기준일로 쓴다. */
 function referenceDate(start: IsoDate | undefined): IsoDate {
-  if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) return start;
+  if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    // 달력에 없는 날짜('2026-02-31')는 쓰지 않는다.
+    const time = Date.parse(`${start}T00:00:00Z`);
+    if (!Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === start) return start;
+  }
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
@@ -121,7 +125,11 @@ export default function MoodSearchPage() {
     }
   }
 
-  const labelOf = (code: string) => tags.find((tag) => tag.code === code)?.label ?? code;
+  // 표시명을 모르는 태그 코드는 내부 코드가 화면에 나오지 않게 뺀다.
+  const labelsOf = (codes: string[]) =>
+    codes.flatMap((code) => tags.find((tag) => tag.code === code)?.label ?? []).join(' · ');
+  // 이 화면에서 담았고 지금도 담겨 있는 곳만 센다.
+  const pickedCount = pickedHere.filter((key) => pinned.some((entry) => pinnedKey(entry) === key)).length;
   const interpreted = tags.length > 0 || avoid.length > 0;
   const busy = status === 'interpreting' || status === 'recommending';
 
@@ -204,8 +212,12 @@ export default function MoodSearchPage() {
                     <div className={styles.info}>
                       <h2 className={styles.name}>{item.place.name}</h2>
                       <p className={styles.evidence}>
-                        {item.evidence.matchedTags.map(labelOf).join(' · ')}
-                        {item.evidence.excerpt ? ` — “${item.evidence.excerpt}”` : ' — 근거 문장 정보 없음'}
+                        {[
+                          labelsOf(item.evidence.matchedTags),
+                          item.evidence.excerpt ? `“${item.evidence.excerpt}”` : '근거 문장 정보 없음',
+                        ]
+                          .filter(Boolean)
+                          .join(' — ')}
                       </p>
                       <CrowdBadge grade={item.crowd?.grade ?? null} confidence={item.crowd?.confidence} />
                     </div>
@@ -228,7 +240,7 @@ export default function MoodSearchPage() {
       <footer className={styles.footer}>
         <p className={styles.footerNote}>공공 DB에 있는 장소에서만 골랐어요 · 따옴표 문장은 장소 설명에서 맞은 부분</p>
         <Button block onClick={() => navigate(paths.tripStart())}>
-          {pickedHere.length > 0 ? `${pickedHere.length}곳 담고 돌아가기` : '돌아가기'}
+          {pickedCount > 0 ? `${pickedCount}곳 담고 돌아가기` : '돌아가기'}
         </Button>
       </footer>
     </main>

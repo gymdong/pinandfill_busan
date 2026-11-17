@@ -141,6 +141,45 @@ describe('UI-08 분위기로 찾기', () => {
     expect(alert).toHaveTextContent('여행 시작 화면에서 검색해 담을 수 있어요');
   });
 
+  it('표시명을 모르는 태그 코드는 화면에 내보내지 않는다', async () => {
+    const [first] = moodPlaces;
+    mockMood([{ ...first!, evidence: { matchedTags: ['SEA_VIEW', 'UNKNOWN_CODE'], excerpt: '근거 예시' } }]);
+    renderPage();
+    await search();
+    expect(await screen.findByText('바다 전망 — “근거 예시”')).toBeInTheDocument();
+    expect(screen.queryByText(/UNKNOWN_CODE/)).not.toBeInTheDocument();
+  });
+
+  it('이미 담겨 있던 곳은 이 화면에서 담은 수에 넣지 않는다', async () => {
+    useTripDraft.getState().addPinned({
+      kind: 'PUBLIC',
+      placeId: PLACE_IDS.huinnyeoul,
+      name: '흰여울문화마을',
+      coords: { lat: 35.0784, lng: 129.0453 },
+    });
+    mockMood();
+    renderPage();
+    await search();
+    expect(await screen.findByRole('button', { name: '흰여울문화마을 빼기' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '돌아가기' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '청사포 담기' }));
+    expect(screen.getByRole('button', { name: '1곳 담고 돌아가기' })).toBeInTheDocument();
+  });
+
+  it.each(['2026-02-31', '10/17'])('여행 시작일(%s)이 날짜가 아니면 오늘을 기준일로 보낸다', async (start) => {
+    useTripDraft.getState().setConditions({ dates: { start, end: start } });
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 10, 17, 9) });
+    try {
+      const mood = mockMood();
+      renderPage();
+      await search();
+      await screen.findByRole('list', { name: '추천 장소' });
+      expect(mood.mock.calls[0]![0]).toMatchObject({ date: '2026-11-17' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('여행 날짜가 없으면 오늘을 기준일로 보낸다', async () => {
     useTripDraft.getState().reset();
     vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 10, 17, 9) });
