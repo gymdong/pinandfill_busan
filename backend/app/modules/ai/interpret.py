@@ -295,6 +295,10 @@ RESPONSE_SCHEMA: dict[str, object] = {
     },
 }
 
+# 문장이 금액을 말하고 있다는 근거: 숫자에 붙은 '원'(만·천 단위 포함) 또는 숫자와 함께 나온 예산·경비·비용
+_MONEY_HINT = re.compile(
+    r"\d[\d,.]*\s*(?:만|천|백)?\s*원|(?:예산|경비|비용)\D{0,4}\d|\d[\d,.]*\s*만?\D{0,6}(?:예산|경비|비용)"
+)
 _HH_MM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _SPACES = re.compile(r"\s+")
 
@@ -338,10 +342,13 @@ def _quoted_companions(value: object, text: str) -> str | None:
 
 
 def _stated_budget(value: object, text: str) -> int | None:
-    """예산은 문장에 숫자가 있을 때만 받는다. bool 은 int 의 하위 타입이라 따로 거른다."""
+    """예산은 문장에 금액 표현이 있을 때만 받는다. 날짜 같은 다른 숫자만 있는 문장에 지어낸 금액을 막는다.
+
+    bool 은 int 의 하위 타입이라 따로 거른다.
+    """
     if not isinstance(value, int) or isinstance(value, bool):
         return None
-    return value if 0 <= value <= BUDGET_MAX and any(char.isdigit() for char in text) else None
+    return value if 0 <= value <= BUDGET_MAX and _MONEY_HINT.search(text) else None
 
 
 def _iso_date(value: object) -> date | None:

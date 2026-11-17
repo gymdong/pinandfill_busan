@@ -200,9 +200,13 @@ def test_guard_accepts_companions_only_when_quoted_from_the_sentence():
     assert guard({"companions": ["친구"]}, text).companions is None
 
 
-def test_guard_accepts_budget_only_when_the_sentence_has_a_number():
+def test_guard_accepts_budget_only_when_the_sentence_states_an_amount():
     assert guard({"budget": 300000}, "이번 주말 예산 30만원").budget == 300000
+    assert guard({"budget": 300000}, "이번 주말 경비는 30 정도").budget == 300000
     assert guard({"budget": 300000}, "이번 주말에 넉넉하게").budget is None
+    # 날짜·인원 같은 다른 숫자만 있는 문장에는 금액을 받지 않는다.
+    assert guard({"budget": 12345}, "12월 5일에 친구 2명이랑").budget is None
+    assert guard({"budget": 300000}, "예산은 넉넉해, 12월 첫 주말").budget is None
     assert guard({"budget": True}, "예산 1").budget is None
     assert guard({"budget": "300000"}, "예산 30만원").budget is None
     assert guard({"budget": 3_000_000_000}, "예산 30억").budget is None
