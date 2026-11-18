@@ -83,6 +83,12 @@ export default function MoodSearchPage() {
     const value = text.trim();
     if (!value) return;
     const signal = begin('interpreting');
+    // 이전 문장의 칩·추천을 비워, 새 해석을 기다리는 동안 칩을 눌러 이전 태그로 추천받지 않게 한다.
+    setTags([]);
+    setSelected([]);
+    setAvoid([]);
+    setAvoidOn([]);
+    setPlaces([]);
     try {
       // AI 해석은 오래 걸릴 수 있어 시간 제한을 늘린다.
       const response = await recommendApi.mood({ text: value, date }, { signal, timeoutMs: 30_000 });
@@ -92,7 +98,6 @@ export default function MoodSearchPage() {
       setSelected(codes);
       setAvoid(response.avoid);
       setAvoidOn(response.avoid);
-      setPlaces([]);
       await recommend(codes, response.avoid);
     } catch (error) {
       if (signal.aborted) return;
@@ -187,7 +192,7 @@ export default function MoodSearchPage() {
         <Banner>태그를 하나 이상 골라 주세요.</Banner>
       )}
       {status === 'done' && selected.length > 0 && places.length === 0 && (
-        <Banner tone="warn">어울리는 곳을 찾지 못했어요. 태그를 직접 골라 보세요.</Banner>
+        <Banner tone="warn">어울리는 곳을 찾지 못했어요. 태그를 몇 개 꺼 보거나 다른 표현으로 다시 적어 주세요.</Banner>
       )}
 
       {status === 'done' && places.length > 0 && (

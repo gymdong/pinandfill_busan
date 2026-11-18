@@ -125,11 +125,61 @@ describe('UI-08 분위기로 찾기', () => {
     expect(mood).toHaveBeenCalledTimes(1);
   });
 
-  it('추천 결과가 0개면 태그를 직접 고르도록 안내한다(FR-015)', async () => {
+  it('추천 결과가 0개면 지금 할 수 있는 동작(태그 끄기·다시 적기)을 안내한다(FR-015)', async () => {
     mockMood([]);
     renderPage();
     await search();
-    expect(await screen.findByRole('alert')).toHaveTextContent('어울리는 곳을 찾지 못했어요. 태그를 직접 골라 보세요.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('어울리는 곳을 찾지 못했어요. 태그를 몇 개 꺼 보거나 다른 표현으로 다시 적어 주세요.');
+  });
+
+  it('새 문장을 해석하는 동안 이전 칩·추천을 숨겨 이전 태그로 추천받지 않는다', async () => {
+    const mood = mockMood();
+    renderPage();
+    await search('바다');
+    await screen.findByRole('list', { name: '추천 장소' });
+
+    // 두 번째 해석은 응답을 붙잡아 둔다.
+    let release: (value: MoodResponse) => void = () => {};
+    mood.mockImplementationOnce(() => new Promise<MoodResponse>((resolve) => { release = resolve; }));
+    await userEvent.clear(screen.getByLabelText('원하는 분위기'));
+    await search('골목');
+
+    expect(screen.queryByRole('group', { name: '해석된 조건' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: '추천 장소' })).not.toBeInTheDocument();
+    expect(screen.getByText('문장을 해석하는 중이에요')).toBeInTheDocument();
+
+    release({ tags: moodTags.filter((tag) => tag.code === 'ALLEY_WALK'), avoid: [], places: [] });
+    const chips = await screen.findByRole('group', { name: '해석된 조건' });
+    expect(within(chips).getAllByRole('button')).toHaveLength(1);
+    await waitFor(() => expect(mood.mock.calls.at(-1)?.[0]).toEqual({ tags: ['ALLEY_WALK'], avoid: [], date: '2026-10-17' }));
+  });
+
+  it('새 문장 해석이 실패하면 이전 칩을 남기지 않는다', async () => {
+    const mood = mockMood();
+    renderPage();
+    await search('바다');
+    await screen.findByRole('group', { name: '해석된 조건' });
+
+    mood.mockRejectedValueOnce(new ApiError({ id: 'TIMEOUT' }));
+    await userEvent.clear(screen.getByLabelText('원하는 분위기'));
+    await search('골목');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('추천을 불러오지 못했어요');
+    expect(screen.queryByRole('group', { name: '해석된 조건' })).not.toBeInTheDocument();
+  });
+
+  it('해석은 됐지만 추천이 실패하면 칩은 두고 오류를 안내한다', async () => {
+    const mood = mockMood();
+    mood.mockImplementation(async (body: MoodRequest): Promise<MoodResponse> => {
+      if (body.text !== undefined) return { tags: moodTags, avoid: moodAvoid, places: [] };
+      throw new ApiError({ id: 'TIMEOUT' });
+    });
+    renderPage();
+    await search();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('추천을 불러오지 못했어요');
+    expect(screen.getByRole('group', { name: '해석된 조건' })).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: '추천 장소' })).not.toBeInTheDocument();
   });
 
   it('호출이 실패하면 오류와 검색으로 담는 방법을 안내한다', async () => {
