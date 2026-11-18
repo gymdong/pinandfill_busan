@@ -20,6 +20,9 @@ from app.modules.trips.schemas import (
     ScheduleMutationResponse,
     SuggestWaypointsRequest,
     SuggestWaypointsResponse,
+    TripDates,
+    TripDetail,
+    TripDetailResponse,
     UndoRequest,
     UndoResponse,
     UpdateBlockRequest,
@@ -61,6 +64,25 @@ class TripService:
             if self.recommender is None:
                 raise NeedsConfirmationError("Waypoint providers are not configured")
             return self.recommender.suggest(record, request, calculation_context(request))
+
+    def detail(self, trip_id: str) -> TripDetailResponse:
+        """API-026. 저장된 일정을 다시 계산하지 않고 투영한다(경로 조회 없음). GET 이라 카카오 좌표는 받지 않는다."""
+        with self._lock:
+            record = self._get(trip_id)
+            result = self.engine.project(
+                ValidateInput(trip=record.trip, schedule=record.schedule), context=CalculationContext()
+            )
+            trip = record.trip
+            return TripDetailResponse(
+                trip=TripDetail(
+                    id=trip_id,
+                    dates=TripDates(start=trip.start_date, end=trip.end_date),
+                    day_start=trip.day_start,
+                    day_end=trip.day_end,
+                    mode=trip.transport_mode,
+                ),
+                schedule=result.schedule,
+            )
 
     def _get(self, trip_id: str) -> TripRecord:
         record = self.repository.get(trip_id)

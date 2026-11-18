@@ -102,3 +102,15 @@ def test_repository_sample_files_load():
     data = load_sample_places(SAMPLE_DIR)
     details = data.get(PublicPlaceRef(place_id="126848"), on_date=TUESDAY)
     assert details.name and details.lat is not None and details.hours is not None
+
+
+def test_bad_hours_row_and_unreadable_file_do_not_break_loading(tmp_path):
+    (tmp_path / "places_sample.csv").write_text(PLACES, encoding="utf-8")
+    bad_hours = HOURS.replace("10:00", "10:00:30", 1)
+    (tmp_path / "place_hours.csv").write_text(bad_hours, encoding="utf-8")
+    # 엑셀 기본 저장(CP949)처럼 UTF-8 이 아닌 매칭표
+    (tmp_path / "kakao_id_mapping.csv").write_bytes(MAPPING.encode("utf-8") + "\n깨짐".encode("cp949"))
+    data = load_sample_places(tmp_path)
+    assert data.stay_min(PublicPlaceInput(place_id="100")) == 90
+    # 읽지 못한 영업시간 행은 비워 둔다(확인 필요). 지어내지 않는다.
+    assert data.get(PublicPlaceRef(place_id="100"), on_date=TUESDAY).hours is None

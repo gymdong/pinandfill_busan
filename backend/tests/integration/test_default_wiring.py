@@ -62,6 +62,25 @@ def test_trip_edit_flow_without_injected_services():
         assert [(block["id"], block["stayMin"]) for block in restored] == [(fixed["id"], 60), (museum["id"], 45)]
 
 
+def test_get_trip_returns_conditions_and_projected_schedule():
+    with TestClient(create_app()) as client:
+        assert client.get("/api/trips/missing").json()["error"]["id"] == "ERR-016"
+        trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
+        empty = client.get(f"/api/trips/{trip_id}")
+        assert empty.status_code == 200 and empty.headers["cache-control"] == "no-store"
+        assert empty.json()["trip"] == {
+            "id": trip_id,
+            "dates": {"start": "2026-11-17", "end": "2026-11-17"},
+            "dayStart": "09:00",
+            "dayEnd": "20:00",
+            "mode": "TRANSIT",
+            "detourThresholdMin": 15,
+        }
+        added = client.post(f"/api/trips/{trip_id}/blocks", json=FIXED).json()["schedule"]
+        detail = client.get(f"/api/trips/{trip_id}").json()["schedule"]
+        assert [b["id"] for b in detail["days"][0]["blocks"]] == [b["id"] for b in added["days"][0]["blocks"]]
+
+
 def test_kakao_block_uses_matched_sample_stay_and_rejects_unknown():
     with TestClient(create_app()) as client:
         trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]

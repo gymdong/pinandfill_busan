@@ -176,6 +176,31 @@ class UndoResponse(ContractModel):
     schedule: Schedule
 
 
+# FR-004 의 경유지 우회 기본값. 여행별 값은 trips 테이블(SDD 5.2)이 들어오면 저장한다.
+DEFAULT_DETOUR_THRESHOLD_MIN = 15
+
+
+class TripDates(ContractModel):
+    start: date
+    end: date
+
+
+class TripDetail(ContractModel):
+    """API-026 의 여행 조건. 지금 저장 모델(`TripWindow`)에 있는 값만 돌려준다."""
+
+    id: str
+    dates: TripDates
+    day_start: LocalTime
+    day_end: LocalTime
+    mode: Literal["TRANSIT", "CAR", "WALK"]
+    detour_threshold_min: int = DEFAULT_DETOUR_THRESHOLD_MIN
+
+
+class TripDetailResponse(ContractModel):
+    trip: TripDetail
+    schedule: Schedule
+
+
 class SuggestWaypointsRequest(WithSessionCoords):
     from_block_id: str = Field(min_length=1)
     to_block_id: str = Field(min_length=1)

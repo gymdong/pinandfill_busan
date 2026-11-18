@@ -72,8 +72,13 @@ def _rows(path: Path) -> list[dict[str, str]]:
     if not path.is_file():
         logger.warning("place_samples missing file=%s", path.name)
         return []
-    with path.open(encoding="utf-8-sig", newline="") as file:
-        return [{key: (value or "").strip() for key, value in row.items() if key} for row in csv.DictReader(file)]
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as file:
+            return [{key: (value or "").strip() for key, value in row.items() if key} for row in csv.DictReader(file)]
+    except (UnicodeDecodeError, csv.Error):
+        # 파일 하나가 깨져도 앱 시작을 막지 않는다. 그 파일의 값은 비워 두고 '확인 필요'로 남긴다.
+        logger.warning("place_samples unreadable file=%s", path.name)
+        return []
 
 
 def _time(value: str) -> time | None:
@@ -93,17 +98,23 @@ def _positive_int(value: str) -> int | None:
 
 def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
     hours: dict[str, dict[str, OpeningHours]] = {}
+    skipped_hours = 0
     for row in _rows(directory / "place_hours.csv"):
         place_id, day_type = row.get("tourapi_contentid", ""), row.get("day_type", "")
         if not place_id or day_type not in DAY_TYPES:
             continue
-        hours.setdefault(place_id, {})[day_type] = OpeningHours(
-            is_closed=row.get("is_closed", "").upper() == "TRUE",
-            open_time=_time(row.get("open_time", "")),
-            close_time=_time(row.get("close_time", "")),
-            break_start=_time(row.get("break_start", "")),
-            break_end=_time(row.get("break_end", "")),
-        )
+        try:
+            hours.setdefault(place_id, {})[day_type] = OpeningHours(
+                is_closed=row.get("is_closed", "").upper() == "TRUE",
+                open_time=_time(row.get("open_time", "")),
+                close_time=_time(row.get("close_time", "")),
+                break_start=_time(row.get("break_start", "")),
+                break_end=_time(row.get("break_end", "")),
+            )
+        except ValueError:  # pydantic ValidationError 포함(예: 초가 붙은 시각)
+            skipped_hours += 1
+    if skipped_hours:
+        logger.warning("place_samples skipped_hours=%d", skipped_hours)
 
     places: list[SamplePlace] = []
     skipped = 0

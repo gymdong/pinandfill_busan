@@ -1,5 +1,6 @@
 """ASGI entry point: python -m uvicorn app.main:app --no-access-log."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,8 @@ from app.modules.trips.repository import FakeTripRepository
 from app.modules.trips.router import TripAPIError
 from app.modules.trips.service import TripService
 
+logger = logging.getLogger(__name__)
+
 
 def default_trip_service(places: SamplePlaceData) -> TripService:
     """로컬 기본 구성: 메모리 저장소·메모리 되돌리기 이력, 표본 장소, 경로 키가 있을 때만 실제 경로 조회.
@@ -30,6 +33,8 @@ def default_trip_service(places: SamplePlaceData) -> TripService:
     프로세스가 재시작되면 여행과 이력이 사라진다. DB 저장소가 생기면 바꿔 주입한다.
     """
     engine = BasicItineraryEngine(places, build_route_provider())
+    # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포 전에 DB 저장소로 바꿔야 한다.
+    logger.warning("trip storage is in-memory: trips and undo history are lost on restart and not shared")
     return TripService(FakeTripRepository({}), engine, places.stay_min)
 
 

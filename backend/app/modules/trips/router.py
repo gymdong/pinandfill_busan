@@ -30,6 +30,7 @@ from app.modules.trips.schemas import (
     ScheduleMutationResponse,
     SuggestWaypointsRequest,
     SuggestWaypointsResponse,
+    TripDetailResponse,
     UndoRequest,
     UndoResponse,
     UpdateBlockRequest,
@@ -80,6 +81,15 @@ def translate_error(exc: Exception) -> TripAPIError:
     if isinstance(exc, NeedsConfirmationError):
         return TripAPIError(503, "ERR-017", "일정 계산에 필요한 장소·경로 정보를 확인해 주세요.")
     return TripAPIError(503, "ERR-017", "일정 계산을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+
+
+@router.get("/{trip_id}", response_model=TripDetailResponse)
+def get_trip(trip_id: str, response: Response, service: Service) -> TripDetailResponse:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return service.detail(trip_id)
+    except Exception as exc:
+        raise translate_error(exc) from None
 
 
 @router.post("/{trip_id}/blocks", response_model=ScheduleMutationResponse)
