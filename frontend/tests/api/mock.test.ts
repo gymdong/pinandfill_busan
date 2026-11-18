@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiRequest } from '@/api';
 import { INTERPRETABLE_TEXT, mockRequest, resetMockSchedule } from '@/api/mock';
-import { PLACE_IDS } from '@/api/mock/fixtures/places';
+import { PLACE_IDS, mockKakaoKey } from '@/api/mock/fixtures/places';
 import { schedule as fixtureSchedule } from '@/api/mock/fixtures/schedule';
 import type { CreateTripResponse, MoodResponse, PlaceDetailResponse, PlaceSearchResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, TripDetailResponse, UndoResponse } from '@/types/api';
 
@@ -153,6 +153,15 @@ describe('mockRequest', () => {
     } })).rejects.toMatchObject({ id: 'ERR-001' });
     const undone = await mockRequest<UndoResponse>({ method: 'POST', path: `${TRIP}/undo` });
     expect(undone.schedule).toEqual(initial);
+  });
+
+  it('추가 요청에 체류시간이 있으면 그 값을 쓰고, 양의 정수가 아니면 ERR-001이다', async () => {
+    const body = { place: mockKakaoKey(1), isFixed: false, origin: 'USER', dayNo: 1 };
+    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin: 120 } });
+    expect(added.schedule.days[0]!.blocks.at(-1)).toMatchObject({ place: { source: 'KAKAO' }, stayMin: 120 });
+    for (const stayMin of [0, -30, 1.5]) {
+      await expect(mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin } })).rejects.toMatchObject({ id: 'ERR-001' });
+    }
   });
 
   it('dayNo만 주면 해당 일차의 끝에 추가하고 빈 일차에도 추가한다', async () => {

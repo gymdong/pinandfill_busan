@@ -49,6 +49,8 @@ describe('코스 만들기', () => {
           dayNo: 2,
           place: { kakaoPlaceId: '123', placeUrl: 'https://place.map.kakao.com/123' },
           origin: 'USER',
+          // 시간을 정한 카카오 장소는 도착~출발 시간을 체류시간으로 보낸다.
+          stayMin: 60,
           isFixed: true,
           fixedWindow: { dayNo: 2, start: '12:00', end: '13:00' },
         },
@@ -117,6 +119,35 @@ describe('장소별 방문 시간 검증', () => {
     ['출발이 도착보다 빠름', { dayNo: 1, fixed: { start: '13:00', end: '12:00' } }],
     ['기간 밖 일차', { dayNo: 3, fixed: null }],
   ] as const)('%s이면 그 장소에 오류를 낸다', (_name, plan) => {
-    expect(Object.keys(validatePlans([park, cafe], { 'public:p1': plan }, 2))).toEqual(['public:p1']);
+    const plans = { 'public:p1': plan, 'kakao:123': { dayNo: 1, fixed: null, stayMin: 60 } };
+    expect(Object.keys(validatePlans([park, cafe], plans, 2))).toEqual(['public:p1']);
+  });
+
+  it('체류시간 근거가 없는 카카오 장소는 시간을 정하거나 머무를 시간을 골라야 한다', () => {
+    expect(validatePlans([park, cafe], {}, 2)).toEqual({ 'kakao:123': '머무를 시간을 골라 주세요.' });
+    expect(validatePlans([cafe], { 'kakao:123': { dayNo: 1, fixed: null, stayMin: null } }, 1)).toEqual({
+      'kakao:123': '머무를 시간을 골라 주세요.',
+    });
+    expect(validatePlans([cafe], { 'kakao:123': { dayNo: 1, fixed: null, stayMin: 90 } }, 1)).toEqual({});
+    // 공공 DB 장소는 서버가 장소별 체류시간을 쓰므로 고르지 않아도 된다.
+    expect(validatePlans([park], {}, 1)).toEqual({});
+  });
+});
+
+describe('체류시간 보내기', () => {
+  it('고른 체류시간은 카카오 장소에만 붙이고, 공공 DB 장소에는 붙이지 않는다', () => {
+    expect(toAddBlockRequest(cafe, { dayNo: 1, fixed: null, stayMin: 90 })).toEqual({
+      dayNo: 1,
+      place: { kakaoPlaceId: '123', placeUrl: 'https://place.map.kakao.com/123' },
+      origin: 'USER',
+      stayMin: 90,
+      isFixed: false,
+    });
+    expect(toAddBlockRequest(park, { dayNo: 1, fixed: null, stayMin: 90 })).not.toHaveProperty('stayMin');
+  });
+
+  it('시간을 정한 카카오 장소는 고른 값 대신 도착~출발 시간을 쓴다', () => {
+    const plan = { dayNo: 1, fixed: { start: '10:30', end: '12:00' }, stayMin: 30 } as const;
+    expect(toAddBlockRequest(cafe, plan)).toMatchObject({ stayMin: 90, isFixed: true });
   });
 });

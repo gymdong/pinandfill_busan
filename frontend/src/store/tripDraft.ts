@@ -17,6 +17,16 @@ export type PinnedPlace =
 export interface PinnedPlan {
   dayNo: number;
   fixed: { start: LocalTime | ''; end: LocalTime | '' } | null;
+  /**
+   * 사용자가 고른 체류시간(분). 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소)만 고른다.
+   * 서버는 기본값을 만들지 않으므로(#18 PM 결정 4) 비어 있으면 화면에서 막는다.
+   */
+  stayMin?: number | null;
+}
+
+/** 공공 DB 장소는 서버가 장소별 체류시간을 쓴다. 카카오 장소는 근거가 없어 사용자가 정해야 한다. */
+export function needsStayInput(place: PinnedPlace): boolean {
+  return place.kind === 'KAKAO';
 }
 
 const DEFAULT_PLAN: PinnedPlan = { dayNo: 1, fixed: null };
