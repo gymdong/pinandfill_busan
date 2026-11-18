@@ -26,6 +26,9 @@ vi.mock('@/map/KakaoMap', () => ({
     <div><button onClick={() => onLongPress({ lat: 35, lng: 129 })}>지도 길게 누르기</button><button onClick={() => onSelect(blocks[0]!.id)}>마커 선택</button></div>,
 }));
 
+const KAKAO_CANDIDATE = { kakaoPlaceId: 'k1', placeUrl: 'https://place.map.kakao.com/1', placeId: null, name: '새 장소', coords: { lat: 35, lng: 129 } };
+const PUBLIC_CANDIDATE = { kakaoPlaceId: 'k2', placeUrl: 'https://place.map.kakao.com/2', placeId: 'p2', name: '공공 장소', coords: { lat: 35, lng: 129 } };
+
 function renderPage() {
   render(<MemoryRouter initialEntries={['/trips/t1/map']}><Routes><Route path="/trips/:tripId/map" element={<MapViewPage />} /></Routes></MemoryRouter>);
 }
@@ -39,7 +42,8 @@ describe('지도 보기', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.get.mockResolvedValue({ trip, schedule });
-    mocks.at.mockResolvedValue({ places: [{ kakaoPlaceId: 'k1', placeUrl: 'https://place.map.kakao.com/1', placeId: null, name: '새 장소', coords: { lat: 35, lng: 129 } }], nearbyCount: 1 });
+    // 기본 후보는 공공 DB에 매칭된 장소다. 체류시간을 고를 필요가 없다.
+    mocks.at.mockResolvedValue({ places: [PUBLIC_CANDIDATE], nearbyCount: 1 });
     mocks.addBlock.mockResolvedValue({ schedule, violations: [] });
   });
 
@@ -62,15 +66,49 @@ describe('지도 보기', () => {
     expect(link).toHaveAttribute('target', '_blank');
   });
 
-  it('지도에서 찾은 카카오 장소를 핵심지로 추가한다', async () => {
+  it('지도에서 찾은 카카오 장소는 머무를 시간을 골라야 추가한다(#18 PM 결정 4)', async () => {
+    mocks.at.mockResolvedValue({ places: [KAKAO_CANDIDATE], nearbyCount: 1 });
     renderPage();
     fireEvent.click(await screen.findByText('지도 길게 누르기'));
     expect(await screen.findByText('새 장소')).toBeInTheDocument();
+    const stay = screen.getByLabelText('새 장소 머무를 시간');
+    // 기본값을 두지 않는다.
+    expect(stay).toHaveValue('');
+    fireEvent.click(screen.getByText('꼭 갈 곳에 추가'));
+    expect(screen.getByRole('alert')).toHaveTextContent('머무를 시간을 골라 주세요.');
+    expect(stay).toHaveAttribute('aria-invalid', 'true');
+    expect(mocks.addBlock).not.toHaveBeenCalled();
+
+    fireEvent.change(stay, { target: { value: '90' } });
+    expect(screen.queryByText('머무를 시간을 골라 주세요.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('꼭 갈 곳에 추가'));
     await waitFor(() => expect(mocks.addBlock).toHaveBeenCalledWith('t1', expect.objectContaining({
-      place: { kakaoPlaceId: 'k1', placeUrl: 'https://place.map.kakao.com/1' }, isFixed: false, origin: 'USER',
+      place: { kakaoPlaceId: 'k1', placeUrl: 'https://place.map.kakao.com/1' }, isFixed: false, origin: 'USER', stayMin: 90,
     })));
     expect(mocks.remember).toHaveBeenCalledWith('k1', { name: '새 장소', coords: { lat: 35, lng: 129 } });
+  });
+
+  it('공공 DB 장소는 머무를 시간 없이 추가하고 stayMin을 보내지 않는다', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText('지도 길게 누르기'));
+    expect(await screen.findByText('공공 장소')).toBeInTheDocument();
+    expect(screen.queryByLabelText('공공 장소 머무를 시간')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('꼭 갈 곳에 추가'));
+    await waitFor(() => expect(mocks.addBlock).toHaveBeenCalledTimes(1));
+    expect(mocks.addBlock.mock.calls[0]![1]).toEqual({ place: { placeId: 'p2' }, isFixed: false, origin: 'USER', dayNo: 1 });
+  });
+
+  it('서버가 체류시간 근거가 없다고 하면(fields.stayMin) 그 후보에 머무를 시간 칸을 띄운다', async () => {
+    const message = '체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.';
+    mocks.addBlock.mockRejectedValueOnce(Object.assign(new Error(message), { id: 'ERR-001', fields: { stayMin: message } }));
+    renderPage();
+    fireEvent.click(await screen.findByText('지도 길게 누르기'));
+    fireEvent.click(await screen.findByText('꼭 갈 곳에 추가'));
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    const stay = screen.getByLabelText('공공 장소 머무를 시간');
+    fireEvent.change(stay, { target: { value: '60' } });
+    fireEvent.click(screen.getByText('꼭 갈 곳에 추가'));
+    await waitFor(() => expect(mocks.addBlock).toHaveBeenLastCalledWith('t1', expect.objectContaining({ place: { placeId: 'p2' }, stayMin: 60 })));
   });
 
   it('2일차로 전환한 뒤 추가하면 보고 있는 일차를 dayNo로 보낸다', async () => {

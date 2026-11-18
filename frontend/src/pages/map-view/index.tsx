@@ -5,6 +5,7 @@ import { rememberKakaoPlace, resolveBlockPlace } from '@/api/kakaoSession';
 import { paths } from '@/app/paths';
 import { Badge, Button, EmptyState, ErrorState, LoadingState } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
+import { STAY_OPTIONS } from '@/features/trip-start/createCourse';
 import { blockRole, formatDuration, legBetween, legLabel, scheduleLevelViolations } from '@/features/itinerary/format';
 import { BackIcon, LockIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
@@ -27,6 +28,11 @@ function MapViewContent({ tripId }: { tripId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [violations, setViolations] = useState<Violation[]>([]);
+  // 후보별(kakaoPlaceId) 고른 체류시간과 안내. 서버는 체류시간 기본값을 만들지 않는다(#18 PM 결정 4).
+  const [stays, setStays] = useState<Record<string, number>>({});
+  const [stayErrors, setStayErrors] = useState<Record<string, string>>({});
+  // 공공 DB 장소라도 서버가 체류시간 근거가 없다고 알려 준(fields.stayMin) 후보
+  const [askStay, setAskStay] = useState<ReadonlySet<string>>(new Set());
   const sheet = useRef<HTMLElement>(null);
 
   // 선택 카드는 시트 맨 위에 나오므로, 목록 아래쪽을 눌렀을 때도 보이게 시트를 올린다.
@@ -39,7 +45,7 @@ function MapViewContent({ tripId }: { tripId: string }) {
   const blocks = useMemo(() => day ? [...day.blocks].sort((a, b) => a.seq - b.seq) : [], [day]);
 
   const findNearby = useCallback(async (coords: Coords) => {
-    setBusy(true); setCandidates([]); setNotice(null);
+    setBusy(true); setCandidates([]); setNotice(null); setStays({}); setStayErrors({}); setAskStay(new Set());
     try {
       const result = await placesApi.at(coords);
       setCandidates(result.places);
@@ -48,7 +54,16 @@ function MapViewContent({ tripId }: { tripId: string }) {
     finally { setBusy(false); }
   }, []);
 
+  // 공공 DB에 없는 카카오 장소는 체류시간 근거가 없어 사용자가 고른다.
+  const needsStay = (place: PlaceSearchItem) => !place.placeId || askStay.has(place.kakaoPlaceId);
+
   const addPlace = async (place: PlaceSearchItem) => {
+    const key = place.kakaoPlaceId;
+    const stayMin = stays[key];
+    if (needsStay(place) && !stayMin) {
+      setStayErrors((prev) => ({ ...prev, [key]: '머무를 시간을 골라 주세요.' }));
+      return;
+    }
     setBusy(true); setNotice(null);
     try {
       // D6: 이름·좌표는 현재 접속 메모리에만 저장한다.
@@ -56,10 +71,19 @@ function MapViewContent({ tripId }: { tripId: string }) {
       const result = await tripsApi.addBlock(tripId, {
         place: place.placeId ? { placeId: place.placeId } : { kakaoPlaceId: place.kakaoPlaceId, placeUrl: place.placeUrl },
         isFixed: false, origin: 'USER', dayNo: day?.dayNo ?? dayNo,
+        ...(stayMin ? { stayMin } : {}),
       });
       setSchedule(result.schedule); setViolations(result.violations); setCandidates([]);
       setNotice(`${place.name}을(를) ${day?.dayNo ?? dayNo}일차 코스에 추가했어요.`);
-    } catch (error) { setNotice(toApiError(error).message); }
+    } catch (error) {
+      const apiError = toApiError(error);
+      const stayMessage = apiError.fields?.stayMin;
+      if (stayMessage) {
+        // 서버가 체류시간 근거가 없다고 하면 그 후보에 고르는 칸을 띄운다.
+        setAskStay((prev) => new Set(prev).add(key));
+        setStayErrors((prev) => ({ ...prev, [key]: stayMessage }));
+      } else setNotice(apiError.message);
+    }
     finally { setBusy(false); }
   };
 
@@ -125,6 +149,22 @@ function MapViewContent({ tripId }: { tripId: string }) {
             {place.address ? <p className={styles.muted}>{place.address}</p> : null}
             <Badge kind={place.placeId ? 'detail' : 'basic'} />
           </div>
+          {needsStay(place) ? <select
+            className={styles.stayField}
+            aria-label={`${place.name} 머무를 시간`}
+            aria-invalid={Boolean(stayErrors[place.kakaoPlaceId])}
+            value={stays[place.kakaoPlaceId] ?? ''}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              const key = place.kakaoPlaceId;
+              setStays((prev) => { const next = { ...prev }; if (value) next[key] = value; else delete next[key]; return next; });
+              if (value) setStayErrors((prev) => { const next = { ...prev }; delete next[key]; return next; });
+            }}
+          >
+            <option value="">머무를 시간</option>
+            {STAY_OPTIONS.map((minutes) => <option key={minutes} value={minutes}>{formatDuration(minutes)}</option>)}
+          </select> : null}
+          {stayErrors[place.kakaoPlaceId] ? <p role="alert" className={styles.stayError}>{stayErrors[place.kakaoPlaceId]}</p> : null}
           <Button disabled={busy} onClick={() => void addPlace(place)}>꼭 갈 곳에 추가</Button>
         </li>)}</ul>
         <Button variant="ghost" onClick={() => setCandidates([])}>닫기</Button>
