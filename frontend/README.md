@@ -98,6 +98,7 @@ try {
 - 응답은 고정값이다. 블록을 추가·삭제해도 일정이 바뀌지 않는다.
 - 주소에 `?mockError=ERR-003`을 붙이면 그 페이지의 API 호출이 해당 오류로 실패한다.
 - API-001은 `10/17~19 2박 3일 대중교통`만 해석에 성공하고, 나머지 문장은 폼 전환(`needsForm`)으로 응답한다.
+- API-002는 입력한 조건으로 여행을 만들고 빈 일정에서 시작한다. UI-01에서 담은 장소가 API-006으로 그 일정에 들어간다. 여행 ID는 하나뿐이라 새로 만들면 이전 mock 여행을 덮어쓴다. 다른 주소(`/trips/t1` 등)는 예시 일정을 그대로 보여 준다.
 - API-013은 SD-03 순서대로 문장을 보내면 태그만, 태그를 보내면 추천을 돌려준다.
 - API-014~021(P1)은 타입만 있고 mock은 없다.
 - fixture는 목업의 예시 값이며 실제 공공 DB 값이 아니다. 좌표는 근사값이고, 태그 3종은 확정된 테마 태그 사전이 아니다.
@@ -114,6 +115,8 @@ try {
 | API-002 시작·종료 위치 | `startPlaceId`, `endPlaceId` 추가 제안 | 정현빈 |
 | API-003 배지 | `badge`와 `hoursStatus` 분리, `placeId`·`category`·`address` 추가 | 박범찬 |
 | API-013 `avoid` 요청 필드 | 피할 조건 수정을 위해 추가 제안 | 박범찬 |
+| UI-01 코스 만들기 순서 | API-002 → 담은 장소마다 API-006(`dayNo` 필수라 화면에서 일차를 고름) → API-009. 담은 목록을 API-009가 한 번에 받게 되면(PR #18 제안) `features/trip-start/createCourse.ts`만 바꾼다 | 정현빈 |
+| 여행 기간 상한 | 3일(`MAX_TRIP_DAYS`). SRS에 상한이 없어 README의 '1~3일'을 따름 | 김동현 |
 | API-006 장소·삽입 위치 | 백엔드(PR #11)와 맞춤. `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 위치는 `dayNo`(그날 마지막) 또는 `fromBlockId`·`toBlockId`(두 블록 사이). 카카오 ID는 숫자, URL은 `https://place.map.kakao.com/{id}`. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest` | 정현빈 (PR #11 병합) |
 | 카카오 장소 좌표 전달 | API-006~011 요청의 `sessionCoords`(`kakaoPlaceId` → 좌표). DELETE에도 본문 사용 | 정현빈 |
 | 블록의 카카오 장소 | `place: {source: 'KAKAO', kakaoPlaceId, placeUrl}`, 좌표 없는 구간은 `durationMin: null` | 정현빈·김동현 |
@@ -125,6 +128,7 @@ try {
 - 데이터가 없으면 값을 만들지 않고 '확인 필요', '정보 부족', '사진 없음', '정보 없음'으로 표시한다.
 - 장소와 사진에는 출처, 기준일, 저작권 유형을 함께 표시한다.
 - 색은 `src/styles/tokens.css`의 토큰을 쓴다. 표시 문구는 API 응답을 기준으로 렌더링한다.
+- 화면에는 숨기고 스크린리더에만 읽힐 글자는 전역 클래스 `sr-only`(`src/styles/global.css`)를 쓴다. 화면별 CSS 모듈에 다시 만들지 않는다.
 - `VITE_`로 시작하는 환경변수는 브라우저에 노출된다. 도메인 제한된 카카오맵 JS 키 외의 키를 넣지 않는다.
 
 ## 카카오 데이터 규칙 (D6)

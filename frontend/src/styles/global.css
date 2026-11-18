@@ -47,6 +47,19 @@ img {
   max-width: 100%;
 }
 
+/* 화면에는 숨기고 스크린리더에는 읽히는 글자. 화면별 CSS 모듈에 다시 만들지 않고 이 클래스를 쓴다. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
