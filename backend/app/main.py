@@ -59,21 +59,26 @@ def create_app(
     place_search_service: PlaceSearchService | None = None,
 ) -> FastAPI:
     config = settings if settings is not None else Settings.from_env()
-    kakao_http: httpx.AsyncClient | None = None
     # 주입하지 않은 서비스만 기본 구성으로 만든다. 만들 때 외부 API 를 호출하지 않는다.
-    if trip_service is None or place_search_service is None:
-        places = load_sample_places()
-        if trip_service is None:
-            trip_service = default_trip_service(places)
-        if place_search_service is None and (kakao := kakao_settings()) is not None:
-            kakao_http = httpx.AsyncClient()
-            place_search_service = default_place_search_service(places, KakaoLocalAdapter(kakao_http, kakao))
+    places = load_sample_places() if trip_service is None or place_search_service is None else None
+    if trip_service is None and places is not None:
+        trip_service = default_trip_service(places)
+    kakao = kakao_settings() if place_search_service is None else None
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        if kakao_http is not None:
-            await kakao_http.aclose()
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        if kakao is None or places is None:
+            yield
+            return
+        # 카카오 HTTP 클라이언트는 lifespan 안에서만 열고 닫는다. lifespan 없이 만든 앱에는 열린 연결이 남지 않는다.
+        async with httpx.AsyncClient() as kakao_http:
+            application.state.place_search_service = default_place_search_service(
+                places, KakaoLocalAdapter(kakao_http, kakao)
+            )
+            try:
+                yield
+            finally:
+                application.state.place_search_service = None
 
     application = FastAPI(title=config.app_name, version="0.1.0", debug=False, lifespan=lifespan)
     application.state.trip_service = trip_service
@@ -81,9 +86,12 @@ def create_app(
 
     @application.exception_handler(TripAPIError)
     async def trip_error(request: Request, exc: TripAPIError) -> JSONResponse:
+        error: dict[str, str] = {"id": exc.error_id, "message": exc.message}
+        if exc.field is not None:
+            error["field"] = exc.field
         return JSONResponse(
             status_code=exc.status,
-            content={"error": {"id": exc.error_id, "message": exc.message}},
+            content={"error": error},
             headers={"Cache-Control": "no-store"},
         )
 

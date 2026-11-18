@@ -105,7 +105,67 @@ def test_kakao_block_uses_matched_sample_stay_and_rejects_unknown():
 
 
 def test_place_search_is_enabled_only_with_a_kakao_key(monkeypatch: pytest.MonkeyPatch):
-    assert create_app().state.place_search_service is None
+    with TestClient(create_app()) as client:
+        assert client.app.state.place_search_service is None
     monkeypatch.setenv("KAKAO_REST_API_KEY", "test-rest-key")
-    # 만들기만 하고 카카오를 부르지 않는다.
-    assert isinstance(create_app().state.place_search_service, PlaceSearchService)
+    application = create_app()
+    # 카카오 클라이언트는 lifespan 안에서만 열리고, 끝나면 서비스도 함께 내려간다. 카카오를 부르지 않는다.
+    assert application.state.place_search_service is None
+    with TestClient(application):
+        assert isinstance(application.state.place_search_service, PlaceSearchService)
+    assert application.state.place_search_service is None
+
+
+KAKAO_UNKNOWN = {"kakaoPlaceId": "900000009", "placeUrl": "https://place.map.kakao.com/900000009"}
+
+
+def test_kakao_block_without_stay_source_asks_for_stay_min():
+    with TestClient(create_app()) as client:
+        trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
+        response = client.post(f"/api/trips/{trip_id}/blocks", json={**FIXED, "place": KAKAO_UNKNOWN})
+        assert response.status_code == 400
+        assert response.json()["error"]["id"] == "ERR-001" and response.json()["error"]["field"] == "stayMin"
+        # 아무것도 저장되지 않았다.
+        assert client.get(f"/api/trips/{trip_id}").json()["schedule"]["days"][0]["blocks"] == []
+
+
+def test_user_stay_min_comes_before_public_value():
+    with TestClient(create_app()) as client:
+        trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
+        window = FIXED["fixedWindow"]
+        length = _minutes(window["end"]) - _minutes(window["start"])
+        kakao = client.post(f"/api/trips/{trip_id}/blocks", json={**FIXED, "place": KAKAO_UNKNOWN, "stayMin": length})
+        assert kakao.status_code == 200
+        assert blocks(kakao)[0]["stayMin"] == length
+        museum = client.post(f"/api/trips/{trip_id}/blocks", json={**MUSEUM, "stayMin": 30})
+        assert museum.status_code == 200
+        # 표본 값(90)이 있어도 사용자 값이 먼저다.
+        assert blocks(museum)[1]["stayMin"] == 30
+
+
+@pytest.mark.parametrize("stay", [0, 1441, "45", True, None])
+def test_add_block_rejects_invalid_stay_min(stay):
+    with TestClient(create_app()) as client:
+        trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
+        body = {**MUSEUM, "stayMin": stay}
+        response = client.post(f"/api/trips/{trip_id}/blocks", json=body)
+        if stay is None:
+            # 보내지 않은 것과 같다: 표본 값을 쓴다.
+            assert response.status_code == 200 and blocks(response)[0]["stayMin"] == 90
+        else:
+            assert response.status_code == 400 and "field" not in response.json()["error"]
+
+
+def test_add_block_rejects_stay_min_different_from_fixed_window():
+    with TestClient(create_app()) as client:
+        trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
+        window = FIXED["fixedWindow"]
+        length = _minutes(window["end"]) - _minutes(window["start"])
+        response = client.post(f"/api/trips/{trip_id}/blocks", json={**FIXED, "stayMin": length + 10})
+        assert response.status_code == 400
+        assert client.get(f"/api/trips/{trip_id}").json()["schedule"]["days"][0]["blocks"] == []
+
+
+def _minutes(value: str) -> int:
+    hour, minute = value.split(":")[:2]
+    return int(hour) * 60 + int(minute)

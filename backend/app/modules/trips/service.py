@@ -37,6 +37,10 @@ class FixedScheduleConflictError(Exception):
     """No payload attached: request coordinates must never escape through errors."""
 
 
+class StayDurationRequiredError(PolicyRequiredError):
+    """요청 stayMin 도, 공공 장소 기본 체류시간도 없다. 화면이 체류시간을 입력받아 다시 보낸다."""
+
+
 class TripService:
     def __init__(
         self,
@@ -141,9 +145,10 @@ class TripService:
     def insert(self, trip_id: str, request: AddBlockRequest) -> ScheduleMutationResponse:
         with self._lock:
             record = self._get(trip_id)
-            stay = self.stay_duration(request.place)
+            # 사용자 지정 → 공공 장소 값 순서. 둘 다 없으면 기본값을 만들지 않는다(#18 PM 결정 4).
+            stay = request.stay_min if request.stay_min is not None else self.stay_duration(request.place)
             if stay is None:
-                raise PolicyRequiredError("Stay duration needs an agreed source")
+                raise StayDurationRequiredError("Stay duration needs a user value or a public place value")
             command = insert_command(request, record.trip, record.schedule, stay_min=stay)
             result = self.engine.insert(command, context=calculation_context(request))
             return self._commit_edit(trip_id, record, result)

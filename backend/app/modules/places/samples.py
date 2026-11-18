@@ -65,6 +65,7 @@ class SamplePlaceData:
         return item.stay_min if item is not None else None
 
     def repository(self) -> InMemoryPublicPlaceRepository:
+        # 원래 테스트용 메모리 저장소다. places 테이블 저장소가 생기면 기본 구성(app.main)에서 그쪽으로 바꾼다.
         return InMemoryPublicPlaceRepository((item.place for item in self._places.values()), self._kakao_overrides)
 
 
