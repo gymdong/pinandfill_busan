@@ -145,6 +145,7 @@ class AddBlockRequest(WithSessionCoords):
     @model_validator(mode="after")
     def stay_matches_window(self) -> Self:
         # 시간창과 체류시간을 함께 보내면 길이가 같아야 한다. 어느 쪽을 믿을지 서버가 고르지 않는다.
+        # 자정을 넘는 시간창은 엔진도 지원하지 않으므로(TIME_WINDOW_UNSUPPORTED) 음수 길이는 그대로 400 이다.
         window = self.fixed_window
         if window is not None and self.stay_min is not None:
             length = (window.end.hour * 60 + window.end.minute) - (window.start.hour * 60 + window.start.minute)

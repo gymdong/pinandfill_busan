@@ -58,6 +58,11 @@ def create_app(
     trip_service: TripService | None = None,
     place_search_service: PlaceSearchService | None = None,
 ) -> FastAPI:
+    """주입하지 않은 서비스는 기본 구성으로 만든다.
+
+    카카오 장소 검색은 lifespan 이 시작될 때 붙는다. uvicorn 이나 `with TestClient(...)` 없이 만든 앱에서는
+    키가 있어도 장소 검색이 503(ERR-017)이다.
+    """
     config = settings if settings is not None else Settings.from_env()
     # 주입하지 않은 서비스만 기본 구성으로 만든다. 만들 때 외부 API 를 호출하지 않는다.
     places = load_sample_places() if trip_service is None or place_search_service is None else None
