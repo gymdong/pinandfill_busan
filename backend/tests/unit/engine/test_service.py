@@ -459,6 +459,26 @@ def test_recompute_reports_day_overflow_without_assigning_cross_day_times() -> N
     assert any(conflict.block_ids == ("b",) for conflict in result.schedule.conflicts)
 
 
+def test_validate_reports_day_overflow_for_a_timed_block_without_previous_block() -> None:
+    engine, _, _ = _engine(("over", "short", "fixed"))
+    state = ScheduleState(
+        blocks=(
+            _block("over", 1, arrive=time(23), depart=None, stay=120),
+            _block("short", 1, arrive=time(22), depart=None, stay=30, day_no=2),
+            _block("fixed", 1, arrive=time(23), depart=None, stay=120, day_no=3, fixed=True),
+        )
+    )
+
+    result = engine.validate(ValidateInput(trip=_trip(end_date=date(2026, 11, 4)), schedule=state))
+
+    overflow = {
+        block_id for block_id, items in result.block_warnings.items() if "DAY_OVERFLOW" in {w.type for w in items}
+    }
+    # 체류가 같은 날 안이면 시각 확인만, 고정 블록은 지정 시각 검사가 맡는다.
+    assert overflow == {"over"}
+    assert [conflict.block_ids for conflict in result.conflicts if "날짜 경계" in conflict.cause] == [("over",)]
+
+
 def test_missing_public_display_fields_require_confirmation() -> None:
     engine, _, _ = _engine(
         ("a", "b"),

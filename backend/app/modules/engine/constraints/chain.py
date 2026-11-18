@@ -19,6 +19,22 @@ def minutes(value: time) -> int:
     return value.hour * 60 + value.minute
 
 
+def visit_end(arrive: time, stay_min: int) -> time | None:
+    """도착 + 체류로 정해지는 출발 시각. 자정을 넘기면 다음 날 시각을 만들지 않고 None 이다."""
+    end = minutes(arrive) + stay_min
+    return time(end // 60, end % 60) if end < 24 * 60 else None
+
+
+def _overflows_day(block: StoredBlock) -> bool:
+    """도착 시각이 정해진 일반 블록이 체류만으로 자정을 넘는다(앞 블록이 없는 그날 첫 블록 포함)."""
+    return (
+        not block.is_fixed
+        and block.arrive_at is not None
+        and block.depart_at is None
+        and visit_end(block.arrive_at, block.stay_min) is None
+    )
+
+
 def validate_chain(command: ValidateInput, places: Mapping[str, TransientPlaceDetails]) -> ValidationResult:
     warnings: dict[str, list[Violation]] = defaultdict(list)
     conflicts: list[ScheduleConflict] = []
@@ -70,6 +86,13 @@ def validate_chain(command: ValidateInput, places: Mapping[str, TransientPlaceDe
 
         if block.arrive_at is None or block.depart_at is None:
             report(block, "TIME_NEEDS_CHECK", "도착·출발 시각을 계산할 정보가 부족합니다.")
+            if _overflows_day(block):
+                report(
+                    block,
+                    "DAY_OVERFLOW",
+                    "이동·체류시간이 날짜 경계를 넘어 날짜 분리 검토가 필요합니다.",
+                    conflict=True,
+                )
         elif block.depart_at < block.arrive_at:
             report(
                 block,

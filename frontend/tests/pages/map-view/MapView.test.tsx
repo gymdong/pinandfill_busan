@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { schedule, trip } from '@/api/mock/fixtures/schedule';
@@ -48,7 +48,7 @@ describe('지도 보기', () => {
     expect(await screen.findByText('1일차 장소 순서')).toBeInTheDocument();
     expect(screen.getByText(/대중교통 · 30분 \(추정\)/)).toBeInTheDocument();
     fireEvent.click(screen.getByText('마커 선택'));
-    expect(screen.getByText(/선택한 장소: 감천/)).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: '선택한 장소' })).getByRole('heading', { name: /감천/ })).toBeInTheDocument();
   });
 
   it('이번 접속에서 고르지 않은 카카오 장소는 카카오맵 링크를 새 창으로 제공한다', async () => {
@@ -66,7 +66,7 @@ describe('지도 보기', () => {
     renderPage();
     fireEvent.click(await screen.findByText('지도 길게 누르기'));
     expect(await screen.findByText('새 장소')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('핵심지에 추가'));
+    fireEvent.click(screen.getByText('꼭 갈 곳에 추가'));
     await waitFor(() => expect(mocks.addBlock).toHaveBeenCalledWith('t1', expect.objectContaining({
       place: { kakaoPlaceId: 'k1', placeUrl: 'https://place.map.kakao.com/1' }, isFixed: false, origin: 'USER',
     })));
@@ -79,7 +79,7 @@ describe('지도 보기', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: '2일차' }));
     fireEvent.click(await screen.findByText('지도 길게 누르기'));
-    fireEvent.click(await screen.findByText('핵심지에 추가'));
+    fireEvent.click(await screen.findByText('꼭 갈 곳에 추가'));
     await waitFor(() => expect(mocks.addBlock).toHaveBeenCalledWith('t1', expect.objectContaining({ dayNo: 2 })));
   });
 
@@ -87,7 +87,7 @@ describe('지도 보기', () => {
     mocks.addBlock.mockResolvedValue({ schedule: { ...schedule, conflicts: [{ cause: '고정 블록과 충돌', blockIds: [] }] }, violations: [{ type: 'HOURS', cause: '영업시간 위반' }] });
     renderPage();
     fireEvent.click(await screen.findByText('지도 길게 누르기'));
-    fireEvent.click(await screen.findByText('핵심지에 추가'));
+    fireEvent.click(await screen.findByText('꼭 갈 곳에 추가'));
     expect(await screen.findByText('영업시간 위반')).toBeInTheDocument();
     expect(screen.getByText('고정 블록과 충돌')).toBeInTheDocument();
   });
@@ -97,12 +97,12 @@ describe('지도 보기', () => {
     mocks.addBlock.mockImplementation(() => new Promise((resolve) => { resolveAdd = resolve; }));
     render(<MemoryRouter initialEntries={['/trips/t1/map']}><SwitchTrip /><Routes><Route path="/trips/:tripId/map" element={<MapViewPage />} /></Routes></MemoryRouter>);
     fireEvent.click(await screen.findByText('지도 길게 누르기'));
-    fireEvent.click(await screen.findByText('핵심지에 추가'));
+    fireEvent.click(await screen.findByText('꼭 갈 곳에 추가'));
     fireEvent.click(screen.getByText('마커 선택'));
-    expect(screen.getByText(/선택한 장소: 감천/)).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: '선택한 장소' })).getByRole('heading', { name: /감천/ })).toBeInTheDocument();
     fireEvent.click(screen.getByText('다른 여행'));
     await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('t2', expect.anything()));
-    expect(screen.queryByText(/선택한 장소: 감천/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '선택한 장소' })).not.toBeInTheDocument();
     resolveAdd({ schedule: { ...schedule, violations: [{ type: 'OLD', cause: '이전 여행 경고' }] }, violations: [] });
     await waitFor(() => expect(screen.queryByText('이전 여행 경고')).not.toBeInTheDocument());
   });
@@ -112,7 +112,7 @@ describe('지도 보기', () => {
     renderPage();
     expect(await screen.findByText('아직 장소가 없어요. 지도에서 위치를 길게 눌러 추가하세요.')).toBeInTheDocument();
     fireEvent.click(screen.getByText('지도 길게 누르기'));
-    fireEvent.click(await screen.findByText('핵심지에 추가'));
+    fireEvent.click(await screen.findByText('꼭 갈 곳에 추가'));
     await waitFor(() => expect(mocks.addBlock).toHaveBeenCalledWith('t1', expect.objectContaining({ isFixed: false })));
   });
 
@@ -121,7 +121,7 @@ describe('지도 보기', () => {
     mocks.addBlock.mockResolvedValue({ schedule: { ...schedule, violations: [warning] }, violations: [warning] });
     renderPage();
     fireEvent.click(await screen.findByText('지도 길게 누르기'));
-    fireEvent.click(await screen.findByText('핵심지에 추가'));
+    fireEvent.click(await screen.findByText('꼭 갈 곳에 추가'));
     await waitFor(() => expect(screen.getAllByText('영업시간 위반')).toHaveLength(1));
   });
 });
