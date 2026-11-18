@@ -256,10 +256,10 @@ def test_create_trip_requires_the_core_conditions(missing):
         assert client.post("/api/trips", json=body).status_code == 400
 
 
-def test_create_trip_needs_a_configured_trip_service(client):
+def test_create_trip_uses_the_default_trip_service(client):
     response = client.post("/api/trips", json=CONDITIONS)
-    assert response.status_code == 503
-    assert response.json()["error"]["id"] == "ERR-017"
+    assert response.status_code == 201
+    assert response.json()["tripId"]
 
 
 def test_openapi_lists_both_endpoints(client):

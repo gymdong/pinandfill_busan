@@ -1,15 +1,50 @@
 """ASGI entry point: python -m uvicorn app.main:app --no-access-log."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
+from app.adapters.kakao import KakaoLocalAdapter, KakaoSettings
+from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
+from app.modules.engine.service import BasicItineraryEngine
+from app.modules.places.matcher import PlaceMatcher
 from app.modules.places.router import PlaceAPIError
+from app.modules.places.samples import SamplePlaceData, load_sample_places
 from app.modules.places.service import PlaceSearchService
+from app.modules.places.settings import PlaceMatchSettings
+from app.modules.trips.repository import FakeTripRepository
 from app.modules.trips.router import TripAPIError
 from app.modules.trips.service import TripService
+
+
+def default_trip_service(places: SamplePlaceData) -> TripService:
+    """로컬 기본 구성: 메모리 저장소·메모리 되돌리기 이력, 표본 장소, 경로 키가 있을 때만 실제 경로 조회.
+
+    프로세스가 재시작되면 여행과 이력이 사라진다. DB 저장소가 생기면 바꿔 주입한다.
+    """
+    engine = BasicItineraryEngine(places, build_route_provider())
+    return TripService(FakeTripRepository({}), engine, places.stay_min)
+
+
+def kakao_settings() -> KakaoSettings | None:
+    """KAKAO_REST_API_KEY 가 비어 있으면 None. 장소 검색은 그때 지금처럼 503(ERR-017)이다."""
+    try:
+        kakao = KakaoSettings()  # type: ignore[call-arg]  # 값은 환경변수·.env 에서 읽는다
+    except ValidationError:
+        return None
+    return kakao if kakao.rest_api_key.get_secret_value() else None
+
+
+def default_place_search_service(places: SamplePlaceData, kakao: KakaoLocalAdapter) -> PlaceSearchService:
+    settings = PlaceMatchSettings()  # type: ignore[call-arg]
+    return PlaceSearchService(kakao, PlaceMatcher(places.repository(), settings), settings)
 
 
 def create_app(
@@ -19,7 +54,23 @@ def create_app(
     place_search_service: PlaceSearchService | None = None,
 ) -> FastAPI:
     config = settings if settings is not None else Settings.from_env()
-    application = FastAPI(title=config.app_name, version="0.1.0", debug=False)
+    kakao_http: httpx.AsyncClient | None = None
+    # 주입하지 않은 서비스만 기본 구성으로 만든다. 만들 때 외부 API 를 호출하지 않는다.
+    if trip_service is None or place_search_service is None:
+        places = load_sample_places()
+        if trip_service is None:
+            trip_service = default_trip_service(places)
+        if place_search_service is None and (kakao := kakao_settings()) is not None:
+            kakao_http = httpx.AsyncClient()
+            place_search_service = default_place_search_service(places, KakaoLocalAdapter(kakao_http, kakao))
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        if kakao_http is not None:
+            await kakao_http.aclose()
+
+    application = FastAPI(title=config.app_name, version="0.1.0", debug=False, lifespan=lifespan)
     application.state.trip_service = trip_service
     application.state.place_search_service = place_search_service
 
