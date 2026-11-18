@@ -124,6 +124,8 @@ function addEmptyDay(draft: Schedule, dayNo: number, trip: Trip): ScheduleDay {
 
 function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationResponse {
   if (!body?.place) return invalid();
+  // @provisional stayMin 은 백엔드 API-006 에 아직 없는 필드를 먼저 반영한 것이다(#27). 실제 서버는 이 필드가 있으면 거절한다.
+  // 백엔드 형식이 정해지면(API-006 필드 또는 API-009 initial.selections[].stayMin) 이 검사와 mock 테스트를 함께 맞춘다.
   if (body.stayMin !== undefined && (!Number.isInteger(body.stayMin) || body.stayMin <= 0)) return invalid();
   return mutate(tripId, (draft, tripState) => {
     const anchored = body.fromBlockId ? findBlock(draft, body.fromBlockId) : null;
