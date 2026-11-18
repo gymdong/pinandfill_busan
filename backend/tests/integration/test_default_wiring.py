@@ -64,7 +64,8 @@ def test_trip_edit_flow_without_injected_services():
 
 def test_get_trip_returns_conditions_and_projected_schedule():
     with TestClient(create_app()) as client:
-        assert client.get("/api/trips/missing").json()["error"]["id"] == "ERR-016"
+        missing = client.get("/api/trips/missing")
+        assert missing.status_code == 404 and missing.json()["error"]["id"] == "ERR-016"
         trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
         empty = client.get(f"/api/trips/{trip_id}")
         assert empty.status_code == 200 and empty.headers["cache-control"] == "no-store"
@@ -90,6 +91,11 @@ def test_kakao_block_uses_matched_sample_stay_and_rejects_unknown():
         block = blocks(response)[0]
         # 카카오 블록에는 ID·URL 만 남고 이름·좌표는 응답·저장에 없다.
         assert block["place"] == {**matched, "source": "KAKAO"} and block["stayMin"] == 60
+
+        # API-026 조회도 좌표 없이 카카오 블록을 ID·URL 로만 돌려준다.
+        detail = client.get(f"/api/trips/{trip_id}")
+        assert detail.status_code == 200
+        assert detail.json()["schedule"]["days"][0]["blocks"][0]["place"] == {**matched, "source": "KAKAO"}
 
         unknown = {"kakaoPlaceId": "900000009", "placeUrl": "https://place.map.kakao.com/900000009"}
         response = client.post(f"/api/trips/{trip_id}/blocks", json={**FIXED, "place": unknown})
