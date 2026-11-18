@@ -88,6 +88,7 @@ try {
 - HTTP 오류는 모두 `ApiError`로 던진다. `id`, `status`, `message`(사용자 문구), `fields`(항목별 오류)를 가진다.
 - `ERROR_CATALOG`에서 ERR-001~017의 기본 문구를 찾을 수 있다. 서버 문구가 있으면 서버 문구가 우선이다.
 - `delivery: 'inline'`인 항목(ERR-002, ERR-010 등)은 200 응답 안의 값으로 표현되므로 예외가 아니라 화면 상태로 처리한다.
+- ERR-001에 `fields.stayMin`이 있으면 서버가 그 장소의 체류시간을 정할 수 없다는 뜻이다. 그 장소에 '머무를 시간'(`@/features/place-search`의 `STAY_OPTIONS`)을 띄워 다시 보낸다(UI-01·UI-06).
 - 클라이언트가 붙이는 ID는 `NETWORK`, `TIMEOUT`, `UNKNOWN`이다. 성공 응답이어도 본문이 비었거나 JSON이 아니면 `UNKNOWN`으로 던진다(204 제외).
 - 시간 제한은 기본 15초다. 사진 업로드나 AI 해석처럼 오래 걸리는 호출은 `{ timeoutMs: 30_000 }`처럼 호출마다 늘린다.
 
@@ -118,7 +119,7 @@ try {
 | UI-01 코스 만들기 순서 | API-002 → 담은 장소마다 API-006(`dayNo` 필수라 화면에서 일차를 고름) → API-009. 담은 목록을 API-009가 한 번에 받게 되면(PR #18 제안) `features/trip-start/createCourse.ts`만 바꾼다 | 정현빈 |
 | 여행 기간 상한 | 3일(`MAX_TRIP_DAYS`). SRS에 상한이 없어 README의 '1~3일'을 따름 | 김동현 |
 | API-006 장소·삽입 위치 | 백엔드(PR #11)와 맞춤. `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 위치는 `dayNo`(그날 마지막) 또는 `fromBlockId`·`toBlockId`(두 블록 사이). 카카오 ID는 숫자, URL은 `https://place.map.kakao.com/{id}`. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest` | 정현빈 (PR #11 병합) |
-| API-006 `stayMin` | 공공 DB에 없는 카카오 장소에만 사용자가 고른 체류시간(분)을 보낸다(#18 PM 결정 4). 백엔드는 아직 이 필드를 받지 않아 실제 서버에서는 거절되고, mock만 받는다. API-006 필드로 둘지 API-009 `initial.selections[].stayMin`으로 옮길지 정해지면 타입·mock·테스트를 함께 바꾼다 | 정현빈 |
+| API-006 `stayMin` | 백엔드(#25·#28)와 맞춤. 정수 1~1440, 보내면 공공 장소 값보다 먼저 쓰고, `fixedWindow`와 함께 보내면 길이가 같아야 한다. 근거가 없으면 400 ERR-001 `fields.stayMin`. 최초 생성이 API-009 `initial.selections[].stayMin`으로 바뀌면 그쪽으로 옮긴다 | 정현빈 (#25 병합) |
 | 카카오 장소 좌표 전달 | API-006~011 요청의 `sessionCoords`(`kakaoPlaceId` → 좌표). DELETE에도 본문 사용 | 정현빈 |
 | 블록의 카카오 장소 | `place: {source: 'KAKAO', kakaoPlaceId, placeUrl}`, 좌표 없는 구간은 `durationMin: null` | 정현빈·김동현 |
 
