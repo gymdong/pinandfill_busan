@@ -124,7 +124,8 @@ def test_kakao_block_without_stay_source_asks_for_stay_min():
         trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
         response = client.post(f"/api/trips/{trip_id}/blocks", json={**FIXED, "place": KAKAO_UNKNOWN})
         assert response.status_code == 400
-        assert response.json()["error"]["id"] == "ERR-001" and response.json()["error"]["field"] == "stayMin"
+        error = response.json()["error"]
+        assert error["id"] == "ERR-001" and error["fields"] == {"stayMin": error["message"]}
         # 아무것도 저장되지 않았다.
         assert client.get(f"/api/trips/{trip_id}").json()["schedule"]["days"][0]["blocks"] == []
 
@@ -153,7 +154,7 @@ def test_add_block_rejects_invalid_stay_min(stay):
             # 보내지 않은 것과 같다: 표본 값을 쓴다.
             assert response.status_code == 200 and blocks(response)[0]["stayMin"] == 90
         else:
-            assert response.status_code == 400 and "field" not in response.json()["error"]
+            assert response.status_code == 400 and "fields" not in response.json()["error"]
 
 
 def test_add_block_rejects_stay_min_different_from_fixed_window():

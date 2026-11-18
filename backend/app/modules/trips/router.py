@@ -46,12 +46,12 @@ router = APIRouter(prefix="/trips", tags=["trips"])
 
 
 class TripAPIError(Exception):
-    def __init__(self, status: int, error_id: str, message: str, *, field: str | None = None) -> None:
+    def __init__(self, status: int, error_id: str, message: str, *, fields: dict[str, str] | None = None) -> None:
         self.status = status
         self.error_id = error_id
         self.message = message
-        # 화면이 같은 오류 ID 안에서 고칠 입력을 고를 때 쓰는 요청 필드명(선택). 요청 값은 넣지 않는다.
-        self.field = field
+        # ERR-001 의 항목별 오류(요청 필드명 → 안내 문구). 프런트 ApiError.fields 와 같은 형식, 요청 값은 넣지 않는다.
+        self.fields = fields
 
 
 def trip_service(request: Request) -> TripService:
@@ -82,10 +82,9 @@ def translate_error(exc: Exception) -> TripAPIError:
     if isinstance(exc, EngineInputError):
         return TripAPIError(400, "ERR-001", "블록 식별자·순서·삽입 구간 또는 dayNo를 확인해 주세요.")
     if isinstance(exc, StayDurationRequiredError):
-        # SDD 8장에 전용 ID 가 없어 ERR-001 을 쓰고, field 로 '체류시간 입력 필요'를 구분한다.
-        return TripAPIError(
-            400, "ERR-001", "체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.", field="stayMin"
-        )
+        # SDD 8장에 전용 ID 가 없어 ERR-001 을 쓰고, fields.stayMin 으로 '체류시간 입력 필요'를 구분한다.
+        message = "체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요."
+        return TripAPIError(400, "ERR-001", message, fields={"stayMin": message})
     if isinstance(exc, PolicyRequiredError):
         return TripAPIError(
             400, "ERR-001", "명시적 삽입 구간·시작 시각·체류시간이 필요하며 자동 배치 옵션은 지원하지 않습니다."

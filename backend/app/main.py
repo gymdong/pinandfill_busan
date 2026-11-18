@@ -91,9 +91,9 @@ def create_app(
 
     @application.exception_handler(TripAPIError)
     async def trip_error(request: Request, exc: TripAPIError) -> JSONResponse:
-        error: dict[str, str] = {"id": exc.error_id, "message": exc.message}
-        if exc.field is not None:
-            error["field"] = exc.field
+        error: dict[str, object] = {"id": exc.error_id, "message": exc.message}
+        if exc.fields is not None:
+            error["fields"] = exc.fields
         return JSONResponse(
             status_code=exc.status,
             content={"error": error},
