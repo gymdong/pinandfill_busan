@@ -64,6 +64,44 @@ describe('mockRequest', () => {
     expect(undone.schedule).toEqual(moved.schedule);
   });
 
+  it('같은 값으로 바꾸는 편집은 저장도 되돌리기 지점 기록도 하지 않는다', async () => {
+    const original = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: TRIP });
+    const [first, second] = original.schedule.days[0]!.blocks;
+    await mockRequest({ method: 'PATCH', path: BLOCK, body: { stayMin: 55 } });
+    const afterEdit = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: TRIP });
+    const sameStay = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: BLOCK, body: { stayMin: 55 } });
+    const sameSeq = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: BLOCK, body: { seq: 2 } });
+    const sameFixed = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: `${TRIP}/blocks/${first!.id}`, body: { isFixed: true } });
+    for (const result of [sameStay, sameSeq, sameFixed]) expect(result.schedule).toEqual(afterEdit.schedule);
+    expect(second!.id).toBe(BLOCK_ID);
+    // 되돌리기는 마지막 실제 편집(stayMin 55)을 취소한다.
+    const undone = await mockRequest<UndoResponse>({ method: 'POST', path: `${TRIP}/undo` });
+    expect(undone.schedule).toEqual(original.schedule);
+  });
+
+  it('고정 해제는 도착 시각을 유지하고 출발을 도착+체류로 다시 정해 뒤 블록만 재계산한다', async () => {
+    const original = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: TRIP });
+    const [first, second] = original.schedule.days[0]!.blocks;
+    const result = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: `${TRIP}/blocks/${first!.id}`, body: { isFixed: false } });
+    const [unfixed, next] = result.schedule.days[0]!.blocks;
+    expect(unfixed).toMatchObject({ isFixed: false, fixedStart: null, fixedEnd: null, arriveAt: first!.arriveAt, departAt: '11:30' });
+    expect(next).toMatchObject({ id: second!.id, arriveAt: null, departAt: null });
+    await mockRequest({ method: 'POST', path: `${TRIP}/undo` });
+  });
+
+  it('고정 해제 후 출발이 자정을 넘기면 출발을 비운다', async () => {
+    const late = structuredClone(fixtureSchedule);
+    Object.assign(late.days[0]!.blocks[0]!, { arriveAt: '23:00', stayMin: 90 });
+    resetMockSchedule(late);
+    const result = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: `${TRIP}/blocks/${late.days[0]!.blocks[0]!.id}`, body: { isFixed: false } });
+    expect(result.schedule.days[0]!.blocks[0]).toMatchObject({ arriveAt: '23:00', departAt: null });
+  });
+
+  it('지정 시각이 없는 블록을 고정하면 ERR-001이고 되돌리기 지점을 남기지 않는다', async () => {
+    await expect(mockRequest({ method: 'PATCH', path: BLOCK, body: { isFixed: true } })).rejects.toMatchObject({ id: 'ERR-001' });
+    await expect(mockRequest({ method: 'POST', path: `${TRIP}/undo` })).rejects.toMatchObject({ id: 'ERR-001' });
+  });
+
   it('여행별 목 편집 상태를 분리한다', async () => {
     await mockRequest({ method: 'PATCH', path: BLOCK, body: { stayMin: 55 } });
     const other = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: '/trips/t2' });
