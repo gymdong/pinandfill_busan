@@ -22,6 +22,16 @@ def no_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.modules.trips.intake.build_interpret_service", rule_only)
 
 
+@pytest.fixture(autouse=True)
+def no_real_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """backend/.env 에 키가 있어도 기본 구성이 실제 카카오·TMAP·ODsay 를 부르지 않게 한다.
+
+    환경변수가 .env 보다 우선하므로 빈 값으로 두면 기본 구성은 키가 없는 것으로 본다.
+    """
+    for name in ("KAKAO_REST_API_KEY", "TMAP_API_KEY", "ODSAY_API_KEY"):
+        monkeypatch.setenv(name, "")
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     with TestClient(create_app(Settings(app_name="Backend test"))) as test_client:

@@ -30,20 +30,28 @@ from app.modules.trips.schemas import (
     ScheduleMutationResponse,
     SuggestWaypointsRequest,
     SuggestWaypointsResponse,
+    TripDetailResponse,
     UndoRequest,
     UndoResponse,
     UpdateBlockRequest,
 )
-from app.modules.trips.service import FixedScheduleConflictError, TripNotFoundError, TripService
+from app.modules.trips.service import (
+    FixedScheduleConflictError,
+    StayDurationRequiredError,
+    TripNotFoundError,
+    TripService,
+)
 
 router = APIRouter(prefix="/trips", tags=["trips"])
 
 
 class TripAPIError(Exception):
-    def __init__(self, status: int, error_id: str, message: str) -> None:
+    def __init__(self, status: int, error_id: str, message: str, *, field: str | None = None) -> None:
         self.status = status
         self.error_id = error_id
         self.message = message
+        # 화면이 같은 오류 ID 안에서 고칠 입력을 고를 때 쓰는 요청 필드명(선택). 요청 값은 넣지 않는다.
+        self.field = field
 
 
 def trip_service(request: Request) -> TripService:
@@ -73,6 +81,11 @@ def translate_error(exc: Exception) -> TripAPIError:
         return TripAPIError(400, "ERR-001", "기존 일정의 순서값을 별도 정규화한 뒤 다시 편집해 주세요.")
     if isinstance(exc, EngineInputError):
         return TripAPIError(400, "ERR-001", "블록 식별자·순서·삽입 구간 또는 dayNo를 확인해 주세요.")
+    if isinstance(exc, StayDurationRequiredError):
+        # SDD 8장에 전용 ID 가 없어 ERR-001 을 쓰고, field 로 '체류시간 입력 필요'를 구분한다.
+        return TripAPIError(
+            400, "ERR-001", "체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.", field="stayMin"
+        )
     if isinstance(exc, PolicyRequiredError):
         return TripAPIError(
             400, "ERR-001", "명시적 삽입 구간·시작 시각·체류시간이 필요하며 자동 배치 옵션은 지원하지 않습니다."
@@ -80,6 +93,15 @@ def translate_error(exc: Exception) -> TripAPIError:
     if isinstance(exc, NeedsConfirmationError):
         return TripAPIError(503, "ERR-017", "일정 계산에 필요한 장소·경로 정보를 확인해 주세요.")
     return TripAPIError(503, "ERR-017", "일정 계산을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+
+
+@router.get("/{trip_id}", response_model=TripDetailResponse)
+def get_trip(trip_id: str, response: Response, service: Service) -> TripDetailResponse:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return service.detail(trip_id)
+    except Exception as exc:
+        raise translate_error(exc) from None
 
 
 @router.post("/{trip_id}/blocks", response_model=ScheduleMutationResponse)

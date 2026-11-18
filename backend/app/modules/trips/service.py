@@ -20,6 +20,9 @@ from app.modules.trips.schemas import (
     ScheduleMutationResponse,
     SuggestWaypointsRequest,
     SuggestWaypointsResponse,
+    TripDates,
+    TripDetail,
+    TripDetailResponse,
     UndoRequest,
     UndoResponse,
     UpdateBlockRequest,
@@ -32,6 +35,10 @@ class TripNotFoundError(Exception):
 
 class FixedScheduleConflictError(Exception):
     """No payload attached: request coordinates must never escape through errors."""
+
+
+class StayDurationRequiredError(PolicyRequiredError):
+    """요청 stayMin 도, 공공 장소 기본 체류시간도 없다. 화면이 체류시간을 입력받아 다시 보낸다."""
 
 
 class TripService:
@@ -61,6 +68,25 @@ class TripService:
             if self.recommender is None:
                 raise NeedsConfirmationError("Waypoint providers are not configured")
             return self.recommender.suggest(record, request, calculation_context(request))
+
+    def detail(self, trip_id: str) -> TripDetailResponse:
+        """API-026. 저장된 일정을 다시 계산하지 않고 투영한다(경로 조회 없음). GET 이라 카카오 좌표는 받지 않는다."""
+        with self._lock:
+            record = self._get(trip_id)
+            result = self.engine.project(
+                ValidateInput(trip=record.trip, schedule=record.schedule), context=CalculationContext()
+            )
+            trip = record.trip
+            return TripDetailResponse(
+                trip=TripDetail(
+                    id=trip_id,
+                    dates=TripDates(start=trip.start_date, end=trip.end_date),
+                    day_start=trip.day_start,
+                    day_end=trip.day_end,
+                    mode=trip.transport_mode,
+                ),
+                schedule=result.schedule,
+            )
 
     def _get(self, trip_id: str) -> TripRecord:
         record = self.repository.get(trip_id)
@@ -119,9 +145,10 @@ class TripService:
     def insert(self, trip_id: str, request: AddBlockRequest) -> ScheduleMutationResponse:
         with self._lock:
             record = self._get(trip_id)
-            stay = self.stay_duration(request.place)
+            # 사용자 지정 → 공공 장소 값 순서. 둘 다 없으면 기본값을 만들지 않는다(#18 PM 결정 4).
+            stay = request.stay_min if request.stay_min is not None else self.stay_duration(request.place)
             if stay is None:
-                raise PolicyRequiredError("Stay duration needs an agreed source")
+                raise StayDurationRequiredError("Stay duration needs a user value or a public place value")
             command = insert_command(request, record.trip, record.schedule, stay_min=stay)
             result = self.engine.insert(command, context=calculation_context(request))
             return self._commit_edit(trip_id, record, result)
