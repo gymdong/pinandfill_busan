@@ -40,7 +40,7 @@ describe('코스 타임라인', () => {
     const add = vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] });
     render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
     await screen.findByText('코스 타임라인');
-    await userEvent.click(screen.getAllByRole('button', { name: '이 구간에 경유지 추가' })[0]!);
+    await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 찾기' })[0]!);
     const slot = screen.getByRole('region', { name: '경유지 추가' });
     await userEvent.type(within(slot).getByLabelText('장소 검색'), '민락');
     await userEvent.click(within(slot).getByRole('button', { name: '검색' }));
@@ -108,24 +108,72 @@ describe('코스 타임라인', () => {
     const add = vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] });
     render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
     await screen.findByText('코스 타임라인');
+    await userEvent.click(screen.getByRole('button', { name: '장소 추가' }));
     await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
     await userEvent.click(screen.getByRole('button', { name: '검색' }));
     await userEvent.click(await screen.findByRole('button', { name: '추가' }));
     expect(placesApi.search).toHaveBeenCalledWith({ q: '민락' });
     expect(add).toHaveBeenCalledWith('t1', { place: { placeId: searchItems[0]!.placeId }, isFixed: false, origin: 'USER', dayNo: 1 });
   });
-  it('여러 날 일정에서는 고른 일차의 마지막에 추가한다', async () => {
+  it('여러 날 일정에서는 보고 있는 일차의 마지막에 추가한다', async () => {
     const twoDays = { ...schedule, days: [schedule.days[0]!, { ...schedule.days[0]!, dayNo: 2, blocks: [], legs: [] }] };
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule: twoDays });
     vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
     const add = vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule: twoDays, violations: [] });
     render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
     await screen.findByText('코스 타임라인');
-    await userEvent.selectOptions(screen.getByLabelText('추가할 일차'), '2');
+    await userEvent.click(screen.getByRole('button', { name: '2일차' }));
+    expect(screen.getByRole('heading', { name: /2일차/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '장소 추가' }));
     await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
     await userEvent.click(screen.getByRole('button', { name: '검색' }));
     await userEvent.click(await screen.findByRole('button', { name: '추가' }));
     expect(add).toHaveBeenCalledWith('t1', expect.objectContaining({ dayNo: 2 }));
+  });
+  it('블록을 편집해도 열어 둔 장소 추가 패널은 닫지 않고, 추가가 성공하면 닫는다', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    vi.spyOn(tripsApi, 'updateBlock').mockResolvedValue({ schedule, violations: [] });
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
+    vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    await userEvent.click(screen.getByRole('button', { name: '장소 추가' }));
+    await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
+    await userEvent.click(screen.getByRole('button', { name: /감천/ }));
+    await userEvent.click(screen.getByRole('button', { name: '체류시간 변경' }));
+    await waitFor(() => expect(tripsApi.updateBlock).toHaveBeenCalled());
+    expect(screen.getByLabelText('장소 검색')).toHaveValue('민락');
+    await userEvent.click(screen.getByRole('button', { name: '검색' }));
+    await userEvent.click(await screen.findByRole('button', { name: '추가' }));
+    await waitFor(() => expect(screen.queryByLabelText('장소 검색')).not.toBeInTheDocument());
+  });
+  it('혼잡 신호가 없는 블록은 정보 부족으로 표시하고, 블록 경고 칩은 알림으로 읽지 않는다', async () => {
+    const noCrowd = { ...schedule, days: [{ ...schedule.days[0]!, crowd: [] }] };
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule: noCrowd });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    expect(screen.getAllByText('정보 부족')).toHaveLength(noCrowd.days[0]!.blocks.length);
+    const [warning] = noCrowd.days[0]!.blocks.flatMap((block) => block.warnings);
+    expect(screen.getByText(warning!.cause)).not.toHaveAttribute('role');
+    // 칩 대신 요약 카드가 이 날 카드 경고 수를 한 번에 알린다.
+    const onCards = noCrowd.days[0]!.blocks.reduce((count, block) => count + block.warnings.length, 0);
+    expect(screen.getByRole('alert', { name: '일정 확인 필요' })).toHaveTextContent(`확인 필요 ${onCards}건`);
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('장소 추가가 실패하면 추가 패널과 검색 결과를 그대로 두고 오류를 보여 준다', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
+    vi.spyOn(tripsApi, 'addBlock').mockRejectedValue(new Error('추가 실패'));
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    await userEvent.click(screen.getByRole('button', { name: '장소 추가' }));
+    await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
+    await userEvent.click(screen.getByRole('button', { name: '검색' }));
+    await userEvent.click(await screen.findByRole('button', { name: '추가' }));
+    await waitFor(() => expect(tripsApi.addBlock).toHaveBeenCalled());
+    expect(screen.getByLabelText('장소 검색')).toHaveValue('민락');
+    expect(screen.getByRole('button', { name: '추가' })).toBeInTheDocument();
   });
   it('서버 일정을 보여 주고 편집 응답의 새 일정을 반영한다', async () => {
     vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
@@ -141,7 +189,7 @@ describe('코스 타임라인', () => {
     await userEvent.clear(screen.getByLabelText('체류시간(분)'));
     await userEvent.type(screen.getByLabelText('체류시간(분)'), '120');
     await userEvent.click(screen.getByRole('button', { name: '체류시간 변경' }));
-    expect(await screen.findByText(/체류 120분/)).toBeInTheDocument();
+    expect(await screen.findByText(/체류 2시간/)).toBeInTheDocument();
     expect(tripsApi.updateBlock).toHaveBeenCalledWith('t1', schedule.days[0]!.blocks[0]!.id, { stayMin: 120 });
   });
 });
