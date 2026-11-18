@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { toApiError, tripsApi } from '@/api';
 import { paths } from '@/app/paths';
 import { Badge, Banner, Button } from '@/components';
-import { PlaceSearch, pinnedBadgeKind, toPinnedPlace } from '@/features/place-search';
+import { PlaceSearch, STAY_OPTIONS, pinnedBadgeKind, toPinnedPlace } from '@/features/place-search';
 import {
   DEFAULT_CONDITIONS,
   MODE_OPTIONS,
@@ -14,12 +14,13 @@ import {
 } from '@/features/trip-start/conditions';
 import {
   CourseIncompleteError,
-  STAY_OPTIONS,
   createCourse,
+  stayRequired,
   validatePlans,
   type CourseProgress,
+  type StayAsked,
 } from '@/features/trip-start/createCourse';
-import { needsStayInput, pinnedKey, planOf, useTripDraft, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
+import { pinnedKey, planOf, useTripDraft, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
 import { formatDate, formatDuration } from '@/utils/format';
 import styles from './TripStartPage.module.css';
 
@@ -50,7 +51,10 @@ export default function TripStartPage() {
   const [pending, setPending] = useState<PendingTrip | null>(null);
   const startDateRef = useRef<HTMLInputElement>(null);
   // 장소 추가가 중간에 실패한 여행. 같은 입력으로 다시 시도하면 새 여행을 만들지 않고 이어 간다.
-  const unfinished = useRef<{ progress: CourseProgress; inputKey: string } | null>(null);
+  // 실패한 장소(`failedKey`)의 체류시간은 바꿔도 이어 간다(서버가 체류시간을 요구한 경우).
+  const unfinished = useRef<{ progress: CourseProgress; inputKey: string; failedKey: string } | null>(null);
+  // 서버가 체류시간 근거가 없다고 알려 준(fields.stayMin) 장소. 공공 DB 장소라도 머무를 시간을 고른다.
+  const [stayAsked, setStayAsked] = useState<StayAsked>(new Set());
 
   // 여행 기간을 줄이면 사라진 일차에 둔 장소는 마지막 날로 옮겨 보여 준다.
   const effectivePlans = useMemo(() => {
@@ -65,8 +69,13 @@ export default function TripStartPage() {
   const pickedKeys = useMemo(() => new Set(pinned.map(pinnedKey)), [pinned]);
   const validation = validateConditions(draft);
   const errors = showErrors && !validation.ok ? validation.errors : {};
-  const planErrors = showErrors ? validatePlans(pinned, effectivePlans, dayCount) : {};
-  const inputKey = JSON.stringify([draft, pinned.map(pinnedKey), effectivePlans]);
+  const planErrors = showErrors ? validatePlans(pinned, effectivePlans, dayCount, stayAsked) : {};
+  const inputKeyOf = (ignoreStayOf?: string) => JSON.stringify([
+    draft,
+    pinned.map(pinnedKey),
+    ignoreStayOf ? { ...effectivePlans, [ignoreStayOf]: { ...effectivePlans[ignoreStayOf], stayMin: null } } : effectivePlans,
+  ]);
+  const inputKey = inputKeyOf();
   const pendingTrip = pending?.inputKey === inputKey ? pending : null;
 
   async function interpret(event: FormEvent) {
@@ -103,20 +112,26 @@ export default function TripStartPage() {
   async function submit() {
     setShowErrors(true);
     setSubmitError(null);
-    if (!validation.ok || Object.keys(validatePlans(pinned, effectivePlans, dayCount)).length > 0) {
+    if (!validation.ok || Object.keys(validatePlans(pinned, effectivePlans, dayCount, stayAsked)).length > 0) {
       setSubmitError('입력한 내용을 다시 확인해 주세요.');
       return;
     }
     setSubmitting(true);
     try {
-      const resume = unfinished.current?.inputKey === inputKey ? unfinished.current.progress : undefined;
-      const { tripId, scheduleError } = await createCourse(validation.value, pinned, effectivePlans, resume);
+      const last = unfinished.current;
+      const resume = last && last.inputKey === inputKeyOf(last.failedKey) ? last.progress : undefined;
+      const { tripId, scheduleError } = await createCourse(validation.value, pinned, effectivePlans, resume, stayAsked);
       unfinished.current = null;
       if (scheduleError) setPending({ tripId, message: scheduleError.message, inputKey });
       else goToTimeline(tripId);
     } catch (error) {
       if (error instanceof CourseIncompleteError) {
-        unfinished.current = { progress: error.progress, inputKey };
+        unfinished.current = { progress: error.progress, inputKey: inputKeyOf(error.failedKey), failedKey: error.failedKey };
+        if (error.apiError.fields?.stayMin) {
+          // 서버가 그 장소의 체류시간을 정할 수 없다고 하면 머무를 시간 칸을 띄운다(#18 PM 결정 4).
+          const failedKey = error.failedKey;
+          setStayAsked((prev) => new Set(prev).add(failedKey));
+        }
         setSubmitError(`${error.apiError.message} 다시 누르면 남은 장소부터 이어서 담아요.`);
       } else {
         unfinished.current = null;
@@ -274,6 +289,7 @@ export default function TripStartPage() {
                   key={key}
                   place={place}
                   plan={planOf(effectivePlans, key)}
+                  askStay={stayRequired(place, stayAsked)}
                   dayCount={dayCount}
                   startDate={conditions.dates?.start}
                   error={planErrors[key]}
@@ -320,9 +336,11 @@ export default function TripStartPage() {
   );
 }
 
-function PinnedItem({ place, plan, dayCount, startDate, error, onPlan, onRemove }: {
+function PinnedItem({ place, plan, askStay, dayCount, startDate, error, onPlan, onRemove }: {
   place: PinnedPlace;
   plan: PinnedPlan;
+  /** 머무를 시간을 고르게 할지: 공공 DB에 없는 카카오 장소이거나 서버가 체류시간을 요구한 장소 */
+  askStay: boolean;
   dayCount: number;
   startDate: string | undefined;
   error: string | undefined;
@@ -375,8 +393,8 @@ function PinnedItem({ place, plan, dayCount, startDate, error, onPlan, onRemove 
           </>
         ) : (
           <>
-            {needsStayInput(place) && (
-              // 공공 DB에 없는 장소는 서버가 체류시간을 정할 근거가 없어 직접 고른다. 기본값은 두지 않는다.
+            {askStay && (
+              // 서버가 체류시간을 정할 근거가 없는 장소는 직접 고른다. 기본값은 두지 않는다.
               <select
                 className={styles.field}
                 aria-label={`${place.name} 머무를 시간`}
