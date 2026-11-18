@@ -14,12 +14,13 @@ import {
 } from '@/features/trip-start/conditions';
 import {
   CourseIncompleteError,
+  STAY_OPTIONS,
   createCourse,
   validatePlans,
   type CourseProgress,
 } from '@/features/trip-start/createCourse';
-import { pinnedKey, planOf, useTripDraft, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
-import { formatDate } from '@/utils/format';
+import { needsStayInput, pinnedKey, planOf, useTripDraft, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
+import { formatDate, formatDuration } from '@/utils/format';
 import styles from './TripStartPage.module.css';
 
 type InterpretStatus = 'idle' | 'loading' | 'done' | 'needsForm';
@@ -373,9 +374,24 @@ function PinnedItem({ place, plan, dayCount, startDate, error, onPlan, onRemove 
             <button type="button" className={styles.textButton} onClick={() => onPlan({ fixed: null })}>시간 빼기</button>
           </>
         ) : (
-          <button type="button" className={styles.textButton} onClick={() => onPlan({ fixed: { start: '', end: '' } })}>
-            시간 정하기
-          </button>
+          <>
+            {needsStayInput(place) && (
+              // 공공 DB에 없는 장소는 서버가 체류시간을 정할 근거가 없어 직접 고른다. 기본값은 두지 않는다.
+              <select
+                className={styles.field}
+                aria-label={`${place.name} 머무를 시간`}
+                aria-invalid={Boolean(error)}
+                value={plan.stayMin ?? ''}
+                onChange={(event) => onPlan({ stayMin: event.target.value ? Number(event.target.value) : null })}
+              >
+                <option value="">머무를 시간</option>
+                {STAY_OPTIONS.map((minutes) => <option key={minutes} value={minutes}>{formatDuration(minutes)}</option>)}
+              </select>
+            )}
+            <button type="button" className={styles.textButton} onClick={() => onPlan({ fixed: { start: '', end: '' } })}>
+              시간 정하기
+            </button>
+          </>
         )}
       </div>
       {error && <p className={styles.error} role="alert">{error}</p>}

@@ -124,6 +124,7 @@ function addEmptyDay(draft: Schedule, dayNo: number, trip: Trip): ScheduleDay {
 
 function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationResponse {
   if (!body?.place) return invalid();
+  if (body.stayMin !== undefined && (!Number.isInteger(body.stayMin) || body.stayMin <= 0)) return invalid();
   return mutate(tripId, (draft, tripState) => {
     const anchored = body.fromBlockId ? findBlock(draft, body.fromBlockId) : null;
     // 백엔드와 동일: 앵커가 있으면 앵커의 일차, 없으면 dayNo → fixedWindow.dayNo, 모두 없으면 ERR-001
@@ -147,7 +148,8 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
       id: `00000000-0000-4000-8000-${String(tripState.nextBlockNumber++).padStart(12, '0')}`,
       dayNo, seq: index + 1, place, isFixed: body.isFixed,
       fixedStart: body.fixedWindow?.start ?? null, fixedEnd: body.fixedWindow?.end ?? null,
-      stayMin: 40, arriveAt: body.fixedWindow?.start ?? null,
+      // 사용자가 정한 체류시간이 있으면 쓰고, 없으면 목업 장소값(40분)을 쓴다.
+      stayMin: body.stayMin ?? 40, arriveAt: body.fixedWindow?.start ?? null,
       departAt: body.fixedWindow?.end ?? null, origin: body.origin, warnings: [],
     };
     day.blocks.splice(index, 0, block);

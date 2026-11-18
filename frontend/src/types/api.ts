@@ -318,6 +318,12 @@ export interface AddBlockRequest extends WithSessionCoords {
   fixedWindow?: { dayNo: number; start: LocalTime; end: LocalTime };
   origin: BlockOrigin;
   /**
+   * @provisional 사용자가 정한 체류시간(분). 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소)에만 보낸다.
+   * 서버는 기본값을 만들지 않는다(#18 PM 결정 4). 백엔드 API-006은 아직 이 필드를 받지 않아(PR #25 리뷰에서 요청),
+   * 최초 생성이 API-009 `initial.selections[].stayMin`으로 바뀌면 그쪽으로 옮긴다.
+   */
+  stayMin?: number;
+  /**
    * 경유지를 넣을 인접한 두 블록. 둘을 함께 보내야 하며 이웃하지 않으면 ERR-001.
    * 생략하면 `dayNo`의 마지막에 붙는다.
    */

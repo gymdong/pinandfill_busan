@@ -29,13 +29,17 @@ function setDates(start: string, end: string) {
   fireEvent.change(screen.getByLabelText('여행 종료일'), { target: { value: end } });
 }
 
-/** '민락'을 검색해 결과 세 곳(공공 DB 2곳, 카카오 1곳)을 모두 담는다. */
-async function pinAllSearchResults() {
+/**
+ * '민락'을 검색해 결과 세 곳(공공 DB 2곳, 카카오 1곳)을 모두 담는다.
+ * 카카오 장소는 체류시간 근거가 없어 기본으로 머무를 시간 90분을 고른다(`stay: null`이면 고르지 않는다).
+ */
+async function pinAllSearchResults({ stay = '90' }: { stay?: string | null } = {}) {
   vi.spyOn(placesApi, 'search').mockResolvedValue({ places: searchItems });
   await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
   await userEvent.click(screen.getByRole('button', { name: '검색' }));
   const results = await screen.findByRole('list', { name: '검색 결과' });
   for (const button of within(results).getAllByRole('button')) await userEvent.click(button);
+  if (stay) await userEvent.selectOptions(screen.getByLabelText(`${searchItems[2]!.name} 머무를 시간`), stay);
 }
 
 function mockCourseApis() {
@@ -173,6 +177,7 @@ describe('UI-01 여행 시작', () => {
           dayNo: 1,
           place: { kakaoPlaceId: searchItems[2]!.kakaoPlaceId, placeUrl: searchItems[2]!.placeUrl },
           origin: 'USER',
+          stayMin: 90,
           isFixed: false,
         },
       ]);
@@ -212,6 +217,45 @@ describe('UI-01 여행 시작', () => {
       await userEvent.click(screen.getByRole('button', { name: '시간 빼기' }));
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
       await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    });
+
+    it('공공 DB에 없는 카카오 장소는 머무를 시간을 고르지 않으면 요청하지 않는다(#18 PM 결정 4)', async () => {
+      const { create, addBlock } = mockCourseApis();
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults({ stay: null });
+
+      // 공공 DB 장소는 서버가 장소별 체류시간을 써서 고르는 칸이 없다. 기본값도 고르지 않은 상태다.
+      expect(screen.queryByLabelText(`${searchItems[0]!.name} 머무를 시간`)).not.toBeInTheDocument();
+      const stay = screen.getByLabelText(`${searchItems[2]!.name} 머무를 시간`);
+      expect(stay).toHaveValue('');
+
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(screen.getByText('머무를 시간을 골라 주세요.')).toBeInTheDocument();
+      expect(stay).toHaveAttribute('aria-invalid', 'true');
+      expect(create).not.toHaveBeenCalled();
+
+      await userEvent.selectOptions(stay, '120');
+      expect(screen.queryByText('머무를 시간을 골라 주세요.')).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+      expect(addBlock.mock.calls.at(-1)![1]).toMatchObject({ stayMin: 120, isFixed: false });
+    });
+
+    it('카카오 장소의 시간을 정하면 머무를 시간 칸 없이 그 시간을 체류시간으로 보낸다', async () => {
+      const { addBlock } = mockCourseApis();
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults({ stay: null });
+      const name = searchItems[2]!.name;
+      await userEvent.click(screen.getAllByRole('button', { name: '시간 정하기' })[2]!);
+      expect(screen.queryByLabelText(`${name} 머무를 시간`)).not.toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText(`${name} 도착 시각`), { target: { value: '15:00' } });
+      fireEvent.change(screen.getByLabelText(`${name} 출발 시각`), { target: { value: '16:30' } });
+
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      await waitFor(() => expect(addBlock).toHaveBeenCalledTimes(3));
+      expect(addBlock.mock.calls[2]![1]).toMatchObject({ stayMin: 90, isFixed: true });
     });
 
     it('여행 기간을 줄이면 사라진 일차의 장소는 마지막 날로 보낸다', async () => {
