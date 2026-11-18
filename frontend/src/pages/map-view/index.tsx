@@ -5,7 +5,7 @@ import { rememberKakaoPlace, resolveBlockPlace } from '@/api/kakaoSession';
 import { paths } from '@/app/paths';
 import { Badge, Button, EmptyState, ErrorState, LoadingState } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
-import { STAY_OPTIONS } from '@/features/trip-start/createCourse';
+import { STAY_OPTIONS } from '@/features/place-search';
 import { blockRole, formatDuration, legBetween, legLabel, scheduleLevelViolations } from '@/features/itinerary/format';
 import { BackIcon, LockIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
