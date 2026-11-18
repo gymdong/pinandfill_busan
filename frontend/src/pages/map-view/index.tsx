@@ -77,7 +77,7 @@ function MapViewContent({ tripId }: { tripId: string }) {
   const alerts = [...visibleViolations.map((item) => item.cause), ...currentSchedule.conflicts.map((item) => item.cause)];
 
   return <main className={styles.page}>
-    <h1 className={styles.srOnly}>지도 보기</h1>
+    <h1 className="sr-only">지도 보기</h1>
     <KakaoMap className={styles.map} blocks={blocks} legs={day.legs} selectedId={selectedId} onSelect={setSelectedId} onLongPress={findNearby} />
 
     <div className={styles.overlay}>
@@ -139,7 +139,7 @@ function MapViewContent({ tripId }: { tripId: string }) {
             <button type="button" className={styles.stop} aria-pressed={selectedId === block.id} onClick={() => setSelectedId(block.id)}>
               <span className={styles.stopNo} aria-hidden="true">{index + 1}</span>
               <span className={styles.stopBody}>
-                <span className={styles.stopName}>{place?.name ?? '다시 선택 필요'}{block.isFixed ? <span className={styles.stopLock}><LockIcon /><span className={styles.srOnly}>고정</span></span> : null}</span>
+                <span className={styles.stopName}>{place?.name ?? '다시 선택 필요'}{block.isFixed ? <span className={styles.stopLock}><LockIcon /><span className="sr-only">고정</span></span> : null}</span>
                 <span className={styles.stopMeta}>{blockRole(block)} · 체류 {formatDuration(block.stayMin)}</span>
                 <span className={styles.badges}>
                   <CrowdBadge {...crowdOf(block.id)} />

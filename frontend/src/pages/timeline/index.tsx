@@ -75,7 +75,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const selectDay = (next: number) => { setDayNo(next); setSelected(null); setSlot(null); };
 
   return <main className={styles.page}>
-    <h1 className={styles.srOnly}>코스 타임라인</h1>
+    <h1 className="sr-only">코스 타임라인</h1>
     <header className={styles.top}>
       <Link to={paths.tripStart()} className={styles.iconButton} aria-label="여행 시작으로"><BackIcon /></Link>
       <div className={styles.titles}>
@@ -167,7 +167,7 @@ function BlockCard({ block, crowd, selected, onSelect, children }: {
         <span className={styles.placeName}>{resolved?.name ?? '다시 선택 필요'}</span>
         <span className={styles.meta}>{blockRole(block)} · 체류 {formatDuration(block.stayMin)}</span>
       </span>
-      {block.isFixed && <span className={styles.lock}><LockIcon /><span className={styles.srOnly}>고정</span></span>}
+      {block.isFixed && <span className={styles.lock}><LockIcon /><span className="sr-only">고정</span></span>}
     </button>
     <div className={styles.cardExtras}>
       {/* 혼잡 신호가 없는 블록도 '정보 부족'으로 표시한다(NFR-012, 지도 화면과 같음). */}

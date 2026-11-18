@@ -81,10 +81,12 @@ function invalid(): never {
 
 interface AffectedRange { dayNo: number; startIndex: number }
 
-function mutate(tripId: string, change: (draft: Schedule, state: MockTripState) => AffectedRange): ScheduleMutationResponse {
+function mutate(tripId: string, change: (draft: Schedule, state: MockTripState) => AffectedRange | null): ScheduleMutationResponse {
   const tripState = state(tripId);
   const draft = snapshot(tripId);
   const affected = change(draft, tripState);
+  // 백엔드와 같이 값이 그대로인 편집은 저장도 되돌리기 지점 기록도 하지 않고 현재 일정을 돌려준다.
+  if (!affected) return { schedule: snapshot(tripId), violations: structuredClone(draft.violations) };
   tripState.previous = snapshot(tripId);
   // The mock cannot calculate travel/opening hours. Preserve only the unaffected prefix.
   draft.violations = [{ type: 'MOCK_RECALC_PENDING', cause: '목업에서는 변경 후 이동·영업시간을 재계산하지 않습니다.' }];
@@ -155,21 +157,44 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
   });
 }
 
+function visitEnd(arriveAt: string | null, stayMin: number): string | null {
+  if (!arriveAt) return null;
+  const [hour = 0, minute = 0] = arriveAt.split(':').map(Number);
+  const end = hour * 60 + minute + stayMin;
+  return end < 24 * 60 ? `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}` : null;
+}
+
 function updateBlock(tripId: string, blockId: string, body: UpdateBlockRequest): ScheduleMutationResponse {
   if (!body || !Object.keys(body).some((key) => ['isFixed', 'seq', 'stayMin'].includes(key))) return invalid();
   return mutate(tripId, (draft) => {
     const { day, index, block } = findBlock(draft, blockId);
     if ('seq' in body) {
       if (!Number.isInteger(body.seq) || body.seq < 1 || body.seq > day.blocks.length) return invalid();
+      if (body.seq === index + 1) return null;
       day.blocks.splice(index, 1);
       day.blocks.splice(body.seq - 1, 0, block);
       return { dayNo: day.dayNo, startIndex: Math.min(index, body.seq - 1) };
     } else if ('stayMin' in body) {
       if (!Number.isInteger(body.stayMin) || body.stayMin <= 0) return invalid();
+      if (body.stayMin === block.stayMin) return null;
       block.stayMin = body.stayMin;
     } else if ('isFixed' in body) {
-      block.isFixed = body.isFixed;
-      if (!body.isFixed) { block.fixedStart = null; block.fixedEnd = null; }
+      if (body.isFixed === block.isFixed) return null;
+      if (body.isFixed) {
+        // 지정 시각이 없으면 고정할 수 없다(백엔드 ERR-001).
+        if (!block.fixedStart || !block.fixedEnd) return invalid();
+        // 백엔드처럼 지정 시각을 도착·출발 시각으로 쓴다.
+        block.isFixed = true;
+        block.arriveAt = block.fixedStart;
+        block.departAt = block.fixedEnd;
+      } else {
+        // 지정 시각만 지우고 도착 시각은 유지한다. 출발 = 도착 + 체류, 자정을 넘기면 null. 뒤 블록만 다시 계산한다.
+        block.isFixed = false;
+        block.fixedStart = null;
+        block.fixedEnd = null;
+        block.departAt = visitEnd(block.arriveAt, block.stayMin);
+        return { dayNo: day.dayNo, startIndex: index + 1 };
+      }
     }
     return { dayNo: day.dayNo, startIndex: index };
   });
