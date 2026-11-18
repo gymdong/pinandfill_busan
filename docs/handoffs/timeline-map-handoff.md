@@ -1,6 +1,6 @@
 # 타임라인·편집·지도 파트 인수인계 (김동현 → 팀)
 
-작성일 2026-11-11, 갱신 2026-11-15(PR #10 리뷰 반영: 편집 기록 순서, AC-006 새 블록 판정). 대상 FR-006(블록 편집·되돌리기), FR-007(지도 보기·지도에서 고르기).
+작성일 2026-11-11, 갱신 2026-11-15(PR #10·#17 리뷰 반영). 대상 FR-006(블록 편집·되돌리기), FR-007(지도 보기·지도에서 고르기).
 
 ## 현재 상태
 
@@ -11,7 +11,7 @@
 | EditHistory(1단계 되돌리기)·AC-006 판정 | 완료. 엔진 `ScheduleState` 기준, 메모리 저장소(시험용). PR #10 | `backend/app/modules/trips/edit_history.py` |
 | 엔진 `insert`·`recompute`·`validate`, API-006·009·011 | 병합됨(PR #11, 정현빈) | `backend/app/modules/engine`, `modules/trips` |
 | `schedule_snapshots` 테이블·마이그레이션 | 미착수. ORM이 `core/db`에 아직 없음 | - |
-| API-007(PATCH)·008(DELETE)·010(undo) 라우터, `TripService` 에 EditHistory 연결 | 미착수. 다음 작업 | - |
+| API-007(PATCH)·008(DELETE)·010(undo) 라우터, `TripService` 에 EditHistory 연결(API-006 포함) | 완료. `feature/FR-006-edit-api` 브랜치. 이력 저장소는 아직 메모리 구현 | `backend/app/modules/trips/{service,router,commands,schemas}.py`, 엔진 `project` |
 
 ## 합의된 계약 (PR #11)
 
@@ -20,14 +20,44 @@
 - **API-006 위치**: `fromBlockId`·`toBlockId` 가 있으면 그 사이에 삽입하고, 없으면 `dayNo`(없으면 `fixedWindow.dayNo`) 날짜의 마지막에 붙인다.
 - **미조회 구간**: 엔진 내부는 `source="UNKNOWN"`, `durationMin=null`. 응답 `days[].legs` 에서는 빠지고 블록 경고로 확인 필요를 알린다. 외부 `LegSource` 에 `UNKNOWN` 을 넣을지는 프런트와 따로 정한다.
 
+## API-007·008·010 동작 (`feature/FR-006-edit-api`)
+
+| 요청 | 동작 | 재계산 시작점(AC-006 `anchor_seq`) |
+|---|---|---|
+| `PATCH {stayMin}` | 체류시간을 바꾸고 이 블록부터 다시 계산(이 블록 출발 시각도 바뀜) | 같은 날 앞 블록(`seq-1`) |
+| `PATCH {seq}` | 같은 날 안에서만 옮기고 1..n 으로 다시 매김. 범위 밖이면 400 | `min(이전, 새 위치) - 1` |
+| `PATCH {isFixed:false}` | 지정 시각(`fixedStart/End`)을 지우고(mock 과 같음) 도착 시각은 유지, 출발 = 도착 + 체류. 뒤 블록 재계산 | 이 블록 |
+| `PATCH {isFixed:true}` | 지정 시각이 없으면 400 ERR-001. 남아 있으면 그 시각으로 고정 | 같은 날 앞 블록 |
+| `DELETE` | 뒤 블록 seq 를 1씩 당기고 같은 날 앞 블록부터 재계산 | 같은 날 앞 블록 |
+| `POST undo` | 직전 편집 전 상태를 재계산 없이 복원 | - |
+
+- 본문: PATCH 는 `isFixed`·`seq`·`stayMin` 중 정확히 하나(null 로 보낸 키도 센다) + 선택 `sessionCoords`(아니면 400 ERR-001). 타입은 엄격하다: `"3"`·`3.0`·`true` 를 정수로, `"false"`·`0` 을 불리언으로 받지 않는다. `stayMin` 상한은 1440분(잠정). DELETE·undo 본문은 없어도 되며 `sessionCoords` 만 받는다.
+- 오류: 없는 블록·범위 밖 seq → 400 ERR-001, 기존 10·20 seq → 400 ERR-001, 고정 시각을 지킬 수 없는 결과 → 409 ERR-009, 없는 여행 → 404 ERR-016, 되돌릴 편집 없음 → 400 ERR-001.
+- 고정 시각 수락 검사(ERR-009)는 편집(API-006·007·008)에서는 **편집한 날만** 본다. 다른 날에 이미 있던 충돌은 편집을 막지 않는다. API-009 는 지금처럼 모든 날을 본다.
+- **변경 없는 편집 규칙**: 같은 값으로 바꾸는 편집(같은 seq·stayMin·isFixed)은 저장도 스냅샷 기록도 하지 않고 현재 일정을 돌려준다. 되돌리기 1단계가 의미 없는 편집에 소비되지 않게 하려는 것이다. 프런트 mock 은 이 경우에도 항상 `previous` 를 기록하므로 동작이 다르다.
+- 카카오 블록이 있는 날을 편집할 때 요청에 `sessionCoords` 가 없으면, 엔진 기존 계약대로 그 블록으로 가는 이동시간을 알 수 없어 그 뒤 일반 블록 시각이 비워지고 `COORDS_NEEDS_CHECK` 경고가 붙는다(시험으로 고정해 둠).
+- 저장 실패: 편집 저장이 실패하면 되돌리기 지점을 편집 전 그대로(`EditHistory.latest_edit` 로 받아 둔 스냅샷을 `restore`) 되살리고, 되돌리기 저장이 실패하면 소비한 스냅샷을 되살린다. DB 구현에서는 한 트랜잭션의 롤백으로 대신한다.
+
+### 미결 사항 (팀 확인 필요)
+
+1. **그날 첫 블록이 바뀔 때의 시작 시각**: 첫 블록 삭제, 첫 위치로의 이동 등으로 새 첫 블록이 일반 블록이면 원래 첫 블록의 도착 시각(그날 시작 시각)을 이어받는다. 새 첫 블록이 고정이면 지정 시각을 그대로 둔다. 원래 첫 블록 시각이 없으면 새 첫 블록 시각도 비운다.
+2. **그날 유일한 블록 삭제**: 그날은 빈 날이 되고 재계산 없이 투영만 한다(경로 조회 없음).
+3. **고정 해제 시 시각**: 블록이 움직이지 않도록 도착 시각을 유지한다(앞 블록 기준으로 당기지 않음). 프런트 mock 은 이 블록 시각을 비워 재계산 대상으로 둔다. 당기는 쪽이 낫다면 시작점만 바꾸면 된다.
+4. **고정 켜기**: API-007 이 시각을 받지 않아 사실상 다시 추가해야 한다. 고정 해제가 지정 시각을 지우므로 해제 후 다시 켜기도 400 이다. 시각을 함께 받을지(`fixedWindow`) 프런트와 정해야 한다.
+5. **되돌릴 편집 없음의 오류 ID**: SDD 8장에 전용 ID 가 없어 ERR-001 을 쓴다. 프런트 `ERROR_CATALOG`(ERR-001 은 [400])·mock 과 맞춰 400 으로 정했다(PR #17 리뷰). 전용 ID 를 만들면 catalog·mock·명세를 함께 바꾼다.
+6. **API-009 뒤 되돌리기**: 일정 생성은 기록하지 않는다. 생성이 일정을 실제로 바꾸면 `EditHistory.discard` 로 되돌리기 지점을 없애므로, 편집 → 일정 생성 → 되돌리기는 400 ERR-001 이다(생성 결과를 편집 전 상태로 덮어쓰지 않게). 생성 결과가 그대로면 지점을 남긴다. 지점 삭제와 일정 저장은 함께 확정한다: 지점을 먼저 지우고 일정을 마지막에 저장하며, 어느 쪽이든 실패하면 지점을 생성 전으로 되살린다(시험: `test_failed_generate_keeps_schedule_and_undo_point`). 생성 자체를 되돌릴 수 있게 할지(GENERATE 스냅샷 사용)는 정해지지 않았다.
+7. **자정 넘김 계산**: 출발 = 도착 + 체류, 자정을 넘기면 출발을 비우는 계산은 엔진 `constraints/chain.py` 의 `visit_end` 한 곳에 있고, 엔진 `_calculate` 와 `trips/commands.py` 의 `_starting_at`(그날 첫 블록) 이 함께 쓴다. 엔진 검증은 앞 블록이 없는 첫 블록·유일한 블록도 도착 + 체류가 자정을 넘으면 `DAY_OVERFLOW` 충돌로 알린다(PR #17 리뷰). 그날 시작 시각 이어받기 자체는 아직 `commands.py` 에 있다.
+
 ## 정현빈에게 (엔진·core/db)
 
-1. API-007·008·010 과 `TripService` 연결은 내가 이어서 맡는다. 편집 한 번의 처리 순서는 다음과 같다. 지금은 `TripService` 의 RLock 안에서, DB 를 붙인 뒤에는 한 트랜잭션 안에서 처리한다.
-   `현재 상태 조회 → 엔진 편집 → 수락 검사(FixedScheduleConflictError 등) → EditHistory.record_before_edit(trip_id, record.schedule) → 일정 저장`
-   `record` 는 이전 EDIT 스냅샷을 지운 뒤 새 스냅샷을 저장하므로, 엔진 편집 전에 기록하면 엔진이 거절했을 때 이전 되돌리기 지점이 편집되지 않은 현재 상태로 바뀐다. 그래서 수락된 편집만 기록한다. 스냅샷 기록과 일정 저장은 함께 확정되어야 하며, 둘 중 하나가 실패하면 직전 되돌리기 지점과 일정을 모두 편집 전으로 되살린다(메모리 구현은 보상 처리, DB 구현은 한 트랜잭션의 롤백).
-2. 되돌리기(API-010)는 `EditHistory.undo(trip_id)` 가 돌려준 `ScheduleState` 로 저장한다. 스냅샷 소비와 일정 복원도 함께 확정되어야 하며, 복원 저장이 실패하면 소비한 스냅샷을 되살린다. 스냅샷이 없으면 `NothingToUndoError` 이므로 400 ERR-001 로 변환한다(프런트 `ERROR_CATALOG`·mock 과 같음).
-3. `core/db` 에 ORM(SQLAlchemy)·세션이 들어오면 `SnapshotRepository` Protocol(`next_version`·`save`·`latest`·`delete`)의 DB 구현을 내가 붙인다. `schedule_snapshots` 컬럼은 SDD 5.2 그대로다(id, trip_id, version, payload JSONB, reason, created_at). payload 는 `ScheduleState.model_dump(mode="json", by_alias=True)` 다.
-4. 경유지 시트(UI-03) 컴포넌트를 타임라인 경유지 슬롯에 붙여야 한다. 지금은 `BlockEditor` 의 경유지 추가 폼이 임시로 그 자리에 있다. 시트 컴포넌트가 나오면 교체한다. props 형태를 알려 달라.
+1. API-007·008·010 과 `TripService` 연결을 마쳤다. 편집 한 번의 처리 순서는 다음과 같다(이전 문서의 "스냅샷 먼저" 순서에서 바뀌었다). 지금은 `TripService` 의 RLock 안에서, DB 를 붙인 뒤에는 한 트랜잭션 안에서 처리한다.
+   `현재 상태 조회 → 엔진 편집 → 수락 검사(_accept, 편집한 날만: FixedScheduleConflictError 등) → EditHistory.record_before_edit(trip_id, record.schedule) → 저장`
+   엔진 오류나 수락 검사로 거절된 편집은 스냅샷을 남기지 않으므로 **직전 EDIT 스냅샷이 그대로** 남는다(시험: `tests/unit/trips/test_service_edits.py::test_rejected_edit_keeps_previous_snapshot`). 저장이 실패해도 `latest_edit`/`restore` 로 직전 지점을 정확히 되살린다. 상태가 그대로인 편집(같은 값)은 저장도 기록도 하지 않는다. API-006(블록 추가)도 같은 경로로 기록되어 되돌릴 수 있다. API-009(일정 생성)는 기록하지 않고, 일정을 바꾸면 `discard` 로 지점을 없앤다.
+2. 되돌리기(API-010)는 `EditHistory.undo(trip_id)` 가 돌려준 `ScheduleState` 를 **다시 계산하지 않고** 저장하며, 응답 `{schedule}` 은 엔진 `project`(경로 조회 없이 `_present` 로 투영, 경고는 validate 규칙)로 만든다. 되돌리기 자체는 스냅샷을 남기지 않는다. 투영이나 저장에 실패하면 소비한 스냅샷을 그대로 되살린다. 스냅샷이 없으면 `NothingToUndoError` → **400 ERR-001**.
+   DB 구현 시 `EditHistory` 의 `latest_edit`·`restore`·`discard` 보상 동작은 트랜잭션 롤백으로 대신할 수 있다.
+3. `TripService(history=...)` 를 주입하지 않으면 `EditHistory(InMemorySnapshotRepository())` 를 쓴다. 로컬 Fake 저장소와 짝을 이루는 기본값이므로 DB 저장소를 붙일 때 함께 바꿔야 한다.
+4. `core/db` 에 ORM(SQLAlchemy)·세션이 들어오면 `SnapshotRepository` Protocol(`next_version`·`save`·`latest`·`delete`)의 DB 구현을 내가 붙인다. `schedule_snapshots` 컬럼은 SDD 5.2 그대로다(id, trip_id, version, payload JSONB, reason, created_at). payload 는 `ScheduleState.model_dump(mode="json", by_alias=True)` 다.
+5. 경유지 시트(UI-03) 컴포넌트를 타임라인 경유지 슬롯에 붙여야 한다. 지금은 `BlockEditor` 의 경유지 추가 폼이 임시로 그 자리에 있다. 시트 컴포넌트가 나오면 교체한다. props 형태를 알려 달라.
 
 ## 홍민지에게
 
