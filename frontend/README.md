@@ -118,6 +118,7 @@ try {
 | UI-01 코스 만들기 순서 | API-002 → 담은 장소마다 API-006(`dayNo` 필수라 화면에서 일차를 고름) → API-009. 담은 목록을 API-009가 한 번에 받게 되면(PR #18 제안) `features/trip-start/createCourse.ts`만 바꾼다 | 정현빈 |
 | 여행 기간 상한 | 3일(`MAX_TRIP_DAYS`). SRS에 상한이 없어 README의 '1~3일'을 따름 | 김동현 |
 | API-006 장소·삽입 위치 | 백엔드(PR #11)와 맞춤. `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 위치는 `dayNo`(그날 마지막) 또는 `fromBlockId`·`toBlockId`(두 블록 사이). 카카오 ID는 숫자, URL은 `https://place.map.kakao.com/{id}`. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest` | 정현빈 (PR #11 병합) |
+| API-006 `stayMin` | 공공 DB에 없는 카카오 장소에만 사용자가 고른 체류시간(분)을 보낸다(#18 PM 결정 4). 백엔드는 아직 이 필드를 받지 않아 실제 서버에서는 거절되고, mock만 받는다. API-006 필드로 둘지 API-009 `initial.selections[].stayMin`으로 옮길지 정해지면 타입·mock·테스트를 함께 바꾼다 | 정현빈 |
 | 카카오 장소 좌표 전달 | API-006~011 요청의 `sessionCoords`(`kakaoPlaceId` → 좌표). DELETE에도 본문 사용 | 정현빈 |
 | 블록의 카카오 장소 | `place: {source: 'KAKAO', kakaoPlaceId, placeUrl}`, 좌표 없는 구간은 `durationMin: null` | 정현빈·김동현 |
 
