@@ -68,10 +68,9 @@ def get_place(
     service: DetailService,
     on_date: Annotated[date | None, Query(alias="date")] = None,
 ) -> PlaceDetailResponse:
-    """API-005. `date` 는 형식만 검사한다(잘못되면 400 ERR-001). 그날 영업시간은 화면이 요일로 고른다.
-
-    혼잡 요약이 붙으면 `date` 를 기준일로 쓴다.
-    """
+    """API-005. `date` 는 형식만 검사한다(잘못되면 400 ERR-001). 그날 영업시간은 화면이 요일로 고른다."""
+    # 혼잡 요약(홍민지)이 붙기 전까지 날짜 값은 쓰지 않는다. 형식 검사는 FastAPI 가 하고, 테스트가 400 을 고정한다.
+    del on_date
     response.headers["Cache-Control"] = "no-store"
     try:
         return service.get(place_id)

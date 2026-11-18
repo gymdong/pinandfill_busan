@@ -123,7 +123,7 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
             {sources.map((source, index) => (
               // 출처에는 고유 ID가 없고 같은 기관·기준일이 겹칠 수 있어 순서를 key에 섞는다.
               <li key={`${index}-${source.org}-${source.refDate}`}>
-                장소 정보 {source.org} · {formatDate(source.refDate)} 기준
+                장소 정보 {source.org} · {source.refDate ? `${formatDate(source.refDate)} 기준` : '기준일 확인 필요'}
               </li>
             ))}
           </ul>

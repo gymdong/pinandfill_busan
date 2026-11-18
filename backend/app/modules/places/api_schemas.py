@@ -81,7 +81,8 @@ class PlaceDetailPhoto(ContractModel):
 
 class SourceInfo(ContractModel):
     org: str
-    ref_date: date
+    # null 이면 기준일 정보가 없다. 기관명은 그대로 보여 주고 기준일만 '확인 필요'로 둔다(NFR-007·012).
+    ref_date: date | None = None
 
 
 class PlaceDetailResponse(ContractModel):

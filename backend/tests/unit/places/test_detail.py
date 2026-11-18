@@ -63,12 +63,13 @@ def test_missing_values_are_not_invented(tmp_path):
     assert (park.hours, park.sources, park.photos, park.crowd, park.weather) == ((), (), (), None, None)
 
 
-def test_unknown_indoor_value_and_source_without_date_are_dropped(tmp_path):
+def test_unknown_indoor_value_is_dropped_and_source_keeps_org_without_date(tmp_path):
     garden = details(tmp_path).place_detail("300")
     assert garden is not None
     assert garden.place.indoor_outdoor is None
-    # 기준일이 없는 출처는 '출처 정보 없음'으로 두고 날짜를 만들지 않는다.
-    assert (garden.place.ref_date, garden.sources) == (None, ())
+    # 기준일이 없어도 기관명은 남기고, 날짜는 만들지 않는다.
+    assert garden.place.ref_date is None
+    assert [(s.org, s.ref_date) for s in garden.sources] == [("예시 기관", None)]
 
 
 @pytest.mark.parametrize("place_id", ["999", "900000001"])

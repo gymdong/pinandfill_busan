@@ -140,6 +140,13 @@ describe('UI-04 장소 상세', () => {
     expect(sources).toHaveTextContent('혼잡 근거 행정동 생활인구, 도시철도 승하차');
   });
 
+  it('출처 기준일이 없으면 기관명은 두고 기준일을 확인 필요로 표시한다(NFR-007·012)', async () => {
+    mockDetail({ ...taejongdaeDetail, sources: [{ org: '부산광역시', refDate: null }] });
+    renderAt(PATH);
+    const sources = await screen.findByRole('region', { name: '출처' });
+    expect(sources).toHaveTextContent('장소 정보 부산광역시 · 기준일 확인 필요');
+  });
+
   it('같은 기관·기준일 출처가 겹쳐 와도 key 경고 없이 모두 보여 준다', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const [source] = taejongdaeDetail.sources;

@@ -134,7 +134,8 @@ export interface PlacePhoto {
 /** @provisional SDD는 `sources` 이름만 정의한다. places에는 기관 필드가 없다. */
 export interface SourceInfo {
   org: string;
-  refDate: IsoDate;
+  /** null이면 기준일 정보가 없다. 기관명은 보여 주고 기준일은 '확인 필요'로 둔다. */
+  refDate: IsoDate | null;
 }
 
 /** @provisional 장소 상세·추천 카드의 혼잡 요약. API-012 필드에서 유도했다. */

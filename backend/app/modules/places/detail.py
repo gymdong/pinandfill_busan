@@ -46,9 +46,8 @@ class SamplePlaceDetails:
             for day_type in WEEK
             if (value := item.hours.get(day_type)) is not None
         )
-        sources = (
-            (SourceInfo(org=item.source_org, ref_date=item.ref_date),) if item.source_org and item.ref_date else ()
-        )
+        # 기관명이 있으면 기준일이 없어도 출처를 남긴다. 기관명이 없으면 '출처 정보 없음'이다.
+        sources = (SourceInfo(org=item.source_org, ref_date=item.ref_date),) if item.source_org else ()
         return PlaceDetailResponse(
             place=PlaceDetailPlace(
                 id=place.id,
