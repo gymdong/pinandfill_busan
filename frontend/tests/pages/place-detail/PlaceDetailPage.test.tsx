@@ -132,6 +132,17 @@ describe('UI-04 장소 상세', () => {
     expect(sources).toHaveTextContent('혼잡 근거 행정동 생활인구, 도시철도 승하차');
   });
 
+  it('같은 기관·기준일 출처가 겹쳐 와도 key 경고 없이 모두 보여 준다', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const [source] = taejongdaeDetail.sources;
+    mockDetail({ ...taejongdaeDetail, sources: [source!, source!] });
+    renderAt(PATH);
+
+    const sources = await screen.findByRole('region', { name: '출처' });
+    expect(within(sources).getAllByRole('listitem')).toHaveLength(2);
+    expect(error.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+  });
+
   it('꼭 갈 곳에 담고 다시 뺄 수 있다', async () => {
     mockDetail(taejongdaeDetail);
     renderAt(PATH);

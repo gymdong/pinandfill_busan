@@ -120,8 +120,9 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
       <section className={styles.sources} aria-label="출처">
         {sources.length > 0 ? (
           <ul>
-            {sources.map((source) => (
-              <li key={`${source.org}-${source.refDate}`}>
+            {sources.map((source, index) => (
+              // 출처에는 고유 ID가 없고 같은 기관·기준일이 겹칠 수 있어 순서를 key에 섞는다.
+              <li key={`${index}-${source.org}-${source.refDate}`}>
                 장소 정보 {source.org} · {formatDate(source.refDate)} 기준
               </li>
             ))}
