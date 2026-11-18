@@ -11,9 +11,12 @@ import type {
   PlaceSearchResponse,
   PlacesAtResponse,
   Schedule,
+  ScheduleDay,
   ScheduleMutationResponse,
   SuggestWaypointsRequest,
   SuggestWaypointsResponse,
+  Trip,
+  TripConditions,
   TripDetailResponse,
   UpdateBlockRequest,
 } from '@/types/api';
@@ -31,7 +34,7 @@ import {
   taejongdaeDetail,
   waypointCandidates,
 } from './fixtures/places';
-import { MOCK_SESSION_KEY, schedule, trip, TRIP_ID } from './fixtures/schedule';
+import { MOCK_SESSION_KEY, schedule, trip as fixtureTrip, TRIP_ID } from './fixtures/schedule';
 
 const MOCK_DELAY_MS = 150;
 /** API-001 mock이 해석에 성공하는 유일한 문장. 그 외 입력은 폼 전환(needsForm)을 확인하는 데 쓴다. */
@@ -39,14 +42,14 @@ export const INTERPRETABLE_TEXT = '10/17~19 2박 3일 대중교통';
 
 type Handler = (request: ApiRequest, params: string[]) => unknown;
 
-interface MockTripState { schedule: Schedule; previous: Schedule | null; nextBlockNumber: number }
+interface MockTripState { trip: Trip; schedule: Schedule; previous: Schedule | null; nextBlockNumber: number }
 const tripStates = new Map<string, MockTripState>();
 let initialSchedule: Schedule = schedule;
 
 function state(tripId: string): MockTripState {
   let value = tripStates.get(tripId);
   if (!value) {
-    value = { schedule: structuredClone(initialSchedule), previous: null, nextBlockNumber: 500 };
+    value = { trip: fixtureTrip, schedule: structuredClone(initialSchedule), previous: null, nextBlockNumber: 500 };
     tripStates.set(tripId, value);
   }
   return value;
@@ -56,6 +59,16 @@ function state(tripId: string): MockTripState {
 export function resetMockSchedule(initial: Schedule = schedule): void {
   tripStates.clear();
   initialSchedule = structuredClone(initial);
+}
+
+/**
+ * API-002. 입력한 조건으로 여행을 만들고 빈 일정에서 시작한다. 이어지는 API-006이 담은 장소를 채운다.
+ * 여행 ID는 하나뿐이라 새로 만들면 이전 mock 여행을 덮어쓴다. 본문이 없으면 예시 여행 조건을 쓴다.
+ */
+function createTrip(body: TripConditions | undefined): CreateTripResponse {
+  const trip: Trip = { ...fixtureTrip, ...body, id: TRIP_ID };
+  tripStates.set(TRIP_ID, { trip, schedule: { days: [], violations: [], conflicts: [] }, previous: null, nextBlockNumber: 500 });
+  return { tripId: TRIP_ID, sessionKey: MOCK_SESSION_KEY };
 }
 
 function snapshot(tripId: string): Schedule {
@@ -97,14 +110,28 @@ function findBlock(draft: Schedule, blockId: string) {
   return invalid();
 }
 
+/** 백엔드와 같이 여행 기간 안의 빈 날에도 추가할 수 있게 그날을 만든다. 기간 밖이면 ERR-001 */
+function addEmptyDay(draft: Schedule, dayNo: number, trip: Trip): ScheduleDay {
+  const start = Date.parse(`${trip.dates.start}T00:00:00Z`);
+  const days = Math.round((Date.parse(`${trip.dates.end}T00:00:00Z`) - start) / 86_400_000) + 1;
+  if (!Number.isInteger(dayNo) || dayNo < 1 || dayNo > days) return invalid();
+  const date = new Date(start + (dayNo - 1) * 86_400_000).toISOString().slice(0, 10);
+  const day: ScheduleDay = { dayNo, date, blocks: [], legs: [], crowd: [], weather: [] };
+  draft.days.push(day);
+  draft.days.sort((a, b) => a.dayNo - b.dayNo);
+  return day;
+}
+
 function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationResponse {
   if (!body?.place) return invalid();
   return mutate(tripId, (draft, tripState) => {
     const anchored = body.fromBlockId ? findBlock(draft, body.fromBlockId) : null;
-    const dayNo = anchored?.day.dayNo ?? body.fixedWindow?.dayNo ?? 1;
-    const day = draft.days.find((item) => item.dayNo === dayNo);
-    if (!day) return invalid();
+    // 백엔드와 동일: 앵커가 있으면 앵커의 일차, 없으면 dayNo → fixedWindow.dayNo, 모두 없으면 ERR-001
+    const dayNo = anchored?.day.dayNo ?? body.dayNo ?? body.fixedWindow?.dayNo;
+    if (dayNo === undefined) return invalid();
+    if (anchored && body.dayNo !== undefined && body.dayNo !== dayNo) return invalid();
     if (body.fixedWindow && body.fixedWindow.dayNo !== dayNo) return invalid();
+    const day = draft.days.find((item) => item.dayNo === dayNo) ?? addEmptyDay(draft, dayNo, tripState.trip);
     const input = body.place;
     const place = 'placeId' in input
       ? Object.values(placeSummaries).find((item) => item.id === input.placeId)
@@ -169,7 +196,7 @@ const routes: [HttpMethod, RegExp, Handler][] = [
         : { conditions: {}, needsForm: true };
     },
   ],
-  ['POST', /^\/trips$/, (): CreateTripResponse => ({ tripId: TRIP_ID, sessionKey: MOCK_SESSION_KEY })],
+  ['POST', /^\/trips$/, ({ body }) => createTrip(body as TripConditions | undefined)],
   [
     'GET',
     /^\/places\/search$/,
@@ -221,7 +248,7 @@ const routes: [HttpMethod, RegExp, Handler][] = [
       };
     },
   ],
-  ['GET', /^\/trips\/([^/]+)$/, (_request, [tripId]): TripDetailResponse => ({ trip, schedule: snapshot(tripId ?? '') })],
+  ['GET', /^\/trips\/([^/]+)$/, (_request, [tripId]): TripDetailResponse => ({ trip: state(tripId ?? '').trip, schedule: snapshot(tripId ?? '') })],
   [
     'GET',
     /^\/admin\/sources$/,

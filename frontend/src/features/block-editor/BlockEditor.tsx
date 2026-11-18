@@ -6,10 +6,12 @@ import styles from './BlockEditor.module.css';
 
 type Change = (action: () => Promise<{ schedule: Schedule }>) => Promise<void>;
 
-export function BlockEditor({ tripId, block, between, disabled, onChange }: {
+export function BlockEditor({ tripId, block, between, dayNo, disabled, onChange }: {
   tripId: string;
   block?: Block;
   between?: { fromBlockId: string; toBlockId: string };
+  /** 앵커 없이 추가할 때 끝에 붙일 일차 */
+  dayNo?: number;
   disabled: boolean;
   onChange: Change;
 }) {
@@ -42,30 +44,30 @@ export function BlockEditor({ tripId, block, between, disabled, onChange }: {
       <label>장소 검색 <input required value={query} onChange={(event) => setQuery(event.target.value)} /></label>
       <Button type="submit" disabled={disabled || searching}>검색</Button>
     </form>
-    {searchError && <p role="alert">{searchError}</p>}
-    {searched && results.length === 0 && <p>검색 결과가 없습니다.</p>}
+    {searchError && <p role="alert" className={styles.message}>{searchError}</p>}
+    {searched && results.length === 0 && <p className={styles.message}>검색 결과가 없습니다.</p>}
     {results.length > 0 && <ul className={styles.results}>{results.map((place) => <li key={place.kakaoPlaceId}>
-      <span>{place.name}{place.address ? ` · ${place.address}` : ''}</span>
+      <span><span className={styles.resultName}>{place.name}</span>{place.address && <span className={styles.resultAddress}>{place.address}</span>}</span>
       <Button disabled={disabled} onClick={() => {
         if (!place.placeId) rememberKakaoPlace(place.kakaoPlaceId, { name: place.name, coords: place.coords });
         void onChange(() => tripsApi.addBlock(tripId, {
           place: place.placeId ? { placeId: place.placeId } : { kakaoPlaceId: place.kakaoPlaceId, placeUrl: place.placeUrl },
-          isFixed: false, origin: 'USER', ...between,
+          isFixed: false, origin: 'USER', ...(between ?? (dayNo === undefined ? {} : { dayNo })),
         }));
       }}>추가</Button>
     </li>)}</ul>}
   </section>;
 
-  return <div className={styles.editor} aria-label="블록 편집">
+  return <div className={`${styles.editor} ${styles.inCard}`} aria-label="블록 편집">
     <h3>블록 편집</h3>
     <form onSubmit={(event) => { event.preventDefault(); void onChange(() => tripsApi.updateBlock(tripId, block.id, { stayMin: Number(stayMin) })); }}>
       <label>체류시간(분) <input type="number" min="1" required value={stayMin} onChange={(event) => setStayMin(Number(event.target.value))} /></label>
-      <Button type="submit" disabled={disabled}>체류시간 변경</Button>
+      <Button type="submit" variant="outline" disabled={disabled}>체류시간 변경</Button>
     </form>
     <form onSubmit={(event) => { event.preventDefault(); void onChange(() => tripsApi.updateBlock(tripId, block.id, { seq: Number(seq) })); }}>
       <label>순서 <input type="number" min="1" required value={seq} onChange={(event) => setSeq(Number(event.target.value))} /></label>
-      <Button type="submit" disabled={disabled}>순서 변경</Button>
+      <Button type="submit" variant="outline" disabled={disabled}>순서 변경</Button>
     </form>
-    <Button variant="outline" disabled={disabled} onClick={() => onChange(() => tripsApi.deleteBlock(tripId, block.id))}>블록 삭제</Button>
+    <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => onChange(() => tripsApi.deleteBlock(tripId, block.id))}>블록 삭제</Button>
   </div>;
 }
