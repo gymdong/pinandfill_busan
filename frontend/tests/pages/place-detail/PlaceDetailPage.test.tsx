@@ -43,6 +43,14 @@ describe('UI-04 장소 상세', () => {
     expect(within(info).getByText('예상 붐빔')).toBeInTheDocument();
   });
 
+  it('실내외 정보가 없으면 분류만 보여 준다(NFR-012)', async () => {
+    mockDetail({ ...taejongdaeDetail, place: { ...taejongdaeDetail.place, indoorOutdoor: null } });
+    renderAt(PATH);
+    await screen.findByRole('heading', { name: '태종대' });
+    expect(screen.getByText('자연 명소')).toBeInTheDocument();
+    expect(screen.queryByText(/자연 명소 ·/)).not.toBeInTheDocument();
+  });
+
   it('날짜가 없으면 요일별 운영시간을 안내한다', async () => {
     mockDetail(taejongdaeDetail);
     renderAt(PATH);

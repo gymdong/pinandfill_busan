@@ -15,6 +15,7 @@ from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
 from app.modules.engine.service import BasicItineraryEngine
+from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
 from app.modules.places.matcher import PlaceMatcher
 from app.modules.places.router import PlaceAPIError
 from app.modules.places.samples import SamplePlaceData, load_sample_places
@@ -57,6 +58,7 @@ def create_app(
     *,
     trip_service: TripService | None = None,
     place_search_service: PlaceSearchService | None = None,
+    place_detail_service: PlaceDetailService | None = None,
 ) -> FastAPI:
     """주입하지 않은 서비스는 기본 구성으로 만든다.
 
@@ -65,9 +67,13 @@ def create_app(
     """
     config = settings if settings is not None else Settings.from_env()
     # 주입하지 않은 서비스만 기본 구성으로 만든다. 만들 때 외부 API 를 호출하지 않는다.
-    places = load_sample_places() if trip_service is None or place_search_service is None else None
+    needs_places = trip_service is None or place_search_service is None or place_detail_service is None
+    places = load_sample_places() if needs_places else None
     if trip_service is None and places is not None:
         trip_service = default_trip_service(places)
+    # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
+    if place_detail_service is None and places is not None:
+        place_detail_service = PlaceDetailService(SamplePlaceDetails(places))
     kakao = kakao_settings() if place_search_service is None else None
 
     @asynccontextmanager
@@ -88,6 +94,7 @@ def create_app(
     application = FastAPI(title=config.app_name, version="0.1.0", debug=False, lifespan=lifespan)
     application.state.trip_service = trip_service
     application.state.place_search_service = place_search_service
+    application.state.place_detail_service = place_detail_service
 
     @application.exception_handler(TripAPIError)
     async def trip_error(request: Request, exc: TripAPIError) -> JSONResponse:

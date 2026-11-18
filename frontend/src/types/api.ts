@@ -101,10 +101,13 @@ export interface Place {
   source: PlaceSource;
   description: string | null;
   closedDaysText: string | null;
-  defaultStayMin: number;
-  indoorOutdoor: IndoorOutdoor;
+  /** null이면 공공 데이터에 기본 체류시간이 없다(API-006은 `fields.stayMin`으로 입력을 요구한다). */
+  defaultStayMin: number | null;
+  /** null이면 실내외 정보 없음 */
+  indoorOutdoor: IndoorOutdoor | null;
   rating: number | null;
-  refDate: IsoDate;
+  /** null이면 기준일 정보 없음. 출처·기준일 표시는 `PlaceDetailResponse.sources`를 쓴다. */
+  refDate: IsoDate | null;
 }
 
 /** 일정·추천 카드에서 쓰는 축약 장소 정보 */

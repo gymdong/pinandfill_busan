@@ -30,6 +30,11 @@ class SamplePlace:
     stay_min: int | None = None
     # 요일(MON~SUN) → 그날 영업시간. 행이 없는 요일은 '확인 필요'다.
     hours: Mapping[str, OpeningHours] = field(default_factory=dict)
+    # 장소 상세(API-005)에 쓰는 표본 값. 비어 있으면 None 이고 화면이 '정보 없음'으로 둔다.
+    indoor_outdoor: str | None = None
+    closed_days_text: str | None = None
+    # 표본 CSV 의 출처 표기(source_label_original) 그대로. 예: '한국관광공사 TourAPI, 비짓부산'
+    source_org: str | None = None
 
 
 class SamplePlaceData:
@@ -63,6 +68,10 @@ class SamplePlaceData:
             place_id = self._kakao_overrides.get(place.kakao_place_id)
         item = self._places.get(place_id) if place_id is not None else None
         return item.stay_min if item is not None else None
+
+    def place(self, place_id: str) -> SamplePlace | None:
+        """공공 장소 ID 로 표본 한 곳을 찾는다. 카카오 장소 ID 는 공공 장소가 아니므로 찾지 않는다."""
+        return self._places.get(place_id)
 
     def repository(self) -> InMemoryPublicPlaceRepository:
         # 원래 테스트용 메모리 저장소다. places 테이블 저장소가 생기면 기본 구성(app.main)에서 그쪽으로 바꾼다.
@@ -146,7 +155,15 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
             skipped += 1
             continue
         places.append(
-            SamplePlace(place, ref_date, _positive_int(row.get("default_stay_min", "")), hours.get(place.id, {}))
+            SamplePlace(
+                place,
+                ref_date,
+                _positive_int(row.get("default_stay_min", "")),
+                hours.get(place.id, {}),
+                indoor_outdoor=row.get("indoor_outdoor") or None,
+                closed_days_text=row.get("closed_days_raw") or None,
+                source_org=row.get("source_label_original") or None,
+            )
         )
     if skipped:
         logger.warning("place_samples skipped=%d", skipped)

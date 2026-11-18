@@ -67,7 +67,7 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
       <PhotoViewer key={place.id} photos={photos} placeName={place.name} />
 
       <header className={styles.header}>
-        <p className={styles.meta}>{[place.category, place.indoorOutdoor].join(' · ')}</p>
+        <p className={styles.meta}>{[place.category, place.indoorOutdoor].filter(Boolean).join(' · ')}</p>
         <h1 className={styles.title}>{place.name}</h1>
         {place.description && <p className={styles.description}>{place.description}</p>}
       </header>
