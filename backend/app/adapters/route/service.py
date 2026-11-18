@@ -3,17 +3,22 @@
 from collections.abc import Callable
 from datetime import datetime
 
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from app.adapters.route.providers import (
+    SEOUL_TIMEZONE,
     LookupResult,
     Mode,
     ODsayAdapter,
+    ProviderSettings,
     RouteQuery,
     TMAPAdapter,
     utc_now,
 )
-from app.modules.engine.interfaces import RouteEstimate
+from app.adapters.route.quota import CallBudget
+from app.adapters.route.settings import ODsaySettings, TMAPSettings
+from app.adapters.route.transport import SafeHTTPTransport
+from app.modules.engine.interfaces import RouteEstimate, RouteProvider
 from app.modules.engine.schemas import TransientPlaceDetails
 
 
@@ -89,3 +94,46 @@ class LiveRouteProvider:
             time_semantics=result.time_semantics,
             lookup_failed=result.failure is not None,
         )
+
+
+class UnconfiguredRouteProvider:
+    """경로 키가 없을 때. 조회하지 않고 이동시간을 만들지 않는다(엔진이 '이동시간 확인 필요'로 표시)."""
+
+    def __init__(self, *, clock: Callable[[], datetime] = utc_now) -> None:
+        self.clock = clock
+
+    def estimate(
+        self, origin: TransientPlaceDetails, destination: TransientPlaceDetails, *, mode: Mode
+    ) -> RouteEstimate:
+        return RouteEstimate(None, "UNKNOWN", self.clock())
+
+
+def _key(settings: TMAPSettings | ODsaySettings) -> SecretStr | None:
+    key = settings.api_key
+    return key if key is not None and key.get_secret_value() else None
+
+
+def build_route_provider(tmap: TMAPSettings | None = None, odsay: ODsaySettings | None = None) -> RouteProvider:
+    """키가 있으면 TMAP 주력·ODsay 예비, 둘 다 없으면 조회하지 않는다. 만들 때 네트워크를 쓰지 않는다."""
+    tmap = tmap if tmap is not None else TMAPSettings()
+    odsay = odsay if odsay is not None else ODsaySettings()
+    tmap_key, odsay_key = _key(tmap), _key(odsay)
+    if tmap_key is None and odsay_key is None:
+        return UnconfiguredRouteProvider()
+    transport = SafeHTTPTransport()
+    # TMAP 키가 없으면 TMAP 은 호출 없이 missing_key 로 끝나고 ODsay 로 넘어간다.
+    primary = TMAPAdapter(
+        transport,
+        ProviderSettings(tmap_key or SecretStr(""), tmap.timeout_seconds),
+        CallBudget(tmap.daily_call_limit),
+    )
+    fallback = None
+    if odsay_key is not None:
+        # ODsay 검색 시각의 시간대는 공식 문서에 없다. 국내 서비스라 한국 시간으로 가정한다(확인 필요).
+        fallback = ODsayAdapter(
+            transport,
+            ProviderSettings(odsay_key, odsay.timeout_seconds),
+            CallBudget(odsay.daily_call_limit),
+            search_timezone=SEOUL_TIMEZONE,
+        )
+    return LiveRouteProvider(primary, fallback)
