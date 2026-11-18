@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,12 +9,13 @@ import PlaceDetailPage from '@/pages/place-detail';
 import { useTripDraft } from '@/store/tripDraft';
 import type { PlaceDetailResponse } from '@/types/api';
 
-function renderAt(path: string) {
+function renderAt(path: string | string[], initialIndex?: number) {
   render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={Array.isArray(path) ? path : [path]} initialIndex={initialIndex}>
       <Routes>
         <Route path="/places/:placeId" element={<PlaceDetailPage />} />
         <Route path="/" element={<p>여행 시작 화면</p>} />
+        <Route path="/before" element={<p>이전 화면</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -92,6 +93,35 @@ describe('UI-04 장소 상세', () => {
     expect(screen.getByRole('img', { name: '태종대 사진 2' })).toHaveAttribute('src', second!.url);
     expect(screen.getByText('사진 부산광역시 · 저작권 유형 확인 필요')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '다음 사진' })).toBeDisabled();
+  });
+
+  it('불러오지 못한 사진은 다른 사진으로 바꾸지 않고 사진 없음으로 두며 출처 문구도 숨긴다', async () => {
+    const [primary, second] = taejongdaeDetail.photos;
+    mockDetail({ ...taejongdaeDetail, photos: [primary!, second!] });
+    renderAt(PATH);
+
+    fireEvent.error(await screen.findByRole('img', { name: '태종대 사진 1' }));
+    expect(screen.queryByRole('img', { name: '태종대 사진 1' })).not.toBeInTheDocument();
+    expect(screen.getByText('사진 없음')).toBeInTheDocument();
+    expect(screen.queryByText(/^사진 한국관광공사/)).not.toBeInTheDocument();
+
+    // 넘김은 그대로 되고, 다음 사진은 정상으로 보인다.
+    await userEvent.click(screen.getByRole('button', { name: '다음 사진' }));
+    expect(screen.getByRole('img', { name: '태종대 사진 2' })).toHaveAttribute('src', second!.url);
+  });
+
+  it('뒤로 가기는 앱 안의 이전 화면으로, 바로 연 링크면 여행 시작 화면으로 간다', async () => {
+    mockDetail(taejongdaeDetail);
+    renderAt(['/before', PATH], 1);
+    await userEvent.click(await screen.findByRole('button', { name: '뒤로 가기' }));
+    expect(await screen.findByText('이전 화면')).toBeInTheDocument();
+  });
+
+  it('공유 링크로 바로 열면 뒤로 가기가 여행 시작 화면으로 간다', async () => {
+    mockDetail(taejongdaeDetail);
+    renderAt(PATH);
+    await userEvent.click(await screen.findByRole('button', { name: '뒤로 가기' }));
+    expect(await screen.findByText('여행 시작 화면')).toBeInTheDocument();
   });
 
   it('장소 정보의 출처와 기준일, 혼잡 근거를 표시한다(NFR-007)', async () => {

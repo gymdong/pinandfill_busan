@@ -48,12 +48,17 @@
   position: absolute;
   left: var(--space-3);
   bottom: var(--space-2);
-  max-width: calc(100% - 150px);
+  max-width: calc(100% - 2 * var(--space-3));
   padding: 2px var(--space-2);
   border-radius: var(--radius-s);
   background: rgb(20 32 44 / 70%);
   color: var(--color-on-accent);
   font-size: var(--text-xs);
+}
+
+/* 넘김 버튼(약 3 × --tap-min)이 오른쪽에 있을 때만 그 폭을 비운다. */
+.creditWithPager {
+  max-width: calc(100% - 150px);
 }
 
 .pager {

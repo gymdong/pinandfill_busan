@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { placesApi } from '@/api';
 import { paths } from '@/app/paths';
 import { Badge, Button, ErrorState, LoadingState } from '@/components';
@@ -17,6 +17,9 @@ export default function PlaceDetailPage() {
   const [searchParams] = useSearchParams();
   const date = searchParams.get('date');
   const navigate = useNavigate();
+  const location = useLocation();
+  // 공유 링크·새 탭으로 바로 열면 앱 안에 돌아갈 기록이 없어 여행 시작 화면으로 보낸다.
+  const goBack = () => (location.key === 'default' ? navigate(paths.tripStart()) : navigate(-1));
   const load = useCallback(
     (signal: AbortSignal) => placesApi.get(placeId, date ?? undefined, { signal }),
     [placeId, date],
@@ -25,7 +28,7 @@ export default function PlaceDetailPage() {
 
   return (
     <main className={styles.page}>
-      <button type="button" className={styles.back} aria-label="뒤로 가기" onClick={() => navigate(-1)}>
+      <button type="button" className={styles.back} aria-label="뒤로 가기" onClick={goBack}>
         <span aria-hidden="true">‹</span>
       </button>
       {status === 'loading' && <LoadingState message="장소 정보를 불러오는 중이에요" />}
@@ -142,6 +145,8 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
 function PhotoViewer({ photos, placeName }: { photos: PlacePhoto[]; placeName: string }) {
   const ordered = [...photos].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary));
   const [index, setIndex] = useState(0);
+  // 불러오지 못한 사진 URL. 다른 출처 사진으로 바꾸지 않고 그 칸을 '사진 없음'으로 둔다.
+  const [broken, setBroken] = useState<ReadonlySet<string>>(new Set());
   const photo = ordered[Math.min(index, ordered.length - 1)];
 
   if (!photo) {
@@ -151,13 +156,26 @@ function PhotoViewer({ photos, placeName }: { photos: PlacePhoto[]; placeName: s
       </div>
     );
   }
+  const hasPager = ordered.length > 1;
   return (
     <figure className={styles.photo}>
-      <img src={photo.url} alt={`${placeName} 사진 ${index + 1}`} />
-      <figcaption className={styles.credit}>
-        사진 {photo.sourceOrg} · {photo.licenseType ?? '저작권 유형 확인 필요'}
-      </figcaption>
-      {ordered.length > 1 && (
+      {broken.has(photo.url) ? (
+        <div className={styles.noPhoto}>
+          <p>사진 없음</p>
+        </div>
+      ) : (
+        <>
+          <img
+            src={photo.url}
+            alt={`${placeName} 사진 ${index + 1}`}
+            onError={() => setBroken((prev) => new Set(prev).add(photo.url))}
+          />
+          <figcaption className={`${styles.credit} ${hasPager ? styles.creditWithPager : ''}`}>
+            사진 {photo.sourceOrg} · {photo.licenseType ?? '저작권 유형 확인 필요'}
+          </figcaption>
+        </>
+      )}
+      {hasPager && (
         <div className={styles.pager}>
           <button type="button" aria-label="이전 사진" disabled={index === 0} onClick={() => setIndex(index - 1)}>
             ‹
