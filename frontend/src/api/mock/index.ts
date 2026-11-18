@@ -182,8 +182,11 @@ function updateBlock(tripId: string, blockId: string, body: UpdateBlockRequest):
       if (body.isFixed === block.isFixed) return null;
       if (body.isFixed) {
         // 지정 시각이 없으면 고정할 수 없다(백엔드 ERR-001).
-        if (!block.fixedStart && !block.fixedEnd) return invalid();
+        if (!block.fixedStart || !block.fixedEnd) return invalid();
+        // 백엔드처럼 지정 시각을 도착·출발 시각으로 쓴다.
         block.isFixed = true;
+        block.arriveAt = block.fixedStart;
+        block.departAt = block.fixedEnd;
       } else {
         // 지정 시각만 지우고 도착 시각은 유지한다. 출발 = 도착 + 체류, 자정을 넘기면 null. 뒤 블록만 다시 계산한다.
         block.isFixed = false;

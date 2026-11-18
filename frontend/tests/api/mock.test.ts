@@ -102,6 +102,14 @@ describe('mockRequest', () => {
     await expect(mockRequest({ method: 'POST', path: `${TRIP}/undo` })).rejects.toMatchObject({ id: 'ERR-001' });
   });
 
+  it('지정 시각이 있는 블록을 고정하면 지정 시각을 도착·출발 시각으로 쓴다', async () => {
+    const windowed = structuredClone(fixtureSchedule);
+    Object.assign(windowed.days[0]!.blocks[1]!, { isFixed: false, fixedStart: '13:00', fixedEnd: '14:00', arriveAt: null, departAt: null });
+    resetMockSchedule(windowed);
+    const result = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: BLOCK, body: { isFixed: true } });
+    expect(result.schedule.days[0]!.blocks[1]).toMatchObject({ isFixed: true, arriveAt: '13:00', departAt: '14:00' });
+  });
+
   it('여행별 목 편집 상태를 분리한다', async () => {
     await mockRequest({ method: 'PATCH', path: BLOCK, body: { stayMin: 55 } });
     const other = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: '/trips/t2' });
