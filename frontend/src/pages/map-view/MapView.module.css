@@ -180,6 +180,24 @@
   gap: var(--space-1);
 }
 
+.stayField {
+  min-height: var(--tap-min);
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-s);
+  background: var(--color-surface);
+}
+
+.stayField[aria-invalid='true'] {
+  border-color: var(--color-warn);
+}
+
+.stayError {
+  color: var(--color-warn);
+  font-size: var(--text-s);
+}
+
 .candidateName {
   font-size: var(--text-xl);
   font-weight: 800;
