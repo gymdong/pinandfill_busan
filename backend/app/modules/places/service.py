@@ -84,6 +84,7 @@ class PlaceSearchService:
         async with anyio.create_task_group() as group:
             for code in settings.nearby_category_codes:
                 group.start_soon(one, code, group.cancel_scope)
+        # 실패가 있으면 취소된 분류의 결과가 빠진 found 는 쓰지 않는다.
         if failures:
             raise failures[0]
 

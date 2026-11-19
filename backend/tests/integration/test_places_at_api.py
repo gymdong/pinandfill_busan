@@ -36,7 +36,8 @@ def kakao_place(kakao_place_id: str, name: str, lat: float, lng: float) -> Kakao
 
 PARK = kakao_place("900000001", "예시 해변공원", 35.1501, 129.1201)  # 약 14m
 CAFE = kakao_place("900000002", "예시카페", 35.1505, 129.1205)  # 약 71m
-FAR_CAFE = kakao_place("900000003", "먼 카페", 35.1508, 129.1207)  # 약 107m(반경은 카카오가 거른다)
+# 약 107m. 반경은 카카오가 거르고 서비스는 다시 거르지 않는다. 가짜 공급자는 거르지 않으니 정렬·상한만 확인한다.
+FAR_CAFE = kakao_place("900000003", "먼 카페", 35.1508, 129.1207)
 
 
 class FakeKakao:
