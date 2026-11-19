@@ -119,7 +119,7 @@ try {
 | UI-01 코스 만들기 순서 | API-002 → 담은 장소마다 API-006(`dayNo` 필수라 화면에서 일차를 고름) → API-009. 담은 목록을 API-009가 한 번에 받게 되면(PR #18 제안) `features/trip-start/createCourse.ts`만 바꾼다 | 정현빈 |
 | 여행 기간 상한 | 3일(`MAX_TRIP_DAYS`). SRS에 상한이 없어 README의 '1~3일'을 따름 | 김동현 |
 | API-006 장소·삽입 위치 | 백엔드(PR #11)와 맞춤. `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 위치는 `dayNo`(그날 마지막) 또는 `fromBlockId`·`toBlockId`(두 블록 사이). 카카오 ID는 숫자, URL은 `https://place.map.kakao.com/{id}`. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest` | 정현빈 (PR #11 병합) |
-| API-006 `stayMin` | 백엔드(#25·#28)와 맞춤. 정수 1~1440, 보내면 공공 장소 값보다 먼저 쓰고, `fixedWindow`와 함께 보내면 길이가 같아야 한다. 근거가 없으면 400 ERR-001 `fields.stayMin`. 최초 생성이 API-009 `initial.selections[].stayMin`으로 바뀌면 그쪽으로 옮긴다 | 정현빈 (#25 병합) |
+| API-006 `stayMin` | 백엔드(#25·#28)와 맞춤. 정수 1~1440, 보내면 공공 장소 값보다 먼저 쓰고, `fixedWindow`와 함께 보내면 길이가 같아야 한다. 근거가 없으면 400 ERR-001 `fields.stayMin`. 최초 생성이 API-009 `initial.selections[].stayMin`으로 바뀌면 그쪽으로 옮긴다. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest.stay_min`·`stay_matches_window`, `trips/router.py`의 `StayDurationRequiredError` 변환 | 정현빈 (#25·#28 병합) |
 | 카카오 장소 좌표 전달 | API-006~011 요청의 `sessionCoords`(`kakaoPlaceId` → 좌표). DELETE에도 본문 사용 | 정현빈 |
 | 블록의 카카오 장소 | `place: {source: 'KAKAO', kakaoPlaceId, placeUrl}`, 좌표 없는 구간은 `durationMin: null` | 정현빈·김동현 |
 
