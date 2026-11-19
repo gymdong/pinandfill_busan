@@ -1,77 +1,80 @@
-# UI-03 경유지 시트 인수인계
+# UI-03 연결 인수인계 — PM F1/F2 반영
 
-TEAM.md의 정현빈 담당 UI-03 컴포넌트다. 타임라인 페이지는 수정하지 않았다.
+컴포넌트: `frontend/src/features/waypoint-sheet/WaypointSheet.tsx`.
+기존 직접 검색 BlockEditor를 삭제하지 않는다. 아래는 김동현 담당
+`frontend/src/pages/timeline/index.tsx`의 `DayTimeline`에 적용할 예시이며,
+이번 PR은 그 파일을 수정하지 않는다.
 
-```tsx
-<WaypointSheet
-  tripId={tripId}
-  between={{ fromBlockId, toBlockId }}
-  disabled={pending}
-  onChange={change}
-  onClose={() => setSlot(null)}
-/>
-```
-
-김동현 담당 타임라인에서 인접 구간을 선택한 동안만 마운트한다. `onChange`는 기존
-타임라인의 change 함수와 호환되며 일정 교체·오류 표시·pending·undo 상태를 부모가 관리한다.
-삽입이 성공하면 부모는 시트를 닫아 기존 anchor 사이의 추천 결과를 재사용하지 않아야 한다.
-일정이 다른 편집으로 변경되거나 일차·구간이 없어져도 시트를 닫는다.
-
-- API-011: 기본 15분, 10/15/30 선택, 순위를 유지하며 PUBLIC 후보 최대 3개 표시.
-- API-006: 명시적 from/to, placeId, origin=SUGGESTED, isFixed=false만 전송한다.
-  후보 stayMin은 표시값이다. API-006의 선택적 stayMin은 #25에서 추가됐지만, 이 컴포넌트는 PUBLIC 장소의 서버 체류시간 공급자를 사용하며 요청을 확장하지 않는다.
-- 기존 API 클라이언트가 sessionCoords를 붙인다. 컴포넌트는 카카오 좌표·이름을 읽거나 저장하지 않는다.
-- useApi가 구간/임계값 변경·닫기 시 조회를 취소하고 늦은 응답을 무시한다.
-- 실제 타임라인 연결, 브라우저 실서버 검증은 담당자 통합 후 필요하다.
-
-## 컴포넌트 검증 (2026-11-15)
-
-Node 24.22.1, 기존 package-lock.json 유지. 전체 Vitest 142개(신규 9개),
-ESLint, TypeScript, Vite build 통과. 신규 테스트는 15분 기본값·10/30 변경,
-후보 0개·최대 3개, PUBLIC 삽입 요청, 편집 중 비활성화, 오류 재시도,
-구간/임계값 변경의 늦은 응답 무시, 닫기와 요청 취소를 검증한다.
-컴포넌트는 아직 앱 라우트에 연결되지 않아 build 성공은 실제 화면 연동의 증명이 아니다.
-실서버·브라우저 시각 검증은 수행하지 않았다.
-
-## PR #19 연결 위치 (2026-11-17, HEAD 6f14e6d)
-
-`frontend/src/pages/timeline/index.tsx`의 `DayTimeline` 안에서
-`slot === block.id`일 때 렌더링하는 구간용 `BlockEditor`만 아래처럼 교체한다.
-블록 편집용 및 목록 끝 추가용 BlockEditor는 그대로 둔다.
+## 두 진입점
 
 ```tsx
 import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
-
-{slot === block.id && <WaypointSheet
-  tripId={tripId}
+// DayTimeline 안. React useState를 기존 import에 추가.
+const [recommendedSlot, setRecommendedSlot] = useState<string | null>(null);
+// blocks.map의 next가 있는 구간 안:
+<Button disabled={pending} onClick={() => setRecommendedSlot(block.id)}>
+  추천 보기
+</Button>
+// 기존 직접 검색 버튼과 between BlockEditor는 그대로 유지:
+<button disabled={pending} onClick={() => onSlot(block.id)}>직접 검색해서 넣기</button>
+{slot === block.id && <BlockEditor tripId={tripId}
   between={{ fromBlockId: block.id, toBlockId: next.id }}
-  disabled={pending}
-  onChange={onSlotChange}
-  onClose={() => onSlot(block.id)}
+  disabled={pending} onChange={onSlotChange} />}
+{recommendedSlot === block.id && <WaypointSheet tripId={tripId}
+  between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending}
+  onClose={() => setRecommendedSlot(null)}
+  onDirectSearch={() => {
+    setRecommendedSlot(null);
+    if (slot !== block.id) onSlot(block.id);
+  }}
+  onChange={async (action) => {
+    await onChange(async () => {
+      const result = await action(); // 실패하면 아래 닫기 실행 안 됨
+      setRecommendedSlot(null);
+      return result; // 기존 TimelineTrip.run이 일정/경고/undo 갱신
+    });
+  }}
 />}
 ```
 
-Props: `tripId: string`, `between: {fromBlockId: string; toBlockId: string}`,
-`disabled: boolean`, `onClose: () => void`,
-`onChange: (action: () => Promise<ScheduleMutationResponse>) => Promise<void>`.
-선택 후보 자체를 부모에게 넘기지 않고 API-006 실행 함수를 onChange에 전달한다.
+현재 DayTimeline은 dayNo를 key로 마운트하므로 일차 전환 때 추천 상태도 초기화된다.
+다른 편집으로 선택 구간이 더 이상 인접하지 않으면 추천 시트를 닫거나 렌더링하지 않는다.
+요청 중에는 슬롯 전환 버튼을 disabled=pending으로 막는다. Esc로 닫고 다시 열 수 있는
+구현에서는 성공 callback이 다른 구간의 시트를 닫지 않도록 요청 구간 ID도 대조한다.
+기존 직접 검색 테스트 `TimelinePage.test.tsx`의 인접 블록 사이 검색 삽입은 유지한다.
 
-- 열기: 기존 “사이에 들를 곳 찾기” 버튼의 onSlot을 유지한다.
-- 마운트/임계값 변경 시 API-011을 조회하고 후보 수락 클릭 시에만 API-006을 실행한다.
-- `TimelineTrip.slotAndClose` → `onSlotChange`를 그대로 사용한다. 성공 시 일정/경고/undo
-  갱신 후 닫고, 실패 시 부모 run이 오류를 표시하며 시트는 유지한다. 단순 change를 넘기면
-  성공 후 기존 anchor가 더 이상 인접하지 않을 수 있으므로 slotAndClose가 적합하다.
-- 일차 변경의 기존 selectDay는 slot을 비운다. 다른 편집으로 인접성이 바뀌면 시트도 닫는다.
-- pending 동안 버튼/임계값을 비활성화한다. 닫기/일차 전환 시 조회는 취소한다.
-- 연결 후 TimelinePage 테스트에 슬롯 열기→후보 표시→수락→일정 갱신/닫힘/undo 활성,
-  삽입 실패 시 유지, 일차 전환 시 닫힘을 추가한다. 기존 편집/지도 테스트도 실행한다.
+## Props와 책임
 
-이번 공유는 연결 가능한 컴포넌트 제공까지다. 김동현 담당 파일은 변경하지 않았다.
-2026-11-17 최신 dev(853eb44)와 merge-tree 충돌 검사 통과. 브랜치 자동 병합은 하지 않았다.
+- tripId: string
+- between: { fromBlockId: string; toBlockId: string }
+- disabled: boolean (부모 pending)
+- onChange: (action: () => Promise<ScheduleMutationResponse>) => Promise<void>
+- onClose: () => void
+- onDirectSearch?: () => void (추천 시트를 닫고 기존 검색으로 전환)
 
-## 최신 통합 기준 (2026-11-18)
+마운트/10·15·30분 변경 시 API-011을 조회한다. 수락 클릭 시 API-006 실행 함수를 부모에
+전달한다. 부모는 기존 run처럼 await action 후 일정/경고/undo를 갱신하고 오류를 처리한다.
+시트는 그 action의 실패를 직접 포착해 정제된 오류를 내부 role=alert로 표시한 뒤 부모에도
+실패를 전달한다. 따라서 부모가 예외를 삼켜도 시트 내부 오류가 사라지지 않는다.
+실패 시 시트와 후보를 유지하고 같은 수락 버튼으로 재시도한다. 재시도 시 오류를 지운다.
+삽입 중 시트 자체도 중복 클릭을 막는다. 부모 외부 오류 Banner를 제거할 필요는 없다.
 
-PR #19는 dev에 병합됐다. 연결 지점과 props는 그대로이며 최신 dev 6c28992와
-merge-tree 충돌 검사가 통과했다. #24 CI도 성공했다. API-026과 기본 메모리 서비스는
-#25로 제공되지만 API-011 기본 후보 공급자는 아직 미설정이다. 따라서 이 시트를 실제
-서버에 붙였다는 것만으로 추천이 동작한다고 간주하지 않는다.
+## 기존 API 계약
+
+API-006은 #25의 선택적 stayMin을 사용해 서버 후보의 표시된 체류시간을 그대로 전달한다.
+숫자 기본값을 만들지 않는다. placeId·from/to·isFixed=false·origin=SUGGESTED 유지.
+서버의 요청 stayMin 우선 적용으로 추천과 삽입 체류시간을 맞춘다. 현재 브랜치의 이전 공통
+타입을 수정하지 않고 지역 교차 타입만 사용한다. 최신 dev 타입에는 stayMin이 이미 있다.
+카카오 sessionCoords는 공통 클라이언트가 처리하며 이 컴포넌트는 저장하지 않는다.
+API-011 기본 CandidateProvider는 아직 미설정이므로 실서버 추천 완료를 주장하지 않는다.
+
+## 검증
+
+F2 오류 표시와 stayMin 전달 테스트는 변경 전 실패, 변경 후 통과를 확인했다.
+추천 없음에서 직접 검색 callback, 임계값·순위·취소·늦은 응답·삽입 실패/재시도를 검증한다.
+명령: npm test; npm run lint; npm run typecheck; npm run build.
+연결 담당 후속 테스트: 직접 검색 기존 흐름 유지, 추천 열기→수락→일정/undo 갱신→닫기,
+실패 시 dialog 내부 alert와 재시도, 일차 전환, 요청 중 다른 구간 전환 방지.
+실제 페이지 연결 및 브라우저·실서버 검증은 아직 수행하지 않았다.
+
+2026-11-19 검증: 기능 브랜치144개, 별도 최신 dev040ad76+컴포넌트256개 테스트 통과. 양쪽 lint/typecheck/build 통과. 기존 직접 검색 TimelinePage 회귀도 통과. 최신 dev 자동 병합은 하지 않았다.

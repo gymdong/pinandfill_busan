@@ -50,7 +50,7 @@ describe('WaypointSheet', () => {
     render(<WaypointSheet {...input} />);
     await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
     expect(input.onChange).toHaveBeenCalledTimes(1);
-    expect(add).toHaveBeenCalledExactlyOnceWith('trip', { place: { placeId: candidate.place.id }, fromBlockId: 'a', toBlockId: 'b', isFixed: false, origin: 'SUGGESTED' });
+    expect(add).toHaveBeenCalledExactlyOnceWith('trip', { place: { placeId: candidate.place.id }, fromBlockId: 'a', toBlockId: 'b', isFixed: false, origin: 'SUGGESTED', stayMin: candidate.stayMin });
   });
 
   it('부모가 편집 중이면 임계값과 추가 버튼을 잠근다', async () => {
@@ -71,7 +71,7 @@ describe('WaypointSheet', () => {
   it('조회 오류는 재시도할 수 있고 원시 예외 내용을 표시하지 않는다', async () => {
     vi.spyOn(tripsApi, 'suggestWaypoints').mockRejectedValueOnce(new Error('secret raw payload')).mockResolvedValueOnce({ candidates: [candidate] });
     render(<WaypointSheet {...props()} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('경유지를 불러오지 못했습니다.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('경유지를 불러오지 못했어요.');
     expect(screen.queryByText(/secret raw/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '다시 시도' }));
     expect(await screen.findByText(candidate.place.name)).toBeInTheDocument();
@@ -114,4 +114,33 @@ describe('WaypointSheet', () => {
     expect(suggest.mock.calls[0]![2]!.signal!.aborted).toBe(true);
     await act(async () => pending.resolve({ candidates: [candidate] }));
   });
+});
+
+
+it('삽입 실패를 시트 내부에 표시하고 같은 후보로 재시도한다', async () => {
+  vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
+  const add = vi.spyOn(tripsApi, 'addBlock').mockRejectedValueOnce(new Error('private raw error')).mockResolvedValueOnce({ schedule, violations: [] });
+  const input = props();
+  input.onChange = vi.fn(async (action) => { try { await action(); input.onClose(); } catch { /* parent owns timeline error */ } });
+  render(<WaypointSheet {...input} />);
+  const button = await screen.findByRole('button', { name: `${candidate.place.name} 경유지로 추가` });
+  await userEvent.click(button);
+  const alert = await screen.findByRole('alert');
+  expect(screen.getByRole('dialog').contains(alert)).toBe(true);
+  expect(alert).not.toHaveTextContent('private raw error');
+  expect(input.onClose).not.toHaveBeenCalled();
+  await userEvent.click(button);
+  await waitFor(() => expect(input.onClose).toHaveBeenCalledOnce());
+  expect(add).toHaveBeenCalledTimes(2);
+});
+
+it('빈 추천에서도 직접 검색 진입점을 제공하며 삽입하지 않는다', async () => {
+  vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [] });
+  const add = vi.spyOn(tripsApi, 'addBlock');
+  const direct = vi.fn();
+  render(<WaypointSheet {...props()} onDirectSearch={direct} />);
+  await screen.findByText('추가할 곳 없음');
+  await userEvent.click(screen.getByRole('button', { name: '직접 검색해서 넣기' }));
+  expect(direct).toHaveBeenCalledOnce();
+  expect(add).not.toHaveBeenCalled();
 });
