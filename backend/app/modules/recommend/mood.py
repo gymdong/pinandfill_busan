@@ -116,8 +116,9 @@ def guard_llm_output(
     if not isinstance(codes, list) or not isinstance(avoid, list):
         return None
     by_code = {tag.code: tag for tag in dictionary}
-    tags = [by_code[code] for code in dict.fromkeys(codes) if isinstance(code, str) and code in by_code]
-    kept_avoid = tuple(item for item in dict.fromkeys(avoid) if isinstance(item, str) and item in AVOID_OPTIONS)
+    # 문자열만 먼저 거른다. 리스트처럼 해시할 수 없는 값이 섞여도 예외 없이 버린다.
+    tags = [by_code[code] for code in dict.fromkeys(c for c in codes if isinstance(c, str)) if code in by_code]
+    kept_avoid = tuple(item for item in dict.fromkeys(a for a in avoid if isinstance(a, str)) if item in AVOID_OPTIONS)
     return tuple(tags[:MAX_TAGS]), kept_avoid
 
 
