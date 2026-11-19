@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { schedule, trip } from '@/api/mock/fixtures/schedule';
+import { parseErrorResponse } from '@/api/errors';
 import MapViewPage from '@/pages/map-view';
 
 const mocks = vi.hoisted(() => ({
@@ -11,10 +12,11 @@ const mocks = vi.hoisted(() => ({
   remember: vi.fn(),
 }));
 
-vi.mock('@/api', () => ({
+// ApiError·toApiError는 실제 것을 써서 서버 오류 본문 → ApiError.fields → 화면 경로를 그대로 거친다.
+vi.mock('@/api', async (importActual) => ({
+  ...(await importActual<typeof import('@/api')>()),
   tripsApi: { get: mocks.get, addBlock: mocks.addBlock },
   placesApi: { at: mocks.at },
-  toApiError: (error: Error) => error,
 }));
 vi.mock('@/api/kakaoSession', () => ({
   resolveBlockPlace: (place: { source: string; name?: string; lat?: number; lng?: number }) =>
@@ -100,7 +102,8 @@ describe('지도 보기', () => {
 
   it('서버가 체류시간 근거가 없다고 하면(fields.stayMin) 그 후보에 머무를 시간 칸을 띄운다', async () => {
     const message = '체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.';
-    mocks.addBlock.mockRejectedValueOnce(Object.assign(new Error(message), { id: 'ERR-001', fields: { stayMin: message } }));
+    // 백엔드가 보내는 본문 그대로 ApiError로 바꾼다(backend trips/router.py StayDurationRequiredError).
+    mocks.addBlock.mockRejectedValueOnce(parseErrorResponse(400, { error: { id: 'ERR-001', message, fields: { stayMin: message } } }));
     renderPage();
     fireEvent.click(await screen.findByText('지도 길게 누르기'));
     fireEvent.click(await screen.findByText('꼭 갈 곳에 추가'));
