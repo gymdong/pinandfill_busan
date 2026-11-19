@@ -275,3 +275,48 @@ def test_settings_read_prefixed_env_and_hide_key(monkeypatch):
 
     assert settings.rest_api_key.get_secret_value() == "from-env"
     assert "from-env" not in repr(settings)
+
+
+# ---------- API-004 카테고리 검색(좌표 반경) ----------
+
+CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
+
+
+async def test_category_request_follows_kakao_spec(adapter, settings, respx_mock):
+    route = respx_mock.get(CATEGORY_URL).respond(json=FIXTURE)
+
+    places = await adapter.search_category("AT4", lat=35.15, lng=129.12, radius_m=100)
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == f"KakaoAK {TEST_KEY}"
+    # x 가 경도, y 가 위도다(공식 문서). 가까운 순으로 받는다.
+    assert dict(request.url.params) == {
+        "category_group_code": "AT4",
+        "x": "129.12",
+        "y": "35.15",
+        "radius": "100",
+        "sort": "distance",
+        "size": "15",
+    }
+    # 키워드 검색과 같은 부산 주소 필터를 거친다.
+    assert [place.kakao_place_id for place in places] == ["900000001", "900000002"]
+
+
+@pytest.mark.parametrize(("lat", "lng"), [(37.56, 126.97), (35.15, 128.0), (36.0, 129.12)])
+async def test_category_outside_busan_is_empty_without_calling(adapter, respx_mock, lat, lng):
+    route = respx_mock.get(CATEGORY_URL).respond(json=FIXTURE)
+
+    assert await adapter.search_category("AT4", lat=lat, lng=lng, radius_m=100) == []
+    assert route.call_count == 0
+
+
+async def test_category_failure_raises_and_logs_no_coordinates(adapter, respx_mock, caplog):
+    respx_mock.get(CATEGORY_URL).respond(400, json={"code": -10, "msg": "example"})
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(KakaoLocalError) as error:
+        await adapter.search_category("AT4", lat=35.1234567, lng=129.1765432, radius_m=100)
+
+    assert error.value.reason == "quota_exceeded"
+    assert "kakao_local_category failed reason=quota_exceeded" in caplog.text
+    for leaked in ("35.1234567", "129.1765432", TEST_KEY):
+        assert leaked not in caplog.text

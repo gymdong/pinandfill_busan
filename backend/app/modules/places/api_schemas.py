@@ -35,6 +35,13 @@ class PlaceSearchResponse(ContractModel):
     places: tuple[PlaceSearchItem, ...] = ()
 
 
+class PlacesAtResponse(ContractModel):
+    """API-004. 프런트 `PlacesAtResponse` 와 같다."""
+
+    places: tuple[PlaceSearchItem, ...] = ()
+    nearby_count: int = Field(0, ge=0)
+
+
 # ---------- API-005 장소 상세. 프런트 `PlaceDetailResponse`(frontend/src/types/api.ts)와 필드가 같다. ----------
 
 DayType = Literal["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN", "HOLIDAY"]

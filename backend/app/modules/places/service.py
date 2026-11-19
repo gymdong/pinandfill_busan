@@ -1,12 +1,14 @@
 import logging
 from typing import Protocol
 
+import anyio
 from anyio import to_thread
 
-from app.adapters.kakao import KakaoPlace
+from app.adapters.kakao import KakaoLocalError, KakaoPlace
 
-from .api_schemas import Coords, PlaceSearchItem, PlaceSearchResponse
+from .api_schemas import Coords, PlacesAtResponse, PlaceSearchItem, PlaceSearchResponse
 from .badge import hours_status, place_badge
+from .geo import distance_m
 from .matcher import PlaceMatcher
 from .schemas import PublicPlace
 from .settings import PlaceMatchSettings
@@ -33,6 +35,10 @@ class KakaoPlaceSearch(Protocol):
 
     async def search_keyword(self, query: str, *, category_group_code: str | None = None) -> list[KakaoPlace]: ...
 
+    async def search_category(
+        self, category_group_code: str, *, lat: float, lng: float, radius_m: int
+    ) -> list[KakaoPlace]: ...
+
 
 class PlaceSearchService:
     """장소 검색(API-003): 카카오에서 찾고 결과마다 공공 DB 매칭과 배지를 붙인다.
@@ -53,6 +59,44 @@ class PlaceSearchService:
             raise InvalidSearchRequestError
 
         places = await self._kakao.search_keyword(query, category_group_code=category)
+        return PlaceSearchResponse(places=await self._items(places))
+
+    async def at(self, lat: float, lng: float) -> PlacesAtResponse:
+        """API-004 지도 길게 누르기: 좌표 반경 안의 장소를 분류별로 찾아 합치고 가까운 순으로 돌려준다.
+
+        분류 하나라도 실패하면 전체를 실패로 본다. 일부만 보여 주면 '주변에 없음'으로 오해한다.
+        nearbyCount 는 반경 안에서 찾은 장소 수(중복 제외), places 는 그중 가까운 몇 곳이다.
+        """
+        settings = self._settings
+        found: dict[str, list[KakaoPlace]] = {}
+        failures: list[KakaoLocalError] = []
+
+        async def one(code: str, scope: anyio.CancelScope) -> None:
+            try:
+                found[code] = await self._kakao.search_category(
+                    code, lat=lat, lng=lng, radius_m=settings.nearby_radius_m
+                )
+            except KakaoLocalError as error:
+                # 태스크 그룹은 예외를 ExceptionGroup 으로 감싸므로 직접 모아 남은 호출을 멈춘다.
+                failures.append(error)
+                scope.cancel()
+
+        async with anyio.create_task_group() as group:
+            for code in settings.nearby_category_codes:
+                group.start_soon(one, code, group.cancel_scope)
+        if failures:
+            raise failures[0]
+
+        merged: dict[str, KakaoPlace] = {}
+        for code in settings.nearby_category_codes:
+            for place in found[code]:
+                merged.setdefault(place.kakao_place_id, place)
+        nearest = sorted(merged.values(), key=lambda place: distance_m(lat, lng, place.lat, place.lng))
+        return PlacesAtResponse(
+            places=await self._items(nearest[: settings.nearby_max_results]), nearby_count=len(merged)
+        )
+
+    async def _items(self, places: list[KakaoPlace]) -> tuple[PlaceSearchItem, ...]:
         # 매칭은 동기 DB 조회라 이벤트 루프를 막지 않도록 스레드에서 한 번에 처리한다.
         failure = ""
         matches: list[PublicPlace | None] = []
@@ -64,9 +108,7 @@ class PlaceSearchService:
         if failure:
             logger.warning("place_lookup failed error=%s count=%d", failure, len(places))
             raise PlaceLookupError
-        return PlaceSearchResponse(
-            places=tuple(_to_item(place, matched) for place, matched in zip(places, matches, strict=True))
-        )
+        return tuple(_to_item(place, matched) for place, matched in zip(places, matches, strict=True))
 
     def _match_all(self, places: list[KakaoPlace]) -> list[PublicPlace | None]:
         return [self._matcher.match(place) for place in places]
