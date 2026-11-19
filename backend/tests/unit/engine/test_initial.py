@@ -404,7 +404,10 @@ def test_second_day_route_receives_second_day_kst():
 
 
 def test_insertion_resolving_direct_route_conflict_does_not_retain_stale_warning(monkeypatch):
-    planner, _, routes, _ = setup()
+    planner, places, routes, _ = setup()
+    # FIRST_FEASIBLE can now keep an existing fixed conflict. Restrict C's
+    # opening so this scenario exercises the gap that actually resolves it.
+    places.hours[("c", date(2026, 11, 14))] = OpeningHours(open_time=time(10, 40), close_time=time(18))
 
     def estimate(origin, destination, *, mode, departure_at):
         pair = (origin.place_ref.place_id, destination.place_ref.place_id)
@@ -428,3 +431,111 @@ def test_insertion_resolving_direct_route_conflict_does_not_retain_stale_warning
     assert not result.violations
     assert not result.conflicts
     assert not result.unplaced
+
+
+def test_existing_fixed_conflict_does_not_block_other_flexible_slots():
+    planner, _, _, _ = setup()
+    result = planner.plan(
+        command(
+            selection("a", fixed_window=FixedWindow(day_no=1, start=time(10), end=time(10, 30))),
+            selection("b", fixed_window=FixedWindow(day_no=1, start=time(10, 40), end=time(11, 10))),
+            selection("d", fixed_window=FixedWindow(day_no=1, start=time(15), end=time(15, 30))),
+            selection("c", stay_min=60),
+        )
+    )
+    assert not result.unplaced
+    assert {b.id for b in result.state.blocks} == {"a", "b", "c", "d"}
+    assert not result.confirmed
+    assert result.conflicts
+    assert all("d" not in conflict.block_ids for conflict in result.conflicts)
+    assert len([c for c in result.conflicts if c.block_ids == ("b",)]) == 1
+
+
+def test_fixed_failure_is_not_inherited_by_next_fixed_block():
+    planner, _, _, _ = setup()
+    result = planner.plan(
+        command(
+            selection("a", fixed_window=FixedWindow(day_no=1, start=time(10), end=time(10, 30))),
+            selection("b", fixed_window=FixedWindow(day_no=1, start=time(10, 40), end=time(11, 10))),
+            selection("d", fixed_window=FixedWindow(day_no=1, start=time(15), end=time(15, 30))),
+        )
+    )
+    assert all("d" not in conflict.block_ids for conflict in result.conflicts)
+    assert len(result.conflicts) == 1
+
+
+def test_flexible_visit_after_early_pin_starts_at_day_start():
+    planner, _, _, _ = setup()
+    result = planner.plan(
+        command(
+            selection("p", fixed_window=FixedWindow(day_no=1, start=time(7), end=time(7, 30))),
+            selection("f"),
+        )
+    )
+    flexible = next(b for b in result.state.blocks if b.id == "f")
+    assert flexible.arrive_at == time(9)
+
+
+@pytest.mark.parametrize("kakao", [False, True])
+def test_unknown_hours_are_placed_but_not_confirmed(kakao):
+    planner, places, _, _ = setup()
+    places.hours[("a", date(2026, 11, 14))] = None
+    item = selection("a", stay_min=30)
+    if kakao:
+        item = InitialSelection(
+            block_id="a",
+            place_ref=KakaoPlaceRef(kakao_place_id="123", kakao_place_url="https://place.map.kakao.com/123"),
+            stay_min=30,
+        )
+    result = planner.plan(
+        command(item),
+        context=CalculationContext(session_coords={"123": SessionCoordinate(lat=35.987654, lng=129.876543)}),
+    )
+    assert not result.unplaced
+    assert result.state.blocks[0].arrive_at == time(9)
+    assert any(v.type == "HOURS_NEEDS_CHECK" for v in result.violations)
+    assert not result.confirmed
+    assert "35.987654" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("allowed", [(1, 1), (2,), (1, 2)])
+def test_invalid_allowed_days_are_rejected_without_silent_normalization(allowed):
+    planner, _, _, _ = setup()
+    with pytest.raises(ValueError):
+        planner.plan(command(selection("a", allowed_days=allowed)))
+
+
+def test_trial_cannot_worsen_an_existing_fixed_conflict():
+    planner, places, _, _ = setup()
+    # C fits only between A and B, but would worsen B's existing 5-minute delay.
+    places.hours[("c", date(2026, 11, 14))] = OpeningHours(open_time=time(10, 30), close_time=time(11, 10))
+    result = planner.plan(
+        command(
+            selection("a", fixed_window=FixedWindow(day_no=1, start=time(10), end=time(10, 30))),
+            selection("b", fixed_window=FixedWindow(day_no=1, start=time(10, 40), end=time(11, 10))),
+            selection("c", stay_min=20),
+        )
+    )
+    assert [u.block_id for u in result.unplaced] == ["c"]
+    assert [b.id for b in result.state.blocks] == ["a", "b"]
+
+
+def test_route_memo_queries_each_pair_departure_once_per_plan(monkeypatch):
+    planner, _, routes, _ = setup(stay=60)
+    calls = []
+    original = routes.estimate_at
+
+    def tracking(origin, destination, *, mode, departure_at):
+        key = (origin.place_ref.place_id, destination.place_ref.place_id, mode, departure_at)
+        calls.append(key)
+        return original(origin, destination, mode=mode, departure_at=departure_at)
+
+    monkeypatch.setattr(routes, "estimate_at", tracking)
+    request = command(*(selection(str(n)) for n in range(12)), days=2)
+    result = planner.plan(request)
+    first = list(calls)
+    assert len(first) == len(set(first))
+    assert len(first) <= 132  # n*(n-1), bounded fixture call regression, not a global quota policy
+    assert result.state.blocks
+    planner.plan(request)
+    assert calls[len(first) :] == first  # no cross-request/shared memo

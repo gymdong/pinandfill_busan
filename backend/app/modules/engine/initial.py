@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Literal, Protocol
 from uuid import NAMESPACE_URL, uuid5
 
@@ -62,6 +62,8 @@ class InitialSelection(ContractModel):
     def valid_days(self) -> InitialSelection:
         if self.allowed_days is not None and (not self.allowed_days or any(day < 1 for day in self.allowed_days)):
             raise ValueError("allowedDays must contain positive day numbers")
+        if self.allowed_days is not None and len(set(self.allowed_days)) != len(self.allowed_days):
+            raise ValueError("allowedDays must not contain duplicates")
         if (
             self.fixed_window is not None
             and self.allowed_days is not None
@@ -112,7 +114,7 @@ class _Day:
     feasible: bool
     exact: bool
     reason: Violation | None = None
-    conflicts: tuple[ScheduleConflict, ...] = ()
+    failures: tuple[tuple[str, str, int], ...] = ()
 
 
 class InitialSchedulePlanner:
@@ -149,6 +151,8 @@ class InitialSchedulePlanner:
         unplaced: list[UnplacedSelection] = []
 
         for item in command.selections:
+            if item.allowed_days is not None and any(day > day_count for day in item.allowed_days):
+                raise EngineInputError("Allowed selection day is outside the trip dates")
             if item.fixed_window is not None and item.fixed_window.day_no > day_count:
                 raise EngineInputError("Fixed selection day is outside the trip dates")
             if item.fixed_window is None:
@@ -165,6 +169,7 @@ class InitialSchedulePlanner:
         extra_conflicts: list[ScheduleConflict] = []
         details_cache: dict[tuple[str, date], TransientPlaceDetails] = {}
         accepted: dict[int, _Day] = {}
+        route_cache: dict[tuple[str, str, datetime, str], RouteEstimate | None] = {}
         previous_fixed_position: tuple[int, time] | None = None
 
         # Preserve the caller's relative order for fixed selections.  Sorting by
@@ -185,7 +190,7 @@ class InitialSchedulePlanner:
                 by_day[item.fixed_window.day_no].append(selected)
 
         for day_no, items in by_day.items():
-            checked = self._day(command.trip, day_no, items, request_context, details_cache, retain_fixed=True)
+            checked = self._day(command.trip, day_no, items, request_context, details_cache, route_cache)
             accepted[day_no] = checked
 
         for selection in flexible:
@@ -209,9 +214,13 @@ class InitialSchedulePlanner:
                 for position in range(len(by_day[day_no]) + 1):
                     trial = list(by_day[day_no])
                     trial.insert(position, candidate)
-                    checked = self._day(command.trip, day_no, trial, request_context, details_cache)
+                    checked = self._day(command.trip, day_no, trial, request_context, details_cache, route_cache)
                     first_reason = first_reason or checked.reason
-                    if checked.feasible:
+                    baseline = {(block_id, code): amount for block_id, code, amount in accepted[day_no].failures}
+                    preserves_conflicts = all(
+                        amount <= baseline.get((block_id, code), -1) for block_id, code, amount in checked.failures
+                    )
+                    if len(checked.blocks) == len(trial) and (checked.feasible or preserves_conflicts):
                         by_day[day_no] = trial
                         accepted[day_no] = checked
                         placed = True
@@ -240,9 +249,8 @@ class InitialSchedulePlanner:
             exact = exact and checked.exact and checked.feasible
             # Only accepted final routes describe the resulting day. A later
             # insertion can resolve an earlier direct-leg timing conflict.
-            if checked.reason is not None:
-                extra_violations.append(checked.reason)
-            extra_conflicts.extend(checked.conflicts)
+            # Fixed timing failures are presented by validate_chain, once per
+            # affected block, rather than repeated as heuristic diagnostics.
         state = ScheduleState(blocks=tuple(blocks), legs=tuple(legs))
         self.engine._check(command.trip, state)
         # Resolve through the sanitizing boundary used during placement.  A
@@ -325,8 +333,7 @@ class InitialSchedulePlanner:
         items: list[_Resolved],
         context: CalculationContext,
         details_cache: dict[tuple[str, date], TransientPlaceDetails],
-        *,
-        retain_fixed: bool = False,
+        route_cache: dict[tuple[str, str, datetime, str], RouteEstimate | None],
     ) -> _Day:
         on_date = trip.start_date + timedelta(days=day_no - 1)
         blocks: list[StoredBlock] = []
@@ -334,10 +341,12 @@ class InitialSchedulePlanner:
         details: dict[str, TransientPlaceDetails] = {}
         exact = True
         failure: Violation | None = None
-        conflicts: list[ScheduleConflict] = []
+        failures: list[tuple[str, str, int]] = []
 
         for seq, item in enumerate(items, start=1):
             selected = item.selection
+            block_failure: Violation | None = None
+            failure_amount = 1
             key = (selected.block_id, on_date)
             if key not in details_cache:
                 details_cache[key] = self._details(selected.place_ref, on_date, context)
@@ -354,16 +363,21 @@ class InitialSchedulePlanner:
                 if departure is not None and all(
                     value is not None for value in (origin.lat, origin.lng, place.lat, place.lng)
                 ):
-                    try:
-                        route = estimate_departing(
-                            self.engine.routes,
-                            origin,
-                            place,
-                            mode=trip.transport_mode,
-                            departure_at=departure,
-                        )
-                    except Exception:
-                        route = None
+                    # Per-plan memo: unique block IDs bind request-local place
+                    # details. Coordinates and keys never enter the memo key.
+                    route_key = (previous.id, selected.block_id, departure, trip.transport_mode)
+                    if route_key not in route_cache:
+                        try:
+                            route_cache[route_key] = estimate_departing(
+                                self.engine.routes,
+                                origin,
+                                place,
+                                mode=trip.transport_mode,
+                                departure_at=departure,
+                            )
+                        except Exception:
+                            route_cache[route_key] = None
+                    route = route_cache[route_key]
                     if route is not None and (
                         type(route.duration_min) is not int
                         or route.duration_min < 0
@@ -394,7 +408,7 @@ class InitialSchedulePlanner:
                 arrive, depart = fixed.start, fixed.end
                 fixed_duration = minutes(depart) - minutes(arrive)
                 if fixed.day_no != day_no or fixed_duration <= 0 or item.stay_min != fixed_duration:
-                    failure = Violation(
+                    block_failure = Violation(
                         type="FIXED_TIME_CONFLICT",
                         cause="고정 방문시간과 체류시간이 일치하지 않습니다.",
                     )
@@ -402,14 +416,14 @@ class InitialSchedulePlanner:
                     if previous.depart_at is None or duration is None:
                         exact = False
                     elif minutes(previous.depart_at) + duration > minutes(arrive):
-                        failure = Violation(
+                        failure_amount = minutes(previous.depart_at) + duration - minutes(arrive)
+                        block_failure = Violation(
                             type="FIXED_ORDER_CONFLICT",
                             cause="입력 순서에서 고정 방문시간을 지킬 수 없습니다.",
                         )
-                if failure is not None:
-                    conflicts.append(ScheduleConflict(cause=failure.cause, block_ids=(selected.block_id,)))
+
             else:
-                arrive, depart, failure = self._flexible_times(trip, previous, duration, item.stay_min, place)
+                arrive, depart, block_failure = self._flexible_times(trip, previous, duration, item.stay_min, place)
 
             blocks.append(
                 StoredBlock(
@@ -426,10 +440,13 @@ class InitialSchedulePlanner:
                     origin=selected.origin,
                 )
             )
-            if failure is not None and not (retain_fixed and fixed is not None):
-                return _Day(tuple(blocks), tuple(legs), False, False, failure, tuple(conflicts))
+            if block_failure is not None:
+                failure = failure or block_failure
+                failures.append((selected.block_id, block_failure.type, failure_amount))
+                if fixed is None:
+                    return _Day(tuple(blocks), tuple(legs), False, False, failure, tuple(failures))
 
-        return _Day(tuple(blocks), tuple(legs), failure is None, exact, failure, tuple(conflicts))
+        return _Day(tuple(blocks), tuple(legs), not failures, exact, failure, tuple(failures))
 
     def _flexible_times(
         self,
@@ -442,8 +459,14 @@ class InitialSchedulePlanner:
         hours = details.hours
         if hours is not None and hours.is_closed:
             return None, None, Violation(type="CLOSED_DAY", cause="방문일은 휴무일입니다.")
-        if hours is None or hours.open_time is None or hours.close_time is None:
-            return None, None, Violation(type="HOURS_NEEDS_CHECK", cause="영업시간·휴무 정보 확인이 필요합니다.")
+        # Unknown hours are not permission to claim verification, but do not
+        # prevent placement; validate_chain emits HOURS_NEEDS_CHECK afterwards.
+        known_hours = (
+            hours is not None
+            and hours.open_time is not None
+            and hours.close_time is not None
+            and hours.open_time < hours.close_time
+        )
         if previous is not None and (previous.depart_at is None or duration is None):
             return (
                 None,
@@ -453,8 +476,10 @@ class InitialSchedulePlanner:
         start = minutes(trip.day_start)
         if previous is not None and previous.depart_at is not None and duration is not None:
             start = minutes(previous.depart_at) + duration
-        start = max(start, minutes(hours.open_time))
-        if hours.break_start is not None and hours.break_end is not None:
+        start = max(start, minutes(trip.day_start))
+        if known_hours and hours is not None and hours.open_time is not None:
+            start = max(start, minutes(hours.open_time))
+        if known_hours and hours is not None and hours.break_start is not None and hours.break_end is not None:
             break_start, break_end = minutes(hours.break_start), minutes(hours.break_end)
             if break_start < break_end and start < break_end and start + stay > break_start:
                 start = break_end
@@ -465,7 +490,9 @@ class InitialSchedulePlanner:
                 None,
                 Violation(type="DAY_OVERFLOW", cause="방문이 날짜 경계를 넘어 날짜 분리 검토가 필요합니다."),
             )
-        if end > minutes(trip.day_end) or end > minutes(hours.close_time):
+        if end > minutes(trip.day_end) or (
+            known_hours and hours is not None and hours.close_time is not None and end > minutes(hours.close_time)
+        ):
             return None, None, Violation(type="TIME_WINDOW_CONFLICT", cause="여행·영업 시간창 안에 배치할 수 없습니다.")
         return time(start // 60, start % 60), time(end // 60, end % 60), None
 
