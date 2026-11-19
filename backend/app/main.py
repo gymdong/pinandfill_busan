@@ -40,11 +40,16 @@ def default_trip_service(places: SamplePlaceData) -> TripService:
 
 
 def kakao_settings() -> KakaoSettings | None:
-    """KAKAO_REST_API_KEY 가 비어 있으면 None. 장소 검색은 그때 지금처럼 503(ERR-017)이다."""
+    """KAKAO_REST_API_KEY 가 비어 있으면 None. 장소 검색은 그때 지금처럼 503(ERR-017)이다.
+
+    키가 아닌 설정(예: KAKAO_SEARCH_RECT)이 잘못되면 검색을 조용히 끄지 않고 앱 시작을 실패시킨다.
+    """
     try:
         kakao = KakaoSettings()  # type: ignore[call-arg]  # 값은 환경변수·.env 에서 읽는다
-    except ValidationError:
-        return None
+    except ValidationError as error:
+        if all(item["loc"] == ("rest_api_key",) for item in error.errors()):
+            return None
+        raise
     return kakao if kakao.rest_api_key.get_secret_value() else None
 
 
