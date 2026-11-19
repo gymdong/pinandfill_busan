@@ -4,6 +4,7 @@ import logging
 from datetime import date, time
 
 import pytest
+from pydantic import SecretStr
 
 from app.modules.ai.interpret import (
     RESPONSE_SCHEMA,
@@ -224,6 +225,19 @@ def test_guard_ignores_unknown_fields():
 def test_service_built_without_a_key_has_no_llm():
     built = build_interpret_service(AISettings(_env_file=None, api_key=None))
     assert built._llm is None
+
+
+@pytest.mark.parametrize("blank", ["", "   ", SecretStr("")])
+def test_blank_key_counts_as_no_key(blank):
+    # .env 의 `GEMINI_API_KEY=` 처럼 빈 값이면 LLM 을 만들지 않고 규칙 해석만 한다.
+    settings = AISettings(_env_file=None, api_key=blank)
+    assert settings.api_key is None
+    assert build_interpret_service(settings)._llm is None
+
+
+def test_blank_key_from_environment_counts_as_no_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    assert AISettings(_env_file=None).api_key is None
 
 
 def test_service_built_with_a_key_uses_gemini():
