@@ -49,14 +49,14 @@ describe('UI-08 분위기로 찾기', () => {
     await search();
 
     const chips = await screen.findByRole('group', { name: '해석된 조건' });
-    for (const label of ['바다 전망', '골목·산책', '덜 붐비는 곳']) {
+    for (const label of ['바다 전망', '골목·산책', '실내 제외']) {
       expect(within(chips).getByRole('button', { name: new RegExp(label) })).toHaveAttribute('aria-pressed', 'true');
     }
     expect(await screen.findByRole('list', { name: '추천 장소' })).toBeInTheDocument();
     // 여행 시작일을 혼잡 기준일로 보낸다.
     expect(mood.mock.calls.map(([body]) => body)).toEqual([
       { text: '조용한 바다 감성, 사람 적은 골목', date: '2026-10-17' },
-      { tags: ['SEA_VIEW', 'ALLEY_WALK'], avoid: ['덜 붐비는 곳'], date: '2026-10-17' },
+      { tags: ['SEA_VIEW', 'ALLEY_WALK'], avoid: ['실내 제외'], date: '2026-10-17' },
     ]);
     expect(screen.getByText(/10월 17일 \(토\) 기준/)).toBeInTheDocument();
   });
@@ -69,6 +69,9 @@ describe('UI-08 분위기로 찾기', () => {
     const [first, , third] = within(await screen.findByRole('list', { name: '추천 장소' })).getAllByRole('listitem');
     expect(within(first!).getByRole('heading', { name: '흰여울문화마을' })).toBeInTheDocument();
     expect(within(first!).getByText('바다 전망 · 골목·산책 — “해안 절벽 위로 이어진 좁은 골목”')).toBeInTheDocument();
+    // 근거 문장의 출처 기관·기준일을 함께 보여 준다(NFR-007). 출처가 없으면 지어내지 않는다.
+    expect(within(first!).getByText(/^설명 출처 한국관광공사 · /)).toBeInTheDocument();
+    expect(within(third!).queryByText(/설명 출처/)).not.toBeInTheDocument();
     expect(within(first!).getByText('한국관광공사 · 공공누리 제1유형')).toBeInTheDocument();
     expect(within(first!).getByText('예상 여유')).toBeInTheDocument();
     // 사진이 없으면 다른 사진을 끌어오지 않고 '사진 없음'으로 둔다.
@@ -85,7 +88,7 @@ describe('UI-08 분위기로 찾기', () => {
     await userEvent.click(screen.getByRole('button', { name: /바다 전망/ }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: '청사포' })).not.toBeInTheDocument());
     expect(screen.getByRole('heading', { name: '초량 이바구길' })).toBeInTheDocument();
-    expect(mood.mock.calls.at(-1)![0]).toEqual({ tags: ['ALLEY_WALK'], avoid: ['덜 붐비는 곳'], date: '2026-10-17' });
+    expect(mood.mock.calls.at(-1)![0]).toEqual({ tags: ['ALLEY_WALK'], avoid: ['실내 제외'], date: '2026-10-17' });
 
     await userEvent.click(screen.getByRole('button', { name: /골목·산책/ }));
     expect(await screen.findByText('태그를 하나 이상 골라 주세요.')).toBeInTheDocument();
@@ -97,7 +100,7 @@ describe('UI-08 분위기로 찾기', () => {
     renderPage();
     await search();
     await screen.findByRole('list', { name: '추천 장소' });
-    await userEvent.click(screen.getByRole('button', { name: /덜 붐비는 곳/ }));
+    await userEvent.click(screen.getByRole('button', { name: /실내 제외/ }));
     await waitFor(() => expect(mood.mock.calls.at(-1)![0]).toMatchObject({ avoid: [] }));
   });
 
@@ -193,7 +196,7 @@ describe('UI-08 분위기로 찾기', () => {
 
   it('표시명을 모르는 태그 코드는 화면에 내보내지 않는다', async () => {
     const [first] = moodPlaces;
-    mockMood([{ ...first!, evidence: { matchedTags: ['SEA_VIEW', 'UNKNOWN_CODE'], excerpt: '근거 예시' } }]);
+    mockMood([{ ...first!, evidence: { matchedTags: ['SEA_VIEW', 'UNKNOWN_CODE'], excerpt: '근거 예시', source: null } }]);
     renderPage();
     await search();
     expect(await screen.findByText('바다 전망 — “근거 예시”')).toBeInTheDocument();

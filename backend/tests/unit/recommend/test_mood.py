@@ -141,6 +141,19 @@ async def test_llm_result_is_used_when_valid_and_user_text_is_separated():
     assert "- SEA_VIEW: 바다 전망" in str(call["system"])
 
 
+async def test_explicit_avoid_found_by_rules_is_kept_when_llm_drops_it():
+    # 회귀: LLM 이 '실내 말고'의 피할 조건을 빠뜨려도 규칙이 찾은 조건은 남는다.
+    llm = FakeLlm({"tags": ["SEA_VIEW"], "avoid": []})
+    result = await service(llm).interpret("실내 말고 바다 보이는 곳")
+    assert ([tag.code for tag in result.tags], result.avoid, result.source) == (["SEA_VIEW"], ("실내 제외",), "llm")
+
+
+async def test_llm_avoid_is_added_to_rule_avoid_without_duplicates():
+    llm = FakeLlm({"tags": ["SEA_VIEW"], "avoid": ["야외 제외", "실내 제외"]})
+    result = await service(llm).interpret("실내 말고 바다 보이는 곳")
+    assert result.avoid == ("실내 제외", "야외 제외")
+
+
 async def test_schema_violation_is_retried_once_then_rules_take_over():
     # AC-016: LLM 이 계속 형식을 어기면 사전 키워드 규칙 결과로 응답한다.
     llm = FakeLlm("not json", {"tags": "SEA_VIEW"})

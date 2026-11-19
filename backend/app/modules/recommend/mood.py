@@ -160,7 +160,9 @@ class MoodService:
             if from_llm is None:
                 source = "fallback"
             else:
-                tags, avoid = from_llm
+                # 규칙이 찾은 피할 조건은 문장에 명시된 표현이라 LLM 이 빠뜨려도 남긴다(API-001 처럼 규칙 우선).
+                llm_tags, llm_avoid = from_llm
+                tags, avoid = llm_tags, tuple(dict.fromkeys((*avoid, *llm_avoid)))
                 source = "llm"
         # 원문과 해석 값은 로그에 남기지 않는다(NFR-010).
         logger.info("ai_mood source=%s tags=%d avoid=%d", source, len(tags), len(avoid))

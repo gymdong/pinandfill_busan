@@ -127,6 +127,11 @@
   font-size: var(--text-s);
 }
 
+.evidenceSource {
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+}
+
 .footer {
   position: sticky;
   bottom: 0;

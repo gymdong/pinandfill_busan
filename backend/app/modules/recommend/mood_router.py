@@ -12,6 +12,7 @@ from pydantic import Field, model_validator
 
 from app.modules.ai.sanitizer import InvalidInputError
 from app.modules.engine.schemas import ContractModel
+from app.modules.places.api_schemas import SourceInfo
 from app.modules.places.router import PlaceAPIError
 from app.modules.places.samples import load_sample_places
 
@@ -59,6 +60,8 @@ class MoodEvidence(ContractModel):
     matched_tags: tuple[str, ...]
     # 장소 설명 원문의 한 문장. 없으면 null('근거 문장 정보 없음')
     excerpt: str | None = None
+    # 근거 문장(장소 설명)의 출처 기관·기준일. 발췌가 없거나 출처 기관을 모르면 null 이다(NFR-007).
+    source: SourceInfo | None = None
 
 
 class MoodPlace(ContractModel):
@@ -123,7 +126,15 @@ async def recommend_mood(body: MoodRequest, response: Response, service: Service
                     category=item.candidate.category,
                     ref_date=item.candidate.ref_date,
                 ),
-                evidence=MoodEvidence(matched_tags=item.matched_tags, excerpt=item.excerpt),
+                evidence=MoodEvidence(
+                    matched_tags=item.matched_tags,
+                    excerpt=item.excerpt,
+                    source=(
+                        SourceInfo(org=item.candidate.source_org, ref_date=item.candidate.ref_date)
+                        if item.excerpt is not None and item.candidate.source_org
+                        else None
+                    ),
+                ),
             )
             for item in found
         ),

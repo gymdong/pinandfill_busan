@@ -1,6 +1,7 @@
 """API-013 분위기 추천 통합 테스트. 실제 LLM 은 부르지 않는다. 사전·장소는 직접 만든 예시다."""
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ from app.main import create_app
 from app.modules.ai.providers.base import LlmError
 from app.modules.ai.settings import AISettings
 from app.modules.recommend.mood import MoodService
-from app.modules.recommend.mood_data import MoodCandidate, StaticMoodData, ThemeTag
+from app.modules.recommend.mood_data import MoodCandidate, StaticMoodData, ThemeTag, load_mood_data
 
 SEA = ThemeTag("SEA_VIEW", "바다 전망", ("바다 전망", "바다"))
 ALLEY = ThemeTag("ALLEY_WALK", "골목·산책", ("골목·산책", "골목"))
@@ -24,6 +25,7 @@ VILLAGE = MoodCandidate(
     tag_codes=frozenset({"SEA_VIEW", "ALLEY_WALK"}),
     description="골목 끝에서 바다가 보인다.",
     indoor_outdoor="야외",
+    source_org="예시 기관",
 )
 
 
@@ -72,7 +74,11 @@ def test_tags_return_public_places_with_evidence(client):
                     "refDate": "2026-11-01",
                 },
                 "photo": None,
-                "evidence": {"matchedTags": ["SEA_VIEW", "ALLEY_WALK"], "excerpt": "골목 끝에서 바다가 보인다."},
+                "evidence": {
+                    "matchedTags": ["SEA_VIEW", "ALLEY_WALK"],
+                    "excerpt": "골목 끝에서 바다가 보인다.",
+                    "source": {"org": "예시 기관", "refDate": "2026-11-01"},
+                },
                 "crowd": None,
             }
         ],
@@ -104,9 +110,24 @@ def test_blocked_text_is_err_001_without_echoing_it(client):
     assert "프롬프트" not in response.text
 
 
-def test_default_app_has_no_dictionary_yet():
-    # 저장소에 태그 사전·장소 태그가 아직 없다. 지어내지 않고 빈 결과다(conftest 가 LLM 을 끈다).
+def test_evidence_source_is_null_without_excerpt_or_org(client):
+    no_org = MoodCandidate(**{**VILLAGE.__dict__, "place_id": "200", "source_org": None})
+    no_text = MoodCandidate(**{**VILLAGE.__dict__, "place_id": "300", "description": None})
+    settings = AISettings(_env_file=None, api_key=None)
+    client.app.state.mood_service = MoodService(settings, StaticMoodData((SEA,), (no_org, no_text)))
+    places = client.post("/api/recommend/mood", json={"tags": ["SEA_VIEW"], "date": "2026-11-20"}).json()["places"]
+    assert [(p["place"]["id"], p["evidence"]["source"]) for p in places] == [("200", None), ("300", None)]
+
+
+def test_default_app_builds_the_mood_service_from_data_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    # 저장소 데이터 유무와 관계없이, 기본 앱이 데이터 파일을 읽어 서비스를 만드는지만 본다(conftest 가 LLM 을 끈다).
+    # 사전·장소 태그 파일이 비면 지어내지 않고 빈 결과다.
+    monkeypatch.setattr(
+        "app.modules.recommend.mood_router.load_mood_data",
+        lambda places: load_mood_data(places, theme_tags=tmp_path / "none.csv", place_tags=tmp_path / "none.csv"),
+    )
     with TestClient(create_app(Settings(app_name="Backend test"))) as client:
         response = client.post("/api/recommend/mood", json={"text": "바다 보이는 곳", "date": "2026-11-20"})
+        assert isinstance(client.app.state.mood_service, MoodService)
     assert response.status_code == 200
     assert response.json() == {"tags": [], "avoid": [], "places": []}

@@ -47,6 +47,8 @@ class MoodCandidate:
     description: str | None = None
     # '실내' / '야외' / '반야외' / None(모름)
     indoor_outdoor: str | None = None
+    # 장소 설명의 출처 기관(공공 데이터 표기 그대로). 근거 문장과 함께 보여 준다(NFR-007).
+    source_org: str | None = None
 
 
 class MoodDataProvider(Protocol):
@@ -121,6 +123,7 @@ def load_mood_data(
                 tag_codes=frozenset(valid),
                 description=item.description,
                 indoor_outdoor=INDOOR_OUTDOOR.get(item.indoor_outdoor or ""),
+                source_org=item.source_org,
             )
         )
     logger.info("mood_data tags=%d candidates=%d", len(tags), len(candidates))
