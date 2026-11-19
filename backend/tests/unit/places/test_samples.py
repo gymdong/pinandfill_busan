@@ -104,6 +104,26 @@ def test_repository_sample_files_load():
     assert details.name and details.lat is not None and details.hours is not None
 
 
+def test_detail_columns_are_read_when_present(tmp_path):
+    places = (
+        "﻿name,lat,lng,category,indoor_outdoor,tourapi_contentid,closed_days_raw,"
+        "source_label_original,checked_at\n"
+        "예시 미술관,35.10,129.10,문화시설,실내,100,매주 월요일,예시 기관,2026-11-01\n"
+    )
+    (tmp_path / "places_sample.csv").write_text(places, encoding="utf-8")
+    data = load_sample_places(tmp_path)
+    item = data.place("100")
+    assert item is not None
+    assert (item.indoor_outdoor, item.closed_days_text, item.source_org) == ("실내", "매주 월요일", "예시 기관")
+    assert data.place("999") is None
+
+
+def test_detail_columns_absent_from_old_samples_stay_empty(tmp_path):
+    item = samples(tmp_path).place("100")
+    assert item is not None
+    assert (item.indoor_outdoor, item.closed_days_text, item.source_org) == (None, None, None)
+
+
 def test_bad_hours_row_and_unreadable_file_do_not_break_loading(tmp_path):
     (tmp_path / "places_sample.csv").write_text(PLACES, encoding="utf-8")
     bad_hours = HOURS.replace("10:00", "10:00:30", 1)

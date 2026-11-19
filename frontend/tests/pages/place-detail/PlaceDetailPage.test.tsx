@@ -43,6 +43,14 @@ describe('UI-04 장소 상세', () => {
     expect(within(info).getByText('예상 붐빔')).toBeInTheDocument();
   });
 
+  it('실내외 정보가 없으면 분류만 보여 준다(NFR-012)', async () => {
+    mockDetail({ ...taejongdaeDetail, place: { ...taejongdaeDetail.place, indoorOutdoor: null } });
+    renderAt(PATH);
+    await screen.findByRole('heading', { name: '태종대' });
+    expect(screen.getByText('자연 명소')).toBeInTheDocument();
+    expect(screen.queryByText(/자연 명소 ·/)).not.toBeInTheDocument();
+  });
+
   it('날짜가 없으면 요일별 운영시간을 안내한다', async () => {
     mockDetail(taejongdaeDetail);
     renderAt(PATH);
@@ -130,6 +138,13 @@ describe('UI-04 장소 상세', () => {
     const sources = await screen.findByRole('region', { name: '출처' });
     expect(sources).toHaveTextContent('장소 정보 한국관광공사 · 10월 13일 (화) 기준');
     expect(sources).toHaveTextContent('혼잡 근거 행정동 생활인구, 도시철도 승하차');
+  });
+
+  it('출처 기준일이 없으면 기관명은 두고 기준일을 확인 필요로 표시한다(NFR-007·012)', async () => {
+    mockDetail({ ...taejongdaeDetail, sources: [{ org: '부산광역시', refDate: null }] });
+    renderAt(PATH);
+    const sources = await screen.findByRole('region', { name: '출처' });
+    expect(sources).toHaveTextContent('장소 정보 부산광역시 · 기준일 확인 필요');
   });
 
   it('같은 기관·기준일 출처가 겹쳐 와도 key 경고 없이 모두 보여 준다', async () => {
