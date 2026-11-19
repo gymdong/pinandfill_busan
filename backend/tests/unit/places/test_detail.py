@@ -77,3 +77,14 @@ def test_unknown_and_kakao_ids_are_not_found(tmp_path, place_id):
     # 카카오 장소 ID 는 매칭표에 있어도 공공 장소 상세가 아니다.
     with pytest.raises(PlaceNotFoundError):
         PlaceDetailService(details(tmp_path)).get(place_id)
+
+
+def test_description_column_is_passed_through_verbatim(tmp_path):
+    places = (
+        "name,lat,lng,category,tourapi_contentid,description\n"
+        "예시 마을,35.1,129.1,관광지,500,골목 끝에서 바다가 보인다.\n"
+    )
+    (tmp_path / "places_sample.csv").write_text(places, encoding="utf-8")
+    detail = SamplePlaceDetails(load_sample_places(tmp_path)).place_detail("500")
+    assert detail is not None
+    assert detail.place.description == "골목 끝에서 바다가 보인다."

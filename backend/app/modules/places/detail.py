@@ -55,6 +55,7 @@ class SamplePlaceDetails:
                 lat=place.lat,
                 lng=place.lng,
                 category=place.category,
+                description=item.description,
                 closed_days_text=item.closed_days_text,
                 default_stay_min=item.stay_min,
                 indoor_outdoor=INDOOR_OUTDOOR.get(item.indoor_outdoor or ""),
