@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, time, timedelta
 from uuid import uuid4
 
-from app.modules.engine.constraints.chain import minutes, validate_chain
+from app.modules.engine.constraints.chain import minutes, validate_chain, visit_end
 from app.modules.engine.interfaces import EngineResult, PlaceDataProvider, RouteProvider
 from app.modules.engine.routing import departure_for, estimate_departing
 from app.modules.engine.schemas import (
@@ -115,6 +115,19 @@ class BasicItineraryEngine:
         self._check(command.trip, command.schedule)
         places = self._resolve(command.trip, command.schedule, context or CalculationContext())
         return validate_chain(command, places)
+
+    def project(self, command: ValidateInput, *, context: CalculationContext | None = None) -> EngineResult:
+        """저장된 상태를 다시 계산하지 않고 응답 일정으로만 바꾼다(되돌리기·변경 없는 편집).
+
+        경로를 조회하지 않고 상태(시각·구간·seq)를 그대로 돌려준다. 경고는 validate 와 같은 규칙으로 붙는다.
+        """
+        self._check(command.trip, command.schedule)
+        places = self._resolve(command.trip, command.schedule, context or CalculationContext())
+        validation = validate_chain(command, places)
+        return EngineResult(
+            state=command.schedule,
+            schedule=self._present(command.trip, command.schedule, places, validation),
+        )
 
     def normalize_sequences(self, trip: TripWindow, state: ScheduleState, *, day_no: int) -> ScheduleState:
         """Explicit legacy migration only; callers must snapshot/commit it separately from edits.
@@ -275,9 +288,10 @@ class BasicItineraryEngine:
                 arrive = depart = None
                 if previous.depart_at is not None and duration is not None:
                     start = minutes(previous.depart_at) + duration
-                    end = start + block.stay_min
-                    if end < 24 * 60:
-                        arrive, depart = time(start // 60, start % 60), time(end // 60, end % 60)
+                    if start < 24 * 60:
+                        arrival = time(start // 60, start % 60)
+                        if (end := visit_end(arrival, block.stay_min)) is not None:
+                            arrive, depart = arrival, end
             blocks[index] = block.model_copy(update={"arrive_at": arrive, "depart_at": depart})
         updated = ScheduleState(blocks=tuple(blocks), legs=tuple(legs.values()))
         validation = validate_chain(ValidateInput(trip=trip, schedule=updated), places)

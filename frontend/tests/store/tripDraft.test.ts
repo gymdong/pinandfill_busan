@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { clearKakaoSession, getKakaoPlace } from '@/api/kakaoSession';
-import { pinnedKey, toBlockPlaceInput, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
+import { pinnedKey, planOf, toBlockPlaceInput, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
 
 const taejongdae: PinnedPlace = { kind: 'PUBLIC', placeId: 'p1', name: '태종대', coords: { lat: 35, lng: 129 } };
 const cafe: PinnedPlace = {
@@ -55,6 +55,26 @@ describe('useTripDraft', () => {
   it('블록 추가 요청에는 카카오 장소의 이름을 넣지 않는다', () => {
     expect(toBlockPlaceInput(taejongdae)).toEqual({ placeId: 'p1' });
     expect(toBlockPlaceInput(cafe)).toEqual({ kakaoPlaceId: 'k1', placeUrl: 'https://example.com/k1' });
+  });
+
+  it('장소별 일차와 방문 시간을 따로 정하고, 정하지 않은 장소는 1일차·시간 미정이다', () => {
+    const { addPinned, setPlan } = useTripDraft.getState();
+    addPinned(taejongdae);
+    addPinned(cafe);
+    setPlan(pinnedKey(cafe), { dayNo: 2 });
+    setPlan(pinnedKey(cafe), { fixed: { start: '12:00', end: '13:00' } });
+    const { plans } = useTripDraft.getState();
+    expect(planOf(plans, pinnedKey(cafe))).toEqual({ dayNo: 2, fixed: { start: '12:00', end: '13:00' } });
+    expect(planOf(plans, pinnedKey(taejongdae))).toEqual({ dayNo: 1, fixed: null });
+  });
+
+  it('장소를 빼면 그 장소의 계획도 지운다', () => {
+    const { addPinned, setPlan, removePinned } = useTripDraft.getState();
+    addPinned(cafe);
+    setPlan(pinnedKey(cafe), { dayNo: 2 });
+    removePinned(pinnedKey(cafe));
+    addPinned(cafe);
+    expect(planOf(useTripDraft.getState().plans, pinnedKey(cafe))).toEqual({ dayNo: 1, fixed: null });
   });
 
   it('조건은 항목별로 합친다', () => {

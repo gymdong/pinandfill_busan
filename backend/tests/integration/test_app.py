@@ -13,8 +13,10 @@ def test_health_and_openapi(client: TestClient) -> None:
     assert response.json()["info"]["title"] == "Backend test"
     assert "/api/health" in response.json()["paths"]
     assert "/api/trips/{trip_id}/schedule" in response.json()["paths"]
-    # Endpoints exist, but production providers must be explicitly configured.
-    assert client.post("/api/trips/test/schedule", json={}).status_code == 503
+    # 서비스를 주입하지 않아도 기본 구성(메모리 저장소)이 있어, 없는 여행은 503 이 아니라 404 다.
+    response = client.post("/api/trips/test/schedule", json={})
+    assert response.status_code == 404
+    assert response.json()["error"]["id"] == "ERR-016"
 
 
 def test_explicit_settings_override_environment(monkeypatch) -> None:

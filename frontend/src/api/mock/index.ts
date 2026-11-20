@@ -11,9 +11,12 @@ import type {
   PlaceSearchResponse,
   PlacesAtResponse,
   Schedule,
+  ScheduleDay,
   ScheduleMutationResponse,
   SuggestWaypointsRequest,
   SuggestWaypointsResponse,
+  Trip,
+  TripConditions,
   TripDetailResponse,
   UpdateBlockRequest,
 } from '@/types/api';
@@ -31,7 +34,7 @@ import {
   taejongdaeDetail,
   waypointCandidates,
 } from './fixtures/places';
-import { MOCK_SESSION_KEY, schedule, trip, TRIP_ID } from './fixtures/schedule';
+import { MOCK_SESSION_KEY, schedule, trip as fixtureTrip, TRIP_ID } from './fixtures/schedule';
 
 const MOCK_DELAY_MS = 150;
 /** API-001 mock이 해석에 성공하는 유일한 문장. 그 외 입력은 폼 전환(needsForm)을 확인하는 데 쓴다. */
@@ -39,14 +42,14 @@ export const INTERPRETABLE_TEXT = '10/17~19 2박 3일 대중교통';
 
 type Handler = (request: ApiRequest, params: string[]) => unknown;
 
-interface MockTripState { schedule: Schedule; previous: Schedule | null; nextBlockNumber: number }
+interface MockTripState { trip: Trip; schedule: Schedule; previous: Schedule | null; nextBlockNumber: number }
 const tripStates = new Map<string, MockTripState>();
 let initialSchedule: Schedule = schedule;
 
 function state(tripId: string): MockTripState {
   let value = tripStates.get(tripId);
   if (!value) {
-    value = { schedule: structuredClone(initialSchedule), previous: null, nextBlockNumber: 500 };
+    value = { trip: fixtureTrip, schedule: structuredClone(initialSchedule), previous: null, nextBlockNumber: 500 };
     tripStates.set(tripId, value);
   }
   return value;
@@ -56,6 +59,16 @@ function state(tripId: string): MockTripState {
 export function resetMockSchedule(initial: Schedule = schedule): void {
   tripStates.clear();
   initialSchedule = structuredClone(initial);
+}
+
+/**
+ * API-002. 입력한 조건으로 여행을 만들고 빈 일정에서 시작한다. 이어지는 API-006이 담은 장소를 채운다.
+ * 여행 ID는 하나뿐이라 새로 만들면 이전 mock 여행을 덮어쓴다. 본문이 없으면 예시 여행 조건을 쓴다.
+ */
+function createTrip(body: TripConditions | undefined): CreateTripResponse {
+  const trip: Trip = { ...fixtureTrip, ...body, id: TRIP_ID };
+  tripStates.set(TRIP_ID, { trip, schedule: { days: [], violations: [], conflicts: [] }, previous: null, nextBlockNumber: 500 });
+  return { tripId: TRIP_ID, sessionKey: MOCK_SESSION_KEY };
 }
 
 function snapshot(tripId: string): Schedule {
@@ -68,10 +81,12 @@ function invalid(): never {
 
 interface AffectedRange { dayNo: number; startIndex: number }
 
-function mutate(tripId: string, change: (draft: Schedule, state: MockTripState) => AffectedRange): ScheduleMutationResponse {
+function mutate(tripId: string, change: (draft: Schedule, state: MockTripState) => AffectedRange | null): ScheduleMutationResponse {
   const tripState = state(tripId);
   const draft = snapshot(tripId);
   const affected = change(draft, tripState);
+  // 백엔드와 같이 값이 그대로인 편집은 저장도 되돌리기 지점 기록도 하지 않고 현재 일정을 돌려준다.
+  if (!affected) return { schedule: snapshot(tripId), violations: structuredClone(draft.violations) };
   tripState.previous = snapshot(tripId);
   // The mock cannot calculate travel/opening hours. Preserve only the unaffected prefix.
   draft.violations = [{ type: 'MOCK_RECALC_PENDING', cause: '목업에서는 변경 후 이동·영업시간을 재계산하지 않습니다.' }];
@@ -97,14 +112,31 @@ function findBlock(draft: Schedule, blockId: string) {
   return invalid();
 }
 
+/** 백엔드와 같이 여행 기간 안의 빈 날에도 추가할 수 있게 그날을 만든다. 기간 밖이면 ERR-001 */
+function addEmptyDay(draft: Schedule, dayNo: number, trip: Trip): ScheduleDay {
+  const start = Date.parse(`${trip.dates.start}T00:00:00Z`);
+  const days = Math.round((Date.parse(`${trip.dates.end}T00:00:00Z`) - start) / 86_400_000) + 1;
+  if (!Number.isInteger(dayNo) || dayNo < 1 || dayNo > days) return invalid();
+  const date = new Date(start + (dayNo - 1) * 86_400_000).toISOString().slice(0, 10);
+  const day: ScheduleDay = { dayNo, date, blocks: [], legs: [], crowd: [], weather: [] };
+  draft.days.push(day);
+  draft.days.sort((a, b) => a.dayNo - b.dayNo);
+  return day;
+}
+
 function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationResponse {
   if (!body?.place) return invalid();
+  // @provisional stayMin 은 백엔드 API-006 에 아직 없는 필드를 먼저 반영한 것이다(#27). 실제 서버는 이 필드가 있으면 거절한다.
+  // 백엔드 형식이 정해지면(API-006 필드 또는 API-009 initial.selections[].stayMin) 이 검사와 mock 테스트를 함께 맞춘다.
+  if (body.stayMin !== undefined && (!Number.isInteger(body.stayMin) || body.stayMin <= 0)) return invalid();
   return mutate(tripId, (draft, tripState) => {
     const anchored = body.fromBlockId ? findBlock(draft, body.fromBlockId) : null;
-    const dayNo = anchored?.day.dayNo ?? body.fixedWindow?.dayNo ?? 1;
-    const day = draft.days.find((item) => item.dayNo === dayNo);
-    if (!day) return invalid();
+    // 백엔드와 동일: 앵커가 있으면 앵커의 일차, 없으면 dayNo → fixedWindow.dayNo, 모두 없으면 ERR-001
+    const dayNo = anchored?.day.dayNo ?? body.dayNo ?? body.fixedWindow?.dayNo;
+    if (dayNo === undefined) return invalid();
+    if (anchored && body.dayNo !== undefined && body.dayNo !== dayNo) return invalid();
     if (body.fixedWindow && body.fixedWindow.dayNo !== dayNo) return invalid();
+    const day = draft.days.find((item) => item.dayNo === dayNo) ?? addEmptyDay(draft, dayNo, tripState.trip);
     const input = body.place;
     const place = 'placeId' in input
       ? Object.values(placeSummaries).find((item) => item.id === input.placeId)
@@ -120,12 +152,20 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
       id: `00000000-0000-4000-8000-${String(tripState.nextBlockNumber++).padStart(12, '0')}`,
       dayNo, seq: index + 1, place, isFixed: body.isFixed,
       fixedStart: body.fixedWindow?.start ?? null, fixedEnd: body.fixedWindow?.end ?? null,
-      stayMin: 40, arriveAt: body.fixedWindow?.start ?? null,
+      // 사용자가 정한 체류시간이 있으면 쓰고, 없으면 목업 장소값(40분)을 쓴다.
+      stayMin: body.stayMin ?? 40, arriveAt: body.fixedWindow?.start ?? null,
       departAt: body.fixedWindow?.end ?? null, origin: body.origin, warnings: [],
     };
     day.blocks.splice(index, 0, block);
     return { dayNo, startIndex: index };
   });
+}
+
+function visitEnd(arriveAt: string | null, stayMin: number): string | null {
+  if (!arriveAt) return null;
+  const [hour = 0, minute = 0] = arriveAt.split(':').map(Number);
+  const end = hour * 60 + minute + stayMin;
+  return end < 24 * 60 ? `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}` : null;
 }
 
 function updateBlock(tripId: string, blockId: string, body: UpdateBlockRequest): ScheduleMutationResponse {
@@ -134,15 +174,31 @@ function updateBlock(tripId: string, blockId: string, body: UpdateBlockRequest):
     const { day, index, block } = findBlock(draft, blockId);
     if ('seq' in body) {
       if (!Number.isInteger(body.seq) || body.seq < 1 || body.seq > day.blocks.length) return invalid();
+      if (body.seq === index + 1) return null;
       day.blocks.splice(index, 1);
       day.blocks.splice(body.seq - 1, 0, block);
       return { dayNo: day.dayNo, startIndex: Math.min(index, body.seq - 1) };
     } else if ('stayMin' in body) {
       if (!Number.isInteger(body.stayMin) || body.stayMin <= 0) return invalid();
+      if (body.stayMin === block.stayMin) return null;
       block.stayMin = body.stayMin;
     } else if ('isFixed' in body) {
-      block.isFixed = body.isFixed;
-      if (!body.isFixed) { block.fixedStart = null; block.fixedEnd = null; }
+      if (body.isFixed === block.isFixed) return null;
+      if (body.isFixed) {
+        // 지정 시각이 없으면 고정할 수 없다(백엔드 ERR-001).
+        if (!block.fixedStart || !block.fixedEnd) return invalid();
+        // 백엔드처럼 지정 시각을 도착·출발 시각으로 쓴다.
+        block.isFixed = true;
+        block.arriveAt = block.fixedStart;
+        block.departAt = block.fixedEnd;
+      } else {
+        // 지정 시각만 지우고 도착 시각은 유지한다. 출발 = 도착 + 체류, 자정을 넘기면 null. 뒤 블록만 다시 계산한다.
+        block.isFixed = false;
+        block.fixedStart = null;
+        block.fixedEnd = null;
+        block.departAt = visitEnd(block.arriveAt, block.stayMin);
+        return { dayNo: day.dayNo, startIndex: index + 1 };
+      }
     }
     return { dayNo: day.dayNo, startIndex: index };
   });
@@ -169,7 +225,7 @@ const routes: [HttpMethod, RegExp, Handler][] = [
         : { conditions: {}, needsForm: true };
     },
   ],
-  ['POST', /^\/trips$/, (): CreateTripResponse => ({ tripId: TRIP_ID, sessionKey: MOCK_SESSION_KEY })],
+  ['POST', /^\/trips$/, ({ body }) => createTrip(body as TripConditions | undefined)],
   [
     'GET',
     /^\/places\/search$/,
@@ -221,7 +277,7 @@ const routes: [HttpMethod, RegExp, Handler][] = [
       };
     },
   ],
-  ['GET', /^\/trips\/([^/]+)$/, (_request, [tripId]): TripDetailResponse => ({ trip, schedule: snapshot(tripId ?? '') })],
+  ['GET', /^\/trips\/([^/]+)$/, (_request, [tripId]): TripDetailResponse => ({ trip: state(tripId ?? '').trip, schedule: snapshot(tripId ?? '') })],
   [
     'GET',
     /^\/admin\/sources$/,

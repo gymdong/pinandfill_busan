@@ -1,22 +1,114 @@
 """ASGI entry point: python -m uvicorn app.main:app --no-access-log."""
 
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
+from app.adapters.kakao import KakaoLocalAdapter, KakaoSettings
+from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
+from app.modules.engine.service import BasicItineraryEngine
+from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
+from app.modules.places.matcher import PlaceMatcher
+from app.modules.places.router import PlaceAPIError
+from app.modules.places.samples import SamplePlaceData, load_sample_places
+from app.modules.places.service import PlaceSearchService
+from app.modules.places.settings import PlaceMatchSettings
+from app.modules.trips.repository import FakeTripRepository
 from app.modules.trips.router import TripAPIError
 from app.modules.trips.service import TripService
 
+logger = logging.getLogger(__name__)
 
-def create_app(settings: Settings | None = None, *, trip_service: TripService | None = None) -> FastAPI:
+
+def default_trip_service(places: SamplePlaceData) -> TripService:
+    """로컬 기본 구성: 메모리 저장소·메모리 되돌리기 이력, 표본 장소, 경로 키가 있을 때만 실제 경로 조회.
+
+    프로세스가 재시작되면 여행과 이력이 사라진다. DB 저장소가 생기면 바꿔 주입한다.
+    """
+    engine = BasicItineraryEngine(places, build_route_provider())
+    # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포 전에 DB 저장소로 바꿔야 한다.
+    logger.warning("trip storage is in-memory: trips and undo history are lost on restart and not shared")
+    return TripService(FakeTripRepository({}), engine, places.stay_min)
+
+
+def kakao_settings() -> KakaoSettings | None:
+    """KAKAO_REST_API_KEY 가 비어 있으면 None. 장소 검색은 그때 지금처럼 503(ERR-017)이다."""
+    try:
+        kakao = KakaoSettings()  # type: ignore[call-arg]  # 값은 환경변수·.env 에서 읽는다
+    except ValidationError:
+        return None
+    return kakao if kakao.rest_api_key.get_secret_value() else None
+
+
+def default_place_search_service(places: SamplePlaceData, kakao: KakaoLocalAdapter) -> PlaceSearchService:
+    settings = PlaceMatchSettings()  # type: ignore[call-arg]
+    return PlaceSearchService(kakao, PlaceMatcher(places.repository(), settings), settings)
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    trip_service: TripService | None = None,
+    place_search_service: PlaceSearchService | None = None,
+    place_detail_service: PlaceDetailService | None = None,
+) -> FastAPI:
+    """주입하지 않은 서비스는 기본 구성으로 만든다.
+
+    카카오 장소 검색은 lifespan 이 시작될 때 붙는다. uvicorn 이나 `with TestClient(...)` 없이 만든 앱에서는
+    키가 있어도 장소 검색이 503(ERR-017)이다.
+    """
     config = settings if settings is not None else Settings.from_env()
-    application = FastAPI(title=config.app_name, version="0.1.0", debug=False)
+    # 주입하지 않은 서비스만 기본 구성으로 만든다. 만들 때 외부 API 를 호출하지 않는다.
+    needs_places = trip_service is None or place_search_service is None or place_detail_service is None
+    places = load_sample_places() if needs_places else None
+    if trip_service is None and places is not None:
+        trip_service = default_trip_service(places)
+    # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
+    if place_detail_service is None and places is not None:
+        place_detail_service = PlaceDetailService(SamplePlaceDetails(places))
+    kakao = kakao_settings() if place_search_service is None else None
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        if kakao is None or places is None:
+            yield
+            return
+        # 카카오 HTTP 클라이언트는 lifespan 안에서만 열고 닫는다. lifespan 없이 만든 앱에는 열린 연결이 남지 않는다.
+        async with httpx.AsyncClient() as kakao_http:
+            application.state.place_search_service = default_place_search_service(
+                places, KakaoLocalAdapter(kakao_http, kakao)
+            )
+            try:
+                yield
+            finally:
+                application.state.place_search_service = None
+
+    application = FastAPI(title=config.app_name, version="0.1.0", debug=False, lifespan=lifespan)
     application.state.trip_service = trip_service
+    application.state.place_search_service = place_search_service
+    application.state.place_detail_service = place_detail_service
 
     @application.exception_handler(TripAPIError)
     async def trip_error(request: Request, exc: TripAPIError) -> JSONResponse:
+        error: dict[str, object] = {"id": exc.error_id, "message": exc.message}
+        if exc.fields is not None:
+            error["fields"] = exc.fields
+        return JSONResponse(
+            status_code=exc.status,
+            content={"error": error},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.exception_handler(PlaceAPIError)
+    async def place_error(request: Request, exc: PlaceAPIError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status,
             content={"error": {"id": exc.error_id, "message": exc.message}},

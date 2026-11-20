@@ -59,9 +59,11 @@ export interface KakaoMapProps {
   selectedId: string | null;
   onSelect(id: string): void;
   onLongPress(coords: Coords): void;
+  /** 지도 영역 크기·모양. 지정하지 않으면 높이 300px 카드로 그린다. */
+  className?: string;
 }
 
-export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress }: KakaoMapProps) {
+export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, className }: KakaoMapProps) {
   const node = useRef<HTMLDivElement>(null);
   const mapRef = useRef<InstanceType<KakaoMaps['Map']> | null>(null);
   const mapsRef = useRef<KakaoMaps | null>(null);
@@ -101,11 +103,13 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress }: Ka
         maps.event.addListener(marker, 'click', () => onSelect(block.id));
         return marker;
       });
+      // SDK 는 CSS 변수를 읽지 못하므로 토큰 값을 꺼내 넘긴다.
+      const lineColor = getComputedStyle(document.documentElement).getPropertyValue('--color-ink').trim() || '#14202c';
       for (let index = 1; index < points.length; index++) {
         const from = points[index - 1]!, to = points[index]!;
         if (!legs.some((leg) => leg.fromBlockId === from.block.id && leg.toBlockId === to.block.id)) continue;
         const start = locations.get(from.block.id), end = locations.get(to.block.id);
-        if (start && end) overlays.push(new maps.Polyline({ map, path: [start, end], strokeWeight: 4, strokeColor: '#0e599c' }));
+        if (start && end) overlays.push(new maps.Polyline({ map, path: [start, end], strokeWeight: 4, strokeColor: lineColor }));
       }
       // SDK가 늦게 로드되어도 마지막으로 선택한 블록에 중심을 맞춘다.
       const latest = selectionRef.current;
@@ -150,5 +154,11 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress }: Ka
     return () => { cancelled = true; cleanup?.(); overlays.forEach((overlay) => overlay.setMap(null)); mapRef.current = null; mapsRef.current = null; };
   }, [points, legs, onSelect, onLongPress]);
 
-  return <div><div ref={node} role="img" aria-label="일정 경로 지도" style={{ height: 300, background: '#e8f1f8', borderRadius: 12 }} />{error ? <p role="status">{error} 아래 목록에서 장소를 선택할 수 있어요.</p> : null}</div>;
+  // 바깥 div 의 크기·위치는 호출한 쪽이 정하고(없으면 높이 300px 카드), 안쪽 div 가 지도와 안내의 기준이 된다.
+  return <div className={className} style={className ? undefined : { height: 300, borderRadius: 12, overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div ref={node} role="img" aria-label="일정 경로 지도" style={{ position: 'absolute', inset: 0, background: 'var(--color-accent-soft)' }} />
+      {error ? <p role="status" style={{ position: 'absolute', inset: '35% 24px auto', textAlign: 'center', color: 'var(--color-ink-muted)', fontSize: 'var(--text-s)' }}>{error} 아래 목록에서 장소를 선택할 수 있어요.</p> : null}
+    </div>
+  </div>;
 }
