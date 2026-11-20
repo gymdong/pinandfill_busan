@@ -125,6 +125,16 @@ def test_missing_kakao_key_only_disables_search(monkeypatch: pytest.MonkeyPatch)
     assert kakao_settings() is None
 
 
+def test_missing_key_and_bad_setting_together_still_fail_at_startup(monkeypatch: pytest.MonkeyPatch):
+    # 키가 없어도 다른 설정 오류가 함께 있으면 '검색 꺼짐'으로 덮지 않고 시작할 때 드러낸다(#34 리뷰).
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
+    monkeypatch.setenv("KAKAO_SEARCH_RECT", "129.32,34.86,128.74,35.40")
+    monkeypatch.setattr("app.main.KakaoSettings", lambda: KakaoSettings(_env_file=None))
+    with pytest.raises(ValidationError) as error:
+        kakao_settings()
+    assert {item["loc"] for item in error.value.errors()} == {("rest_api_key",), ("search_rect",)}
+
+
 def test_bad_kakao_setting_fails_at_startup_instead_of_disabling_search(monkeypatch: pytest.MonkeyPatch):
     # 키가 아닌 설정 오류는 검색을 조용히 끄지 않고 시작할 때 드러낸다.
     monkeypatch.setenv("KAKAO_REST_API_KEY", "test-rest-key")
