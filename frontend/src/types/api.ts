@@ -101,10 +101,13 @@ export interface Place {
   source: PlaceSource;
   description: string | null;
   closedDaysText: string | null;
-  defaultStayMin: number;
-  indoorOutdoor: IndoorOutdoor;
+  /** null이면 공공 데이터에 기본 체류시간이 없다(API-006은 `fields.stayMin`으로 입력을 요구한다). */
+  defaultStayMin: number | null;
+  /** null이면 실내외 정보 없음 */
+  indoorOutdoor: IndoorOutdoor | null;
   rating: number | null;
-  refDate: IsoDate;
+  /** null이면 기준일 정보 없음. 출처·기준일 표시는 `PlaceDetailResponse.sources`를 쓴다. */
+  refDate: IsoDate | null;
 }
 
 /** 일정·추천 카드에서 쓰는 축약 장소 정보 */
@@ -131,7 +134,8 @@ export interface PlacePhoto {
 /** @provisional SDD는 `sources` 이름만 정의한다. places에는 기관 필드가 없다. */
 export interface SourceInfo {
   org: string;
-  refDate: IsoDate;
+  /** null이면 기준일 정보가 없다. 기관명은 보여 주고 기준일은 '확인 필요'로 둔다. */
+  refDate: IsoDate | null;
 }
 
 /** @provisional 장소 상세·추천 카드의 혼잡 요약. API-012 필드에서 유도했다. */
@@ -317,6 +321,12 @@ export interface AddBlockRequest extends WithSessionCoords {
   isFixed: boolean;
   fixedWindow?: { dayNo: number; start: LocalTime; end: LocalTime };
   origin: BlockOrigin;
+  /**
+   * @provisional 사용자가 정한 체류시간(분). 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소)에만 보낸다.
+   * 서버는 기본값을 만들지 않는다(#18 PM 결정 4). 백엔드 API-006은 아직 이 필드를 받지 않아(PR #25 리뷰에서 요청),
+   * 최초 생성이 API-009 `initial.selections[].stayMin`으로 바뀌면 그쪽으로 옮긴다.
+   */
+  stayMin?: number;
   /**
    * 경유지를 넣을 인접한 두 블록. 둘을 함께 보내야 하며 이웃하지 않으면 ERR-001.
    * 생략하면 `dayNo`의 마지막에 붙는다.
