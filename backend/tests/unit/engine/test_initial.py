@@ -397,6 +397,26 @@ def test_unknown_route_before_pin_skips_overlap_and_tries_valid_later_gap(monkey
     assert result.confirmed
 
 
+def test_unknown_routes_before_and_after_pin_continue_to_next_day():
+    planner, _, routes, _ = setup()
+    routes.source = "UNKNOWN"
+    result = planner.plan(
+        command(
+            selection("a", fixed_window=FixedWindow(day_no=1, start=time(9), end=time(9, 30))),
+            selection("b", stay_min=30),
+            days=2,
+        )
+    )
+
+    assert not result.unplaced
+    assert [(block.id, block.day_no, block.arrive_at, block.depart_at) for block in result.state.blocks] == [
+        ("a", 1, time(9), time(9, 30)),
+        ("b", 2, time(9), time(9, 30)),
+    ]
+    # Different days need no inter-day leg, so the accepted schedule itself is exact.
+    assert result.confirmed
+
+
 def test_fixed_window_is_explicit_user_duration_when_stay_missing():
     planner, _, _, stays = setup(stay=None)
     result = planner.plan(
