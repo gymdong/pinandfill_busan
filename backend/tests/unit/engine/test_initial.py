@@ -373,6 +373,30 @@ def test_unknown_route_source_cannot_confirm_a_duration():
     assert not result.confirmed
 
 
+def test_unknown_route_before_pin_skips_overlap_and_tries_valid_later_gap(monkeypatch):
+    planner, _, routes, _ = setup()
+
+    def estimate(origin, destination, *, mode, departure_at):
+        pair = (origin.place_ref.place_id, destination.place_ref.place_id)
+        source = "UNKNOWN" if pair == ("b", "a") else "TMAP"
+        return RouteEstimate(15, source, datetime(2026, 11, 1, tzinfo=UTC), "prediction")
+
+    monkeypatch.setattr(routes, "estimate_at", estimate)
+    result = planner.plan(
+        command(
+            selection("a", fixed_window=FixedWindow(day_no=1, start=time(9), end=time(9, 30))),
+            selection("b", stay_min=30),
+        )
+    )
+
+    assert not result.unplaced
+    assert [(block.id, block.arrive_at, block.depart_at) for block in result.state.blocks] == [
+        ("a", time(9), time(9, 30)),
+        ("b", time(9, 45), time(10, 15)),
+    ]
+    assert result.confirmed
+
+
 def test_fixed_window_is_explicit_user_duration_when_stay_missing():
     planner, _, _, stays = setup(stay=None)
     result = planner.plan(
