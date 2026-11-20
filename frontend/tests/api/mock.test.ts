@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiRequest } from '@/api';
 import { INTERPRETABLE_TEXT, mockRequest, resetMockSchedule } from '@/api/mock';
-import { PLACE_IDS } from '@/api/mock/fixtures/places';
+import { PLACE_IDS, mockKakaoKey } from '@/api/mock/fixtures/places';
 import { schedule as fixtureSchedule } from '@/api/mock/fixtures/schedule';
-import type { MoodResponse, PlaceDetailResponse, PlaceSearchResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, UndoResponse } from '@/types/api';
+import type { CreateTripResponse, MoodResponse, PlaceDetailResponse, PlaceSearchResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, TripDetailResponse, UndoResponse } from '@/types/api';
 
 const TRIP = '/trips/t1';
 const BLOCK_ID = '00000000-0000-4000-8000-000000000302';
@@ -17,7 +17,7 @@ describe('mockRequest', () => {
     ['API-003', { method: 'GET', path: '/places/search', query: { q: '민락' } }],
     ['API-004', { method: 'GET', path: '/places/at', query: { lat: 35, lng: 129 } }],
     ['API-005', { method: 'GET', path: `/places/${PLACE_IDS.taejongdae}` }],
-    ['API-006', { method: 'POST', path: `${TRIP}/blocks`, body: { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER' } }],
+    ['API-006', { method: 'POST', path: `${TRIP}/blocks`, body: { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER', dayNo: 1 } }],
     ['API-007', { method: 'PATCH', path: BLOCK, body: { stayMin: 55 } }],
     ['API-008', { method: 'DELETE', path: BLOCK }],
     ['API-009', { method: 'POST', path: `${TRIP}/schedule` }],
@@ -51,7 +51,7 @@ describe('mockRequest', () => {
   });
 
   it('추가·순서변경·삭제를 반영하고 잘못된 편집은 원본을 보존한다', async () => {
-    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER' } });
+    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER', dayNo: 1 } });
     const id = added.schedule.days[0]!.blocks.at(-1)!.id;
     expect(added.schedule.days[0]!.blocks).toHaveLength(5);
     const moved = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: `${TRIP}/blocks/${id}`, body: { seq: 2 } });
@@ -62,6 +62,52 @@ describe('mockRequest', () => {
     expect(removed.schedule.days[0]!.blocks).toHaveLength(4);
     const undone = await mockRequest<UndoResponse>({ method: 'POST', path: `${TRIP}/undo` });
     expect(undone.schedule).toEqual(moved.schedule);
+  });
+
+  it('같은 값으로 바꾸는 편집은 저장도 되돌리기 지점 기록도 하지 않는다', async () => {
+    const original = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: TRIP });
+    const [first, second] = original.schedule.days[0]!.blocks;
+    await mockRequest({ method: 'PATCH', path: BLOCK, body: { stayMin: 55 } });
+    const afterEdit = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: TRIP });
+    const sameStay = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: BLOCK, body: { stayMin: 55 } });
+    const sameSeq = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: BLOCK, body: { seq: 2 } });
+    const sameFixed = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: `${TRIP}/blocks/${first!.id}`, body: { isFixed: true } });
+    for (const result of [sameStay, sameSeq, sameFixed]) expect(result.schedule).toEqual(afterEdit.schedule);
+    expect(second!.id).toBe(BLOCK_ID);
+    // 되돌리기는 마지막 실제 편집(stayMin 55)을 취소한다.
+    const undone = await mockRequest<UndoResponse>({ method: 'POST', path: `${TRIP}/undo` });
+    expect(undone.schedule).toEqual(original.schedule);
+  });
+
+  it('고정 해제는 도착 시각을 유지하고 출발을 도착+체류로 다시 정해 뒤 블록만 재계산한다', async () => {
+    const original = await mockRequest<{ schedule: Schedule }>({ method: 'GET', path: TRIP });
+    const [first, second] = original.schedule.days[0]!.blocks;
+    const result = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: `${TRIP}/blocks/${first!.id}`, body: { isFixed: false } });
+    const [unfixed, next] = result.schedule.days[0]!.blocks;
+    expect(unfixed).toMatchObject({ isFixed: false, fixedStart: null, fixedEnd: null, arriveAt: first!.arriveAt, departAt: '11:30' });
+    expect(next).toMatchObject({ id: second!.id, arriveAt: null, departAt: null });
+    await mockRequest({ method: 'POST', path: `${TRIP}/undo` });
+  });
+
+  it('고정 해제 후 출발이 자정을 넘기면 출발을 비운다', async () => {
+    const late = structuredClone(fixtureSchedule);
+    Object.assign(late.days[0]!.blocks[0]!, { arriveAt: '23:00', stayMin: 90 });
+    resetMockSchedule(late);
+    const result = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: `${TRIP}/blocks/${late.days[0]!.blocks[0]!.id}`, body: { isFixed: false } });
+    expect(result.schedule.days[0]!.blocks[0]).toMatchObject({ arriveAt: '23:00', departAt: null });
+  });
+
+  it('지정 시각이 없는 블록을 고정하면 ERR-001이고 되돌리기 지점을 남기지 않는다', async () => {
+    await expect(mockRequest({ method: 'PATCH', path: BLOCK, body: { isFixed: true } })).rejects.toMatchObject({ id: 'ERR-001' });
+    await expect(mockRequest({ method: 'POST', path: `${TRIP}/undo` })).rejects.toMatchObject({ id: 'ERR-001' });
+  });
+
+  it('지정 시각이 있는 블록을 고정하면 지정 시각을 도착·출발 시각으로 쓴다', async () => {
+    const windowed = structuredClone(fixtureSchedule);
+    Object.assign(windowed.days[0]!.blocks[1]!, { isFixed: false, fixedStart: '13:00', fixedEnd: '14:00', arriveAt: null, departAt: null });
+    resetMockSchedule(windowed);
+    const result = await mockRequest<ScheduleMutationResponse>({ method: 'PATCH', path: BLOCK, body: { isFixed: true } });
+    expect(result.schedule.days[0]!.blocks[1]).toMatchObject({ isFixed: true, arriveAt: '13:00', departAt: '14:00' });
   });
 
   it('여행별 목 편집 상태를 분리한다', async () => {
@@ -107,6 +153,72 @@ describe('mockRequest', () => {
     } })).rejects.toMatchObject({ id: 'ERR-001' });
     const undone = await mockRequest<UndoResponse>({ method: 'POST', path: `${TRIP}/undo` });
     expect(undone.schedule).toEqual(initial);
+  });
+
+  it('추가 요청에 체류시간이 있으면 그 값을 쓰고, 양의 정수가 아니면 ERR-001이다', async () => {
+    const body = { place: mockKakaoKey(1), isFixed: false, origin: 'USER', dayNo: 1 };
+    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin: 120 } });
+    expect(added.schedule.days[0]!.blocks.at(-1)).toMatchObject({ place: { source: 'KAKAO' }, stayMin: 120 });
+    for (const stayMin of [0, -30, 1.5]) {
+      await expect(mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin } })).rejects.toMatchObject({ id: 'ERR-001' });
+    }
+  });
+
+  it('dayNo만 주면 해당 일차의 끝에 추가하고 빈 일차에도 추가한다', async () => {
+    const initial = structuredClone(fixtureSchedule);
+    initial.days.push({ ...structuredClone(initial.days[0]!), dayNo: 2, date: '2026-10-18', blocks: [], legs: [], crowd: [] });
+    resetMockSchedule(initial);
+    const add = (dayNo: number) => mockRequest<ScheduleMutationResponse>({
+      method: 'POST', path: `${TRIP}/blocks`, body: { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER', dayNo },
+    });
+    const empty = await add(2);
+    expect(empty.schedule.days[1]!.blocks.map((block) => [block.dayNo, block.seq])).toEqual([[2, 1]]);
+    const second = await add(2);
+    expect(second.schedule.days[1]!.blocks.map((block) => block.seq)).toEqual([1, 2]);
+    expect(second.schedule.days[0]!.blocks).toHaveLength(initial.days[0]!.blocks.length);
+    const first = await add(1);
+    expect(first.schedule.days[0]!.blocks.map((block) => block.seq)).toEqual([1, 2, 3, 4, 5]);
+    await expect(add(9)).rejects.toMatchObject({ id: 'ERR-001' });
+  });
+
+  it('일정에 아직 없는 날이라도 여행 기간 안이면 그날을 만들어 추가한다', async () => {
+    resetMockSchedule(structuredClone(fixtureSchedule));
+    const add = (dayNo: number) => mockRequest<ScheduleMutationResponse>({
+      method: 'POST', path: `${TRIP}/blocks`, body: { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER', dayNo },
+    });
+    const result = await add(3);
+    expect(result.schedule.days.map((day) => [day.dayNo, day.date])).toEqual([[1, '2026-10-17'], [3, '2026-10-19']]);
+    expect(result.schedule.days[1]!.blocks.map((block) => [block.dayNo, block.seq])).toEqual([[3, 1]]);
+    // 여행 기간(10/17~19) 밖은 거절하고 일정을 바꾸지 않는다.
+    await expect(add(4)).rejects.toMatchObject({ id: 'ERR-001' });
+    await expect(add(0)).rejects.toMatchObject({ id: 'ERR-001' });
+  });
+
+  it('앵커와 다른 dayNo이거나 위치 정보가 없으면 거절한다', async () => {
+    const initial = structuredClone(fixtureSchedule);
+    const [first, second] = initial.days[0]!.blocks;
+    const body = { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER' as const };
+    await expect(mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, dayNo: 2, fromBlockId: first!.id, toBlockId: second!.id } })).rejects.toMatchObject({ id: 'ERR-001' });
+    await expect(mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body })).rejects.toMatchObject({ id: 'ERR-001' });
+    const ok = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, dayNo: 1, fromBlockId: first!.id, toBlockId: second!.id } });
+    expect(ok.schedule.days[0]!.blocks[1]!.seq).toBe(2);
+  });
+
+  it('여행을 만들면 입력한 조건과 빈 일정에서 시작하고, 담은 장소가 그 일정에 들어간다', async () => {
+    const conditions = { dates: { start: '2026-11-20', end: '2026-11-21' }, dayStart: '09:00', dayEnd: '18:00', mode: 'CAR' };
+    const { tripId } = await mockRequest<CreateTripResponse>({ method: 'POST', path: '/trips', body: conditions });
+    const created = await mockRequest<TripDetailResponse>({ method: 'GET', path: `/trips/${tripId}` });
+    expect(created.trip).toMatchObject({ id: tripId, ...conditions });
+    expect(created.schedule?.days).toEqual([]);
+
+    const body = { place: { placeId: PLACE_IDS.jagalchi }, isFixed: false, origin: 'USER' as const };
+    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `/trips/${tripId}/blocks`, body: { ...body, dayNo: 2 } });
+    expect(added.schedule.days.map((day) => [day.dayNo, day.date, day.blocks.length])).toEqual([[2, '2026-11-21', 1]]);
+    // 만든 여행의 기간 밖 일차는 거절한다.
+    await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/blocks`, body: { ...body, dayNo: 3 } })).rejects.toMatchObject({ id: 'ERR-001' });
+    // 다른 여행 ID는 예시 일정을 그대로 본다.
+    const other = await mockRequest<TripDetailResponse>({ method: 'GET', path: '/trips/t2' });
+    expect(other.schedule?.days[0]!.blocks).toHaveLength(fixtureSchedule.days[0]!.blocks.length);
   });
 
   it('한 줄 해석 실패 시 폼 전환을 알린다', async () => {

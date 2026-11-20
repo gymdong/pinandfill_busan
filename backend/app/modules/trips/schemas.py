@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, HttpUrl, model_validator
+from pydantic import Field, HttpUrl, StrictBool, StrictInt, model_validator
 
 from app.modules.engine.schemas import (
     ContractModel,
@@ -131,6 +131,8 @@ class AddBlockRequest(WithSessionCoords):
     origin: Literal["USER", "SUGGESTED"]
     from_block_id: str | None = None
     to_block_id: str | None = None
+    # 사용자가 정한 체류시간. 보내면 공공 장소 값보다 먼저 쓴다(#18 PM 결정 4). 범위는 API-007 stayMin 과 같다.
+    stay_min: StrictInt | None = Field(default=None, gt=0, le=1440)
 
     @model_validator(mode="after")
     def paired_slot(self) -> Self:
@@ -140,10 +142,76 @@ class AddBlockRequest(WithSessionCoords):
             raise ValueError("slot endpoints must differ")
         return self
 
+    @model_validator(mode="after")
+    def stay_matches_window(self) -> Self:
+        # 시간창과 체류시간을 함께 보내면 길이가 같아야 한다. 어느 쪽을 믿을지 서버가 고르지 않는다.
+        # 자정을 넘는 시간창은 엔진도 지원하지 않으므로(TIME_WINDOW_UNSUPPORTED) 음수 길이는 그대로 400 이다.
+        window = self.fixed_window
+        if window is not None and self.stay_min is not None:
+            length = (window.end.hour * 60 + window.end.minute) - (window.start.hour * 60 + window.start.minute)
+            if length != self.stay_min:
+                raise ValueError("stayMin must equal the fixed window length")
+        return self
+
+
+class UpdateBlockRequest(WithSessionCoords):
+    """API-007. 프런트 `UpdateBlockRequest` 처럼 isFixed·seq·stayMin 중 정확히 하나만 보낸다."""
+
+    # 문자열·실수·불리언을 다른 타입으로 바꿔 받지 않는다("3", 3.0, true 는 400).
+    is_fixed: StrictBool | None = None
+    seq: StrictInt | None = Field(default=None, ge=1)
+    # 상한 1440분(하루)은 잠정값이다. SRS 에 체류시간 상한이 정해지면 맞춘다.
+    stay_min: StrictInt | None = Field(default=None, gt=0, le=1440)
+
+    @model_validator(mode="after")
+    def exactly_one_change(self) -> Self:
+        # null 로 보낸 키도 보낸 것으로 센다: {"seq": null, "stayMin": 45} 는 400.
+        sent = self.model_fields_set & {"is_fixed", "seq", "stay_min"}
+        if len(sent) != 1 or getattr(self, sent.pop()) is None:
+            raise ValueError("exactly one of isFixed, seq or stayMin is required")
+        return self
+
+
+class DeleteBlockRequest(WithSessionCoords):
+    """API-008 본문. 뒤 블록 재계산에 쓸 카카오 좌표만 담으며, 본문 없이 보내도 된다."""
+
+
+class UndoRequest(WithSessionCoords):
+    """API-010 본문. 되돌린 일정의 경고 판정에 쓸 카카오 좌표만 담으며, 본문 없이 보내도 된다."""
+
 
 class ScheduleMutationResponse(ContractModel):
     schedule: Schedule
     violations: tuple[Violation, ...] = ()
+
+
+class UndoResponse(ContractModel):
+    schedule: Schedule
+
+
+# FR-004 의 경유지 우회 기본값. 여행별 값은 trips 테이블(SDD 5.2)이 들어오면 저장한다.
+DEFAULT_DETOUR_THRESHOLD_MIN = 15
+
+
+class TripDates(ContractModel):
+    start: date
+    end: date
+
+
+class TripDetail(ContractModel):
+    """API-026 의 여행 조건. 지금 저장 모델(`TripWindow`)에 있는 값만 돌려준다."""
+
+    id: str
+    dates: TripDates
+    day_start: LocalTime
+    day_end: LocalTime
+    mode: Literal["TRANSIT", "CAR", "WALK"]
+    detour_threshold_min: int = DEFAULT_DETOUR_THRESHOLD_MIN
+
+
+class TripDetailResponse(ContractModel):
+    trip: TripDetail
+    schedule: Schedule
 
 
 class SuggestWaypointsRequest(WithSessionCoords):

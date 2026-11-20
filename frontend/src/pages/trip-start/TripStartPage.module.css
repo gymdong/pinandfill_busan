@@ -1,0 +1,276 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 100dvh;
+  padding: var(--space-5) var(--space-4) 0;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.step {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+}
+
+.title {
+  font-size: var(--text-xl);
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------- 한 줄 입력 ---------- */
+.interpretForm {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.textInput {
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-m);
+  background: var(--color-surface);
+}
+
+/* ---------- 여행 조건 ---------- */
+.card {
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-l);
+  background: var(--color-surface);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.row + .row,
+.optional {
+  border-top: 1px solid var(--color-border);
+}
+
+.rowLabel {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+}
+
+/* 시작–끝 입력 한 쌍. 360px에서도 한 줄에 들어가도록 줄 전체를 반씩 나눈다. */
+.rowInputs {
+  order: 2;
+  display: grid;
+  flex-basis: 100%;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.rowInputs .field {
+  width: 100%;
+  font-size: var(--text-s);
+}
+
+.rowNote {
+  order: 1;
+  font-size: var(--text-s);
+  font-weight: 700;
+}
+
+.field {
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-s);
+  background: var(--color-surface);
+}
+
+.field[aria-invalid='true'] {
+  border-color: var(--color-warn);
+}
+
+.time {
+  font-family: var(--font-mono);
+}
+
+.modes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.mode {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  font-size: var(--text-s);
+  cursor: pointer;
+}
+
+/* 선택은 색만이 아니라 채움·굵기와 aria-checked로도 전달한다(NFR-008). */
+.mode[aria-checked='true'] {
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-on-accent);
+  font-weight: 800;
+}
+
+.optional {
+  padding: var(--space-1) 0 var(--space-3);
+}
+
+.optional summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+  cursor: pointer;
+}
+
+.optionalField {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+}
+
+.optionalField .field {
+  flex: 1;
+  max-width: 200px;
+  color: var(--color-ink);
+  font-size: var(--text-m);
+}
+
+.error {
+  order: 3;
+  flex-basis: 100%;
+  color: var(--color-warn);
+  font-size: var(--text-s);
+  font-weight: 700;
+}
+
+/* ---------- 꼭 갈 곳 ---------- */
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sectionTitle {
+  font-size: var(--text-l);
+  font-weight: 800;
+}
+
+.count {
+  color: var(--color-ink-muted);
+}
+
+.sectionNote {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+}
+
+.pinnedList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pinned {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-m);
+  background: var(--color-surface);
+}
+
+.pinnedHead,
+.pinnedPlan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pinnedName {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.textButton {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: var(--text-s);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.moodLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-m);
+  background: var(--color-surface);
+  font-size: var(--text-s);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* ---------- 하단 고정 ---------- */
+.footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: auto calc(-1 * var(--space-4)) 0;
+  padding: var(--space-3) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.footerNote {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+  text-align: center;
+}

@@ -14,3 +14,5 @@ class PlaceMatchSettings(BaseSettings):
     match_radius_m: float = Field(100.0, gt=0)
     # 이름 유사도(0~1) 기준. 잠정값이며 대표 장소 100곳 측정 후 조정한다.
     name_similarity_threshold: float = Field(0.8, gt=0, le=1)
+    # 검색어 최대 길이(글자). 잠정값
+    search_query_max_length: int = Field(50, ge=1)
