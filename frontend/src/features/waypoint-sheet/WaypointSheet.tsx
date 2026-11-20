@@ -42,7 +42,7 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
     setSubmitting(true);
     setInsertionError(null);
     // #25 accepts stayMin; use the displayed server candidate value, never a default.
-    const body: AddBlockRequest & { stayMin: number } = {
+    const body: AddBlockRequest = {
       place: { placeId: candidate.place.id }, fromBlockId, toBlockId,
       isFixed: false, origin: 'SUGGESTED', stayMin: candidate.stayMin,
     };
@@ -65,7 +65,10 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
     <fieldset className={styles.threshold} disabled={busy}>
       <legend>우회 허용 시간</legend>
       {([10, 15, 30] as const).map((value) => <label key={value}>
-        <input type="radio" name="waypoint-threshold" checked={thresholdMin === value} onChange={() => setThresholdMin(value)} />
+        <input type="radio" name="waypoint-threshold" checked={thresholdMin === value} onChange={() => {
+          setInsertionError(null);
+          setThresholdMin(value);
+        }} />
         {value}분
       </label>)}
     </fieldset>

@@ -43,7 +43,7 @@ describe('WaypointSheet', () => {
     expect(suggest).toHaveBeenLastCalledWith('trip', expect.objectContaining({ thresholdMin: 30 }), expect.anything());
   });
 
-  it('수락은 부모 변경 핸들러를 통해 기존 API-006 필드만 전달한다', async () => {
+  it('수락은 표시한 stayMin을 포함한 API-006 입력을 부모 변경 핸들러로 전달한다', async () => {
     vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
     const add = vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] });
     const input = props();
@@ -114,9 +114,6 @@ describe('WaypointSheet', () => {
     expect(suggest.mock.calls[0]![2]!.signal!.aborted).toBe(true);
     await act(async () => pending.resolve({ candidates: [candidate] }));
   });
-});
-
-
 it('삽입 실패를 시트 내부에 표시하고 같은 후보로 재시도한다', async () => {
   vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
   const add = vi.spyOn(tripsApi, 'addBlock').mockRejectedValueOnce(new Error('private raw error')).mockResolvedValueOnce({ schedule, violations: [] });
@@ -134,6 +131,16 @@ it('삽입 실패를 시트 내부에 표시하고 같은 후보로 재시도한
   expect(add).toHaveBeenCalledTimes(2);
 });
 
+it('삽입 실패 뒤 임계값을 바꾸면 이전 삽입 오류를 지운다', async () => {
+  vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
+  vi.spyOn(tripsApi, 'addBlock').mockRejectedValue(new Error('private raw error'));
+  render(<WaypointSheet {...props()} />);
+  await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
+  expect(await screen.findByRole('alert')).toBeInTheDocument();
+  await userEvent.click(screen.getByLabelText('30분'));
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+});
+
 it('빈 추천에서도 직접 검색 진입점을 제공하며 삽입하지 않는다', async () => {
   vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [] });
   const add = vi.spyOn(tripsApi, 'addBlock');
@@ -143,4 +150,6 @@ it('빈 추천에서도 직접 검색 진입점을 제공하며 삽입하지 않
   await userEvent.click(screen.getByRole('button', { name: '직접 검색해서 넣기' }));
   expect(direct).toHaveBeenCalledOnce();
   expect(add).not.toHaveBeenCalled();
+});
+
 });

@@ -9,14 +9,19 @@
 
 ```tsx
 import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
-// DayTimeline 안. React useState를 기존 import에 추가.
+// DayTimeline 안. React useState를 기존 import에 추가하고,
+// blocks.length === 0 조기 return보다 앞에서 항상 같은 순서로 호출한다.
 const [recommendedSlot, setRecommendedSlot] = useState<string | null>(null);
 // blocks.map의 next가 있는 구간 안:
 <Button disabled={pending} onClick={() => setRecommendedSlot(block.id)}>
   추천 보기
 </Button>
-// 기존 직접 검색 버튼과 between BlockEditor는 그대로 유지:
-<button disabled={pending} onClick={() => onSlot(block.id)}>직접 검색해서 넣기</button>
+// 기존 '사이에 들를 곳 찾기' 버튼의 라벨·aria-expanded·스타일은 그대로 두고
+// disabled={pending}만 추가한다. 기존 between BlockEditor도 유지한다.
+<button type="button" className={styles.slotButton} aria-expanded={slot === block.id}
+  disabled={pending} onClick={() => onSlot(block.id)}>
+  <PlusIcon />사이에 들를 곳 찾기
+</button>
 {slot === block.id && <BlockEditor tripId={tripId}
   between={{ fromBlockId: block.id, toBlockId: next.id }}
   disabled={pending} onChange={onSlotChange} />}
@@ -63,8 +68,9 @@ const [recommendedSlot, setRecommendedSlot] = useState<string | null>(null);
 
 API-006은 #25의 선택적 stayMin을 사용해 서버 후보의 표시된 체류시간을 그대로 전달한다.
 숫자 기본값을 만들지 않는다. placeId·from/to·isFixed=false·origin=SUGGESTED 유지.
-서버의 요청 stayMin 우선 적용으로 추천과 삽입 체류시간을 맞춘다. 현재 브랜치의 이전 공통
-타입을 수정하지 않고 지역 교차 타입만 사용한다. 최신 dev 타입에는 stayMin이 이미 있다.
+서버의 요청 stayMin 우선 적용으로 추천과 삽입 체류시간을 맞춘다. 최신 dev의 공통
+AddBlockRequest에 stayMin이 있으므로 그대로 사용한다. types/api.ts의 이전 잠정 주석은
+실제 타임라인 연결 PR에서 확정 계약에 맞게 정리한다.
 카카오 sessionCoords는 공통 클라이언트가 처리하며 이 컴포넌트는 저장하지 않는다.
 API-011 기본 CandidateProvider는 아직 미설정이므로 실서버 추천 완료를 주장하지 않는다.
 
