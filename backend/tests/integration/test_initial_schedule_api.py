@@ -378,6 +378,27 @@ def test_missing_kakao_coordinates_do_not_trigger_route_calls_or_invent_values()
     assert repository.get(TRIP).schedule.legs[0].duration_min is None
 
 
+def test_kakao_without_coordinates_skips_overlapping_pin_and_uses_next_day():
+    client, _, repository, _, routes = setup_api(days=2)
+    response = client.post(
+        URL,
+        json=body(
+            pinned("public", "10:00", "10:30"),
+            item("kakao", place=KAKAO, stayMin=90),
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": []}
+    values = blocks(response.json())
+    assert [(value["place"]["source"], value["dayNo"], value["arriveAt"]) for value in values] == [
+        ("PUBLIC", 1, "10:00"),
+        ("KAKAO", 2, "09:00"),
+    ]
+    assert routes.departures == []
+    assert len(repository.get(TRIP).schedule.blocks) == 2
+
+
 def test_route_exception_does_not_echo_provider_secrets(caplog, monkeypatch):
     client, _, repository, _, routes = setup_api()
     secret = "synthetic-api-key-35.9876543"
