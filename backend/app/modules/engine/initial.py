@@ -413,7 +413,17 @@ class InitialSchedulePlanner:
                         cause="고정 방문시간과 체류시간이 일치하지 않습니다.",
                     )
                 if previous is not None:
-                    if previous.depart_at is None or duration is None:
+                    # A missing route is not a zero-minute route. Even without
+                    # its duration, a visit that already ends after the next
+                    # fixed start cannot occupy this candidate gap. Reject it
+                    # so FIRST_FEASIBLE can continue trying later gaps.
+                    if previous.depart_at is not None and minutes(previous.depart_at) > minutes(arrive):
+                        failure_amount = minutes(previous.depart_at) - minutes(arrive)
+                        block_failure = Violation(
+                            type="FIXED_ORDER_CONFLICT",
+                            cause="입력 순서에서 고정 방문시간을 지킬 수 없습니다.",
+                        )
+                    elif previous.depart_at is None or duration is None:
                         exact = False
                     elif minutes(previous.depart_at) + duration > minutes(arrive):
                         failure_amount = minutes(previous.depart_at) + duration - minutes(arrive)
