@@ -411,13 +411,23 @@ def test_default_initial_request_does_not_guess_unknown_kakao_stay():
         assert client.get(f"/api/trips/{trip_id}").json()["schedule"]["days"][0]["blocks"] == []
 
 
-def test_known_visit_overlap_is_rejected_even_when_route_is_unknown():
+def test_known_visit_overlap_is_not_saved_when_route_is_unknown():
     client, service, repository, _, routes = setup_api()
     routes.duration = None
     routes.source = "UNKNOWN"
     before = repository.get(TRIP)
     previous = service.history.record_before_edit(TRIP, before.schedule)
     response = client.post(URL, json=body(pinned("a", "09:00", "09:30"), item("b")))
-    assert_error(response, 409, "ERR-009")
+    assert response.status_code == 200, response.text
+    assert response.json()["generation"]["saved"] is False
+    assert response.json()["generation"]["unplaced"] == [
+        {
+            "clientId": "selection-b",
+            "reason": {
+                "type": "FIXED_ORDER_CONFLICT",
+                "cause": "입력 순서에서 고정 방문시간을 지킬 수 없습니다.",
+            },
+        }
+    ]
     assert repository.get(TRIP) == before
     assert service.history.latest_edit(TRIP) == previous
