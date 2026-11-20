@@ -344,6 +344,36 @@ export interface GenerateScheduleRequest extends WithSessionCoords {
   options?: Record<string, unknown>;
 }
 
+/**
+ * API-009 최초 생성의 선택 한 곳(PR #35, docs/initial-schedule-api.md). 이름·좌표는 넣지 않는다(D6).
+ * - `clientId`: 요청 안에서 유일한 화면 쪽 식별자. 서버 블록 ID가 아니다.
+ * - `dayNo`: 없으면 서버가 여행 기간의 날짜를 차례로 시도한다. `fixedWindow`가 있으면 그 `dayNo`와 같아야 한다.
+ * - `fixedWindow`: 있을 때만 고정 블록이 된다. `stayMin`을 함께 보내면 시간창 길이와 같아야 한다.
+ * - `stayMin`: 사용자 지정 → 공공 장소 값 순서로 쓴다. 근거가 없으면 `STAY_NEEDS_CHECK`로 미배치된다.
+ */
+export interface InitialSelection {
+  clientId: string;
+  place: BlockPlaceInput;
+  dayNo?: number;
+  fixedWindow?: { dayNo: number; start: LocalTime; end: LocalTime };
+  stayMin?: number;
+}
+
+/** API-009 최초 생성 요청. `options`와 함께 보내지 않고, 이미 블록이 있는 여행에는 보내지 않는다(400). */
+export interface InitialScheduleRequest extends WithSessionCoords {
+  initial: { policy: 'FIRST_FEASIBLE'; selections: InitialSelection[] };
+}
+
+/** 최초 생성 결과. `saved=false`면 저장되지 않은 미리보기라 그 블록 ID를 편집에 쓰지 않는다. */
+export interface InitialGeneration {
+  saved: boolean;
+  /** 경고 없이 엔진이 확정했는지. 저장 여부와 별개다(경로·영업시간 미확인이면 false여도 저장된다). */
+  confirmed: boolean;
+  unplaced: { clientId: string; reason: Violation }[];
+}
+
+export type InitialScheduleResponse = Schedule & { generation: InitialGeneration };
+
 /** API-010 */
 export interface UndoResponse {
   schedule: Schedule;

@@ -15,7 +15,11 @@ export type PinnedPlace =
  * 시각은 입력 중일 수 있어 빈 문자열을 허용하고, 보내기 전에 화면에서 검증한다.
  */
 export interface PinnedPlan {
-  dayNo: number;
+  /**
+   * 갈 일차. null이면 '알아서'로, 서버(API-009 최초 생성)가 여행 기간의 날짜를 차례로 시도한다.
+   * 시간을 정한(`fixed`) 장소는 일차가 있어야 한다.
+   */
+  dayNo: number | null;
   fixed: { start: LocalTime | ''; end: LocalTime | '' } | null;
   /**
    * 사용자가 고른 체류시간(분). 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소)만 고른다.
@@ -29,7 +33,7 @@ export function needsStayInput(place: PinnedPlace): boolean {
   return place.kind === 'KAKAO';
 }
 
-const DEFAULT_PLAN: PinnedPlan = { dayNo: 1, fixed: null };
+const DEFAULT_PLAN: PinnedPlan = { dayNo: null, fixed: null };
 
 /** 같은 장소인지 가리는 키 */
 export function pinnedKey(place: PinnedPlace): string {
