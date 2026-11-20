@@ -26,6 +26,7 @@ from app.modules.trips.schemas import (
     AddBlockRequest,
     DeleteBlockRequest,
     GenerateScheduleRequest,
+    InitialScheduleResponse,
     Schedule,
     ScheduleMutationResponse,
     SuggestWaypointsRequest,
@@ -37,6 +38,7 @@ from app.modules.trips.schemas import (
 )
 from app.modules.trips.service import (
     FixedScheduleConflictError,
+    InitialScheduleExistsError,
     StayDurationRequiredError,
     TripNotFoundError,
     TripService,
@@ -85,6 +87,9 @@ def translate_error(exc: Exception) -> TripAPIError:
         # SDD 8장에 전용 ID 가 없어 ERR-001 을 쓰고, fields.stayMin 으로 '체류시간 입력 필요'를 구분한다.
         message = "체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요."
         return TripAPIError(400, "ERR-001", message, fields={"stayMin": message})
+    if isinstance(exc, InitialScheduleExistsError):
+        message = "기존 일정이 있어 최초 자동 생성으로 덮어쓸 수 없습니다."
+        return TripAPIError(400, "ERR-001", message, fields={"initial": message})
     if isinstance(exc, PolicyRequiredError):
         return TripAPIError(
             400, "ERR-001", "명시적 삽입 구간·시작 시각·체류시간이 필요하며 자동 배치 옵션은 지원하지 않습니다."
@@ -143,8 +148,10 @@ def undo(trip_id: str, response: Response, service: Service, body: UndoRequest |
         raise translate_error(exc) from None
 
 
-@router.post("/{trip_id}/schedule", response_model=Schedule)
-def generate_schedule(trip_id: str, body: GenerateScheduleRequest, response: Response, service: Service) -> Schedule:
+@router.post("/{trip_id}/schedule", response_model=InitialScheduleResponse | Schedule)
+def generate_schedule(
+    trip_id: str, body: GenerateScheduleRequest, response: Response, service: Service
+) -> InitialScheduleResponse | Schedule:
     response.headers["Cache-Control"] = "no-store"
     try:
         return service.generate(trip_id, body)
