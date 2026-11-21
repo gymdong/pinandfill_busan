@@ -286,6 +286,19 @@ describe('mockRequest', () => {
       expect(retried.generation.saved).toBe(true);
     });
 
+    it('고정 선택이 날짜·시각순이 아니면 겹치지 않아도 ERR-009 이다', async () => {
+      const lateDay1 = { ...fixedCafe, clientId: 'kakao:3', place: mockKakaoKey(3), fixedWindow: { dayNo: 1, start: '14:00', end: '15:00' } };
+      const day2 = { ...fixedCafe, clientId: 'kakao:4', place: mockKakaoKey(4), fixedWindow: { dayNo: 2, start: '10:00', end: '11:00' } };
+      for (const selections of [[lateDay1, fixedCafe], [day2, park, fixedCafe]]) {
+        const tripId = await newTrip();
+        await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial(selections) }))
+          .rejects.toMatchObject({ id: 'ERR-009', status: 409 });
+      }
+      const tripId = await newTrip();
+      const ordered = await mockRequest<InitialScheduleResponse>({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([fixedCafe, park, lateDay1, day2]) });
+      expect(ordered.generation.saved).toBe(true);
+    });
+
     it.each([
       ['options 와 함께 보냄', { ...initial([park]), options: {} }],
       ['빈 선택', initial([])],

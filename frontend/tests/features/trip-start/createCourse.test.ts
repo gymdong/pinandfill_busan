@@ -73,6 +73,52 @@ describe('코스 만들기 (API-002 → API-009 최초 생성)', () => {
     expect(addBlock).not.toHaveBeenCalled();
   });
 
+  describe('고정 선택은 날짜·시각순으로 보낸다(역순이면 서버가 409 ERR-009)', () => {
+    const museum: PinnedPlace = { kind: 'PUBLIC', placeId: 'p2', name: '박물관', coords: { lat: 35.2, lng: 129.2 } };
+    const beach: PinnedPlace = { kind: 'PUBLIC', placeId: 'p3', name: '해변', coords: { lat: 35.3, lng: 129.3 } };
+    const at = (dayNo: number, start: string, end: string) => ({ dayNo, fixed: { start, end } });
+
+    async function sentOrder(pinned: PinnedPlace[], plans: Parameters<typeof createCourse>[2]) {
+      const { initial } = mockApis();
+      await createCourse(conditions, pinned, plans);
+      return initial.mock.lastCall![1].selections.map((item) => [item.clientId, item.fixedWindow ? `${item.fixedWindow.dayNo} ${item.fixedWindow.start}` : null]);
+    }
+
+    it('다른 날 역순(2일차 10:00 → 1일차 12:00)으로 담아도 고정 선택끼리만 바꾸고 유연 장소 자리는 그대로 둔다', async () => {
+      const plans = {
+        'public:p2': at(2, '10:00', '11:00'),
+        'public:p3': at(1, '12:00', '13:00'),
+        'kakao:123': { dayNo: null, fixed: null, stayMin: 60 },
+      };
+      await expect(sentOrder([museum, park, beach, cafe], plans)).resolves.toEqual([
+        ['public:p3', '1 12:00'],
+        ['public:p1', null],
+        ['public:p2', '2 10:00'],
+        ['kakao:123', null],
+      ]);
+    });
+
+    it('같은 날 역순(14:00 → 10:00)도 시각순으로 바꾼다', async () => {
+      const plans = { 'public:p2': at(1, '14:00', '15:00'), 'public:p3': at(1, '10:00', '11:00') };
+      await expect(sentOrder([park, museum, beach], plans)).resolves.toEqual([
+        ['public:p1', null],
+        ['public:p3', '1 10:00'],
+        ['public:p2', '1 14:00'],
+      ]);
+    });
+
+    it('도착 시각이 같으면 담은 순서를 지키고, 이미 순서대로면 그대로 보낸다', async () => {
+      const same = { 'public:p2': at(1, '10:00', '11:00'), 'public:p3': at(1, '10:00', '10:30') };
+      await expect(sentOrder([museum, beach], same)).resolves.toEqual([['public:p2', '1 10:00'], ['public:p3', '1 10:00']]);
+      const ordered = { 'public:p2': at(1, '10:00', '11:00'), 'public:p3': at(2, '09:00', '10:00') };
+      await expect(sentOrder([museum, park, beach], ordered)).resolves.toEqual([
+        ['public:p2', '1 10:00'],
+        ['public:p1', null],
+        ['public:p3', '2 09:00'],
+      ]);
+    });
+  });
+
   it('카카오 장소의 이름과 좌표는 요청에 넣지 않는다', () => {
     expect(JSON.stringify(toInitialSelection(cafe, { dayNo: 1, fixed: null, stayMin: 30 }))).not.toMatch(/카페|35\.1|129\.1/);
   });

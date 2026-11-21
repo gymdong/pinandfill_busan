@@ -201,6 +201,8 @@ function generateSchedule(tripId: string, body: GenerateScheduleRequest | Initia
   if (body.initial?.policy !== 'FIRST_FEASIBLE' || selections.length === 0) return invalid();
   if (new Set(selections.map((item) => item.clientId)).size !== selections.length) return invalid();
   selections.forEach(checkSelection);
+  // 백엔드처럼 고정 선택이 날짜·시각순이 아니면 겹치지 않아도 고정 순서 충돌이다.
+  if (!fixedInOrder(selections)) throw new ApiError({ id: 'ERR-009', status: 409 });
 
   const draft: Schedule = { days: [], violations: [], conflicts: [] };
   const unplaced: { clientId: string; reason: Violation }[] = [];
@@ -249,6 +251,11 @@ function checkSelection(selection: InitialSelection): void {
     if (!Number.isInteger(selection.stayMin) || selection.stayMin <= 0 || selection.stayMin > 1440) return invalid();
     if (window && minutesOf(window.end) - minutesOf(window.start) !== selection.stayMin) return invalid();
   }
+}
+
+function fixedInOrder(selections: InitialSelection[]): boolean {
+  const keys = selections.flatMap((item) => (item.fixedWindow ? [item.fixedWindow.dayNo * 24 * 60 + minutesOf(item.fixedWindow.start)] : []));
+  return keys.every((key, index) => (keys[index - 1] ?? key) <= key);
 }
 
 function visitEnd(arriveAt: string | null, stayMin: number): string | null {

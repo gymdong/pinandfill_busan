@@ -73,6 +73,21 @@ export function toInitialSelection(place: PinnedPlace, plan: PinnedPlan, asked: 
   };
 }
 
+type FixedSelection = InitialSelection & { fixedWindow: NonNullable<InitialSelection['fixedWindow']> };
+
+/**
+ * 시간창이 있는 선택끼리만 (일차, 도착 시각) 순으로 안정 정렬해, 원래 고정 선택이 있던 자리에 차례로 다시 넣는다.
+ * 서버는 고정 선택의 요청 순서를 방문 순서로 지키고, 역순이면 겹치지 않아도 409 ERR-009로 거절한다(#35 `docs/initial-schedule-api.md`).
+ * 유연 장소의 상대 순서와 자리는 그대로다(`FIRST_FEASIBLE`은 입력 순서로 처리한다). 시각이 같으면 담은 순서를 지킨다.
+ */
+export function orderFixedSelections(selections: InitialSelection[]): InitialSelection[] {
+  const fixed = selections
+    .filter((item): item is FixedSelection => Boolean(item.fixedWindow))
+    .sort((a, b) => a.fixedWindow.dayNo - b.fixedWindow.dayNo || minutesOf(a.fixedWindow.start) - minutesOf(b.fixedWindow.start));
+  let next = 0;
+  return selections.map((item) => (item.fixedWindow ? (fixed[next++] ?? item) : item));
+}
+
 export type CourseOutcome =
   /**
    * 일정이 저장됐다. 경로·영업시간 확인 필요 경고는 타임라인이 보여 준다.
@@ -111,6 +126,7 @@ async function alreadySaved(tripId: string): Promise<boolean> {
 /**
  * '코스 만들기': 여행 생성(API-002) → 담은 장소 전체로 최초 일정 생성(API-009 `initial`) 한 번.
  *
+ * - 담은 순서로 보내되, 고정 선택끼리는 날짜·시각순으로 맞춘다(`orderFixedSelections`).
  * - 여행 생성이 실패하면 그 오류를 그대로 던진다.
  * - `retryTripId`를 넘기면 여행을 새로 만들지 않고 그 빈 여행에 다시 보낸다(미배치·충돌·네트워크 실패 뒤).
  *   이전 요청이 응답 없이 저장됐을 수 있어 먼저 여행 조회(API-026)로 확인한다. 그 사이 저장이 끝나 덮어쓰기 방지 400이
@@ -136,7 +152,9 @@ export async function createCourse(
     tripId = (await tripsApi.create(conditions)).tripId;
   }
 
-  const selections = pinned.map((place) => toInitialSelection(place, planOf(plans, pinnedKey(place)), asked));
+  const selections = orderFixedSelections(
+    pinned.map((place) => toInitialSelection(place, planOf(plans, pinnedKey(place)), asked)),
+  );
   try {
     // 경로 조회가 여러 번 일어날 수 있어 시간 제한을 늘린다.
     const result = await tripsApi.createInitialSchedule(
