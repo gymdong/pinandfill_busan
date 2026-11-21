@@ -3,17 +3,22 @@
 from collections.abc import Callable
 from threading import RLock
 
+from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.interfaces import EngineResult, ItineraryEngine
 from app.modules.engine.schemas import CalculationContext, RecomputeInput, ScheduleState, ValidateInput
 from app.modules.engine.service import NeedsConfirmationError, PolicyRequiredError
 from app.modules.recommend.waypoints import WaypointRecommender
 from app.modules.trips.commands import calculation_context, delete_command, insert_command, update_command
 from app.modules.trips.edit_history import EditHistory, InMemorySnapshotRepository, changed_block_ids
+from app.modules.trips.initial import initial_command
 from app.modules.trips.repository import TripRecord, TripRepository
 from app.modules.trips.schemas import (
     AddBlockRequest,
     DeleteBlockRequest,
     GenerateScheduleRequest,
+    GenerationMetadata,
+    InitialScheduleResponse,
+    InitialUnplaced,
     KakaoPlaceKey,
     PublicPlaceInput,
     Schedule,
@@ -41,6 +46,10 @@ class StayDurationRequiredError(PolicyRequiredError):
     """요청 stayMin 도, 공공 장소 기본 체류시간도 없다. 화면이 체류시간을 입력받아 다시 보낸다."""
 
 
+class InitialScheduleExistsError(PolicyRequiredError):
+    """Initial generation cannot overwrite existing blocks or legs."""
+
+
 class TripService:
     def __init__(
         self,
@@ -50,11 +59,13 @@ class TripService:
         *,
         recommender: WaypointRecommender | None = None,
         history: EditHistory | None = None,
+        initial_planner: InitialSchedulePlanner | None = None,
     ) -> None:
         self.repository = repository
         self.engine = engine
         self.stay_duration = stay_duration
         self.recommender = recommender
+        self.initial_planner = initial_planner
         # 기본값은 로컬 Fake 저장소(FakeTripRepository)와 짝을 이루는 메모리 이력이다.
         # DB 저장소를 붙일 때 schedule_snapshots 를 쓰는 SnapshotRepository 구현으로 바꿔 주입해야 한다.
         self.history = history if history is not None else EditHistory(InMemorySnapshotRepository())
@@ -182,9 +193,80 @@ class TripService:
                 raise
             return UndoResponse(schedule=result.schedule)
 
-    def generate(self, trip_id: str, request: GenerateScheduleRequest) -> Schedule:
+    def _commit_generation(self, trip_id: str, record: TripRecord, result: EngineResult) -> None:
+        """Reuse generation acceptance and EDIT compensation for both API-009 paths.
+
+        This lock-scoped compensation is for the current memory repositories.
+        Persistent repositories must commit schedule/history in one transaction.
+        """
+        self._accept(result)
+        previous = self.history.latest_edit(trip_id)
+        changed = result.state != record.schedule
+        try:
+            if changed:
+                self.history.discard(trip_id)
+            self.repository.save(trip_id, TripRecord(record.trip, result.state))
+        except Exception:
+            # Also compensate a provider that writes before reporting failure.
+            # Restore history even if restoring the schedule itself fails.
+            try:
+                if self.repository.get(trip_id) != record:
+                    self.repository.save(trip_id, record)
+            finally:
+                if changed:
+                    self.history.restore(trip_id, previous)
+            raise
+
+    def _generate_initial(
+        self, trip_id: str, record: TripRecord, request: GenerateScheduleRequest
+    ) -> InitialScheduleResponse:
+        if record.schedule.blocks or record.schedule.legs:
+            raise InitialScheduleExistsError
+        if self.initial_planner is None:
+            raise NeedsConfirmationError("Initial schedule planner is not configured")
+        assert request.initial is not None
+        command, client_ids = initial_command(request.initial, record.trip)
+        planned = self.initial_planner.plan(command, context=calculation_context(request))
+        if planned.schedule is None:
+            raise NeedsConfirmationError("Initial schedule presentation is unavailable")
+        saved = not planned.unplaced
+        if saved:
+            # Includes global fixed-order conflicts, which have no block warning.
+            if planned.conflicts:
+                raise FixedScheduleConflictError
+            # A missing route is not a zero-minute route. Even without a route
+            # estimate, a previous visit ending after the next fixed start is
+            # already impossible; do not store that preview as a valid schedule.
+            blocks = sorted(planned.state.blocks, key=lambda block: (block.day_no, block.seq))
+            for previous, following in zip(blocks, blocks[1:], strict=False):
+                if (
+                    previous.day_no == following.day_no
+                    and following.is_fixed
+                    and previous.depart_at is not None
+                    and following.fixed_start is not None
+                    and previous.depart_at > following.fixed_start
+                ):
+                    raise FixedScheduleConflictError
+            self._commit_generation(trip_id, record, EngineResult(planned.state, planned.schedule))
+        return InitialScheduleResponse(
+            days=planned.schedule.days,
+            violations=planned.schedule.violations,
+            conflicts=planned.schedule.conflicts,
+            generation=GenerationMetadata(
+                saved=saved,
+                confirmed=planned.confirmed,
+                unplaced=tuple(
+                    InitialUnplaced(client_id=client_ids[item.block_id], reason=item.reason)
+                    for item in planned.unplaced
+                ),
+            ),
+        )
+
+    def generate(self, trip_id: str, request: GenerateScheduleRequest) -> Schedule | InitialScheduleResponse:
         with self._lock:
             record = self._get(trip_id)
+            if request.initial is not None:
+                return self._generate_initial(trip_id, record, request)
             if request.options:
                 raise PolicyRequiredError("Generation options need an agreed policy")
             if not record.schedule.blocks:
@@ -209,18 +291,5 @@ class TripService:
                     context=context,
                 )
                 state = result.state
-            self._accept(result)
-            if result.state == record.schedule:
-                self.repository.save(trip_id, TripRecord(record.trip, result.state))
-                return result.schedule
-            # 생성은 기록하지 않으므로, 그 전 편집의 스냅샷으로 되돌리면 생성 결과를 덮어쓴다. 지점을 없앤다.
-            # 지점 삭제와 일정 저장은 함께 확정한다: 일정을 마지막에 저장하고, 어느 쪽이든 실패하면
-            # 되돌리기 지점을 생성 전으로 되살린다(일정은 아직 바뀌지 않았다). DB 구현에서는 트랜잭션 롤백이다.
-            previous = self.history.latest_edit(trip_id)
-            try:
-                self.history.discard(trip_id)
-                self.repository.save(trip_id, TripRecord(record.trip, result.state))
-            except Exception:
-                self.history.restore(trip_id, previous)
-                raise
+            self._commit_generation(trip_id, record, result)
             return result.schedule
