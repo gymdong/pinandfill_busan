@@ -3,6 +3,8 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.secrets import blank_key_is_no_key
+
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
 
@@ -28,12 +30,5 @@ class AISettings(BaseSettings):
     # 사용자 입력 최대 길이(글자). 잠정값이며 프런트 한 줄 입력의 maxLength 와 같다.
     max_input_chars: int = Field(default=200, ge=1)
 
-    @field_validator("api_key", mode="before")
-    @classmethod
-    def blank_key_is_no_key(cls, value: object) -> object:
-        """`.env` 의 `GEMINI_API_KEY=`(빈 값)은 키가 없는 것으로 본다. 빈 키로 LLM 을 부르지 않는다."""
-        if isinstance(value, str) and not value.strip():
-            return None
-        if isinstance(value, SecretStr) and not value.get_secret_value().strip():
-            return None
-        return value
+    # `.env` 의 `GEMINI_API_KEY=`(빈 값)은 키가 없는 것으로 본다. 빈 키로 LLM 을 부르지 않는다.
+    _normalize_key = field_validator("api_key", mode="before")(blank_key_is_no_key)
