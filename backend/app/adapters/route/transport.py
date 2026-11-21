@@ -5,17 +5,23 @@ from __future__ import annotations
 import http.client
 import json
 import math
+import ssl
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Literal, Protocol
 from urllib.parse import urlencode, urlsplit
 
+import certifi
+
 from app.adapters.route.quota import MAX_PAUSE_SECONDS
 
 _ALLOWED_HOSTS = frozenset({"apis.openapi.sk.com", "api.odsay.com"})
 _TMAP_VERSIONED_PATHS = frozenset({"/tmap/routes", "/tmap/routes/pedestrian", "/tmap/routes/prediction"})
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+# Python 기본 인증서 저장소는 배포판마다 달라(uv 가 설치한 macOS Python 은 TMAP 체인을 검증하지 못했다)
+# 카카오 어댑터(httpx)와 같은 certifi 저장소로 검증한다. 검증 자체는 끄지 않는다.
+_TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 class TransportError(Exception):
@@ -117,7 +123,7 @@ class SafeHTTPTransport:
         request_headers["Content-Type"] = content_type
         connection: http.client.HTTPSConnection | None = None
         try:
-            connection = http.client.HTTPSConnection(parsed.hostname, 443, timeout=timeout)
+            connection = http.client.HTTPSConnection(parsed.hostname, 443, timeout=timeout, context=_TLS_CONTEXT)
             connection.set_debuglevel(0)
             request_target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
             connection.request("POST", request_target, body=payload, headers=request_headers)
