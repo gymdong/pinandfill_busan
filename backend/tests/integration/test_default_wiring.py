@@ -2,8 +2,10 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from app.main import create_app
+from app.adapters.kakao import KakaoSettings
+from app.main import create_app, kakao_settings
 from app.modules.places.service import PlaceSearchService
 
 TRIP = {
@@ -114,6 +116,31 @@ def test_place_search_is_enabled_only_with_a_kakao_key(monkeypatch: pytest.Monke
     with TestClient(application):
         assert isinstance(application.state.place_search_service, PlaceSearchService)
     assert application.state.place_search_service is None
+
+
+def test_missing_kakao_key_only_disables_search(monkeypatch: pytest.MonkeyPatch):
+    # 키 환경변수가 아예 없어도(빈 값이 아니라) 예외 없이 '검색 꺼짐'(None)이다. 로컬 .env 는 읽지 않는다.
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
+    monkeypatch.setattr("app.main.KakaoSettings", lambda: KakaoSettings(_env_file=None))
+    assert kakao_settings() is None
+
+
+def test_missing_key_and_bad_setting_together_still_fail_at_startup(monkeypatch: pytest.MonkeyPatch):
+    # 키가 없어도 다른 설정 오류가 함께 있으면 '검색 꺼짐'으로 덮지 않고 시작할 때 드러낸다(#34 리뷰).
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
+    monkeypatch.setenv("KAKAO_SEARCH_RECT", "129.32,34.86,128.74,35.40")
+    monkeypatch.setattr("app.main.KakaoSettings", lambda: KakaoSettings(_env_file=None))
+    with pytest.raises(ValidationError) as error:
+        kakao_settings()
+    assert {item["loc"] for item in error.value.errors()} == {("rest_api_key",), ("search_rect",)}
+
+
+def test_bad_kakao_setting_fails_at_startup_instead_of_disabling_search(monkeypatch: pytest.MonkeyPatch):
+    # 키가 아닌 설정 오류는 검색을 조용히 끄지 않고 시작할 때 드러낸다.
+    monkeypatch.setenv("KAKAO_REST_API_KEY", "test-rest-key")
+    monkeypatch.setenv("KAKAO_SEARCH_RECT", "129.32,34.86,128.74,35.40")
+    with pytest.raises(ValidationError):
+        create_app()
 
 
 KAKAO_UNKNOWN = {"kakaoPlaceId": "900000009", "placeUrl": "https://place.map.kakao.com/900000009"}

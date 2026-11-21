@@ -115,12 +115,65 @@ class WithSessionCoords(ContractModel):
     session_coords: dict[str, SessionCoordinate] = Field(default_factory=dict, exclude=True, repr=False)
 
 
-class GenerateScheduleRequest(WithSessionCoords):
-    options: dict[str, object] | None = None
-
-
 class PublicPlaceInput(ContractModel):
     place_id: str = Field(min_length=1)
+
+
+class InitialSelectionInput(ContractModel):
+    place: PublicPlaceInput | KakaoPlaceKey
+    client_id: str = Field(min_length=1)
+    day_no: StrictInt | None = Field(default=None, ge=1)
+    fixed_window: FixedWindow | None = None
+    stay_min: StrictInt | None = Field(default=None, gt=0, le=1440)
+
+    @model_validator(mode="after")
+    def consistent_window(self) -> Self:
+        window = self.fixed_window
+        if window is not None:
+            if self.day_no is not None and self.day_no != window.day_no:
+                raise ValueError("dayNo must agree with fixedWindow.dayNo")
+            duration = (window.end.hour * 60 + window.end.minute) - (window.start.hour * 60 + window.start.minute)
+            if duration <= 0 or (self.stay_min is not None and duration != self.stay_min):
+                raise ValueError("fixedWindow must be positive and match stayMin when supplied")
+        return self
+
+
+class InitialGenerationInput(ContractModel):
+    selections: tuple[InitialSelectionInput, ...] = Field(min_length=1)
+    policy: Literal["FIRST_FEASIBLE"]
+
+    @model_validator(mode="after")
+    def unique_client_ids(self) -> Self:
+        ids = [selection.client_id for selection in self.selections]
+        if len(ids) != len(set(ids)):
+            raise ValueError("clientId must be unique within the request")
+        return self
+
+
+class GenerateScheduleRequest(WithSessionCoords):
+    options: dict[str, object] | None = None
+    initial: InitialGenerationInput | None = None
+
+    @model_validator(mode="after")
+    def exclusive_initial(self) -> Self:
+        if self.initial is not None and "options" in self.model_fields_set:
+            raise ValueError("initial and options cannot be supplied together")
+        return self
+
+
+class InitialUnplaced(ContractModel):
+    client_id: str
+    reason: Violation
+
+
+class GenerationMetadata(ContractModel):
+    saved: bool
+    confirmed: bool
+    unplaced: tuple[InitialUnplaced, ...] = ()
+
+
+class InitialScheduleResponse(Schedule):
+    generation: GenerationMetadata
 
 
 class AddBlockRequest(WithSessionCoords):

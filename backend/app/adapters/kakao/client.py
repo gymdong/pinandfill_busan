@@ -35,6 +35,7 @@ def install_httpx_url_redaction() -> None:
 install_httpx_url_redaction()
 
 KEYWORD_SEARCH_PATH = "/v2/local/search/keyword.json"
+CATEGORY_SEARCH_PATH = "/v2/local/search/category.json"
 QUOTA_EXCEEDED_CODE = -10
 
 
@@ -78,14 +79,40 @@ class KakaoLocalAdapter:
         params: dict[str, str | int] = {"query": query, "size": settings.page_size, "rect": settings.search_rect}
         if category_group_code:
             params["category_group_code"] = category_group_code
+        return await self._search(KEYWORD_SEARCH_PATH, params, "kakao_local_search")
 
+    async def search_category(
+        self, category_group_code: str, *, lat: float, lng: float, radius_m: int
+    ) -> list[KakaoPlace]:
+        """좌표 반경 안의 한 분류 장소를 가까운 순으로 찾는다(카테고리 검색, 첫 페이지).
+
+        부산 검색 범위(search_rect) 밖 좌표는 카카오를 부르지 않고 빈 목록이다.
+
+        Raises:
+            KakaoLocalError: 카카오 호출이 실패했을 때.
+        """
+        settings = self._settings
+        if not _inside(settings.search_rect, lat, lng):
+            return []
+        params: dict[str, str | int] = {
+            "category_group_code": category_group_code,
+            "x": str(lng),
+            "y": str(lat),
+            "radius": radius_m,
+            "sort": "distance",
+            "size": settings.page_size,
+        }
+        return await self._search(CATEGORY_SEARCH_PATH, params, "kakao_local_category")
+
+    async def _search(self, path: str, params: dict[str, str | int], log_name: str) -> list[KakaoPlace]:
+        settings = self._settings
         started = time.perf_counter()
-        # 원래 예외에는 요청 URL(검색어)이 담기므로 except 밖에서 새 예외를 던져 연결을 끊는다.
+        # 원래 예외에는 요청 URL(검색어·좌표)이 담기므로 except 밖에서 새 예외를 던져 연결을 끊는다.
         response: httpx.Response | None = None
         transport_failure = ""
         try:
             response = await self._client.get(
-                f"{settings.base_url}{KEYWORD_SEARCH_PATH}",
+                f"{settings.base_url}{path}",
                 params=params,
                 headers={"Authorization": f"KakaoAK {settings.rest_api_key.get_secret_value()}"},
                 timeout=settings.timeout_seconds,
@@ -95,35 +122,42 @@ class KakaoLocalAdapter:
         except httpx.HTTPError:
             transport_failure = "network"
         if response is None:
-            raise self._failure(transport_failure, started)
+            raise self._failure(log_name, transport_failure, started)
 
         if response.status_code != httpx.codes.OK:
-            raise self._failure(_error_reason(response), started, response.status_code)
+            raise self._failure(log_name, _error_reason(response), started, response.status_code)
 
         documents = _documents(response)
         if documents is None:
-            raise self._failure("invalid_response", started, response.status_code)
+            raise self._failure(log_name, "invalid_response", started, response.status_code)
 
         places = [place for place in map(_to_place, documents) if place is not None]
         skipped = len(documents) - len(places)
         # 결과가 있는데 하나도 읽지 못했다면 '검색 결과 없음'이 아니라 응답 형식 문제다.
         if documents and not places:
-            raise self._failure("invalid_response", started, response.status_code)
+            raise self._failure(log_name, "invalid_response", started, response.status_code)
         prefix = settings.region_prefix
         places = [place for place in places if (place.address or place.road_address).startswith(prefix)]
         logger.info(
-            "kakao_local_search status=200 duration_ms=%d count=%d skipped=%d",
+            "%s status=200 duration_ms=%d count=%d skipped=%d",
+            log_name,
             _elapsed_ms(started),
             len(places),
             skipped,
         )
         return places
 
-    def _failure(self, reason: str, started: float, status_code: int | None = None) -> KakaoLocalError:
+    def _failure(self, log_name: str, reason: str, started: float, status_code: int | None = None) -> KakaoLocalError:
         logger.warning(
-            "kakao_local_search failed reason=%s status=%s duration_ms=%d", reason, status_code, _elapsed_ms(started)
+            "%s failed reason=%s status=%s duration_ms=%d", log_name, reason, status_code, _elapsed_ms(started)
         )
         return KakaoLocalError(reason, status_code)
+
+
+def _inside(rect: str, lat: float, lng: float) -> bool:
+    """search_rect(좌측 X, 좌측 Y, 우측 X, 우측 Y = 경도, 위도, 경도, 위도) 안의 좌표인지"""
+    min_lng, min_lat, max_lng, max_lat = (float(value) for value in rect.split(","))
+    return min_lng <= lng <= max_lng and min_lat <= lat <= max_lat
 
 
 def _load_json(response: httpx.Response) -> object:

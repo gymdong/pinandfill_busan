@@ -7,6 +7,8 @@ from app.core.config import Settings
 from app.main import create_app
 from app.modules.ai.interpret import InterpretService, build_interpret_service
 from app.modules.ai.settings import AISettings
+from app.modules.recommend.mood import MoodService, build_mood_service
+from app.modules.recommend.mood_data import MoodDataProvider
 
 
 @pytest.fixture(autouse=True)
@@ -20,6 +22,11 @@ def no_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
         return build_interpret_service(AISettings(_env_file=None, api_key=None))
 
     monkeypatch.setattr("app.modules.trips.intake.build_interpret_service", rule_only)
+
+    def mood_rules_only(data: MoodDataProvider) -> MoodService:
+        return build_mood_service(data, AISettings(_env_file=None, api_key=None))
+
+    monkeypatch.setattr("app.modules.recommend.mood_router.build_mood_service", mood_rules_only)
 
 
 @pytest.fixture(autouse=True)

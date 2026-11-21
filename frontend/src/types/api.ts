@@ -420,6 +420,8 @@ export type MoodRequest = {
 export interface MoodEvidence {
   matchedTags: string[];
   excerpt: string | null;
+  /** 근거 문장(장소 설명)의 출처 기관·기준일. 발췌가 없거나 기관을 모르면 null(NFR-007) */
+  source: SourceInfo | null;
 }
 
 export interface MoodPlace {

@@ -224,6 +224,12 @@ export default function MoodSearchPage() {
                           .filter(Boolean)
                           .join(' — ')}
                       </p>
+                      {item.evidence.source && (
+                        <p className={styles.evidenceSource}>
+                          설명 출처 {item.evidence.source.org}
+                          {item.evidence.source.refDate ? ` · ${formatDate(item.evidence.source.refDate)} 기준` : ' · 기준일 확인 필요'}
+                        </p>
+                      )}
                       <CrowdBadge grade={item.crowd?.grade ?? null} confidence={item.crowd?.confidence} />
                     </div>
                     <Button

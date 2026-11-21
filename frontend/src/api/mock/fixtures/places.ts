@@ -199,25 +199,26 @@ export const moodTags: ThemeTag[] = [
   { code: 'SEA_VIEW', label: '바다 전망' },
   { code: 'ALLEY_WALK', label: '골목·산책' },
 ];
-export const moodAvoid = ['덜 붐비는 곳'];
+// 백엔드(API-013)가 지금 거를 수 있는 피할 조건은 '야외 제외'·'실내 제외'뿐이다.
+export const moodAvoid = ['실내 제외'];
 
 export const moodPlaces: MoodPlace[] = [
   {
     place: placeSummaries.huinnyeoul,
     photo: photo('00000000-0000-4000-8000-000000000203', '#c7d8e7', KTO),
-    evidence: { matchedTags: ['SEA_VIEW', 'ALLEY_WALK'], excerpt: '해안 절벽 위로 이어진 좁은 골목' },
+    evidence: { matchedTags: ['SEA_VIEW', 'ALLEY_WALK'], excerpt: '해안 절벽 위로 이어진 좁은 골목', source: { org: KTO, refDate: REF_DATE } },
     crowd: crowd('여유', '중간'),
   },
   {
     place: placeSummaries.cheongsapo,
     photo: photo('00000000-0000-4000-8000-000000000204', '#9cbad6', BUSAN),
-    evidence: { matchedTags: ['SEA_VIEW'], excerpt: '등대가 보이는 작은 포구 마을' },
+    evidence: { matchedTags: ['SEA_VIEW'], excerpt: '등대가 보이는 작은 포구 마을', source: { org: BUSAN, refDate: REF_DATE } },
     crowd: crowd('보통', '중간'),
   },
   {
     place: placeSummaries.ibagu,
     photo: null,
-    evidence: { matchedTags: ['ALLEY_WALK'], excerpt: '168계단 위에서 내려다보는 항구' },
+    evidence: { matchedTags: ['ALLEY_WALK'], excerpt: '168계단 위에서 내려다보는 항구', source: null },
     crowd: crowd('여유', '낮음'),
   },
 ];

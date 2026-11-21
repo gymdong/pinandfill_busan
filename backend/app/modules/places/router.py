@@ -1,4 +1,4 @@
-"""API-003 장소 검색, API-005 장소 상세. 서비스는 앱 생성 시 주입한다(app.main 기본 구성).
+"""API-003 장소 검색, API-004 지도 위치의 장소, API-005 장소 상세. 서비스는 앱 생성 시 주입한다(app.main 기본 구성).
 
 `/{place_id}` 는 모든 한 단계 경로를 받으므로 `/search`·`/at` 같은 고정 경로는 그보다 먼저 등록한다.
 """
@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.adapters.kakao import KakaoLocalError
 
-from .api_schemas import PlaceDetailResponse, PlaceSearchResponse
+from .api_schemas import PlaceDetailResponse, PlacesAtResponse, PlaceSearchResponse
 from .detail import PlaceDetailService, PlaceNotFoundError
 from .service import InvalidSearchRequestError, PlaceLookupError, PlaceSearchService
 
@@ -56,6 +56,25 @@ async def search_places(
         raise PlaceAPIError(400, "ERR-001", "검색어와 분류를 확인해 주세요.") from None
     except KakaoLocalError:
         raise PlaceAPIError(503, "ERR-003", "장소 검색이 잠시 안 돼요. 지도에서 직접 골라 주세요.") from None
+    except PlaceLookupError:
+        raise PlaceAPIError(503, "ERR-017", "장소 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.") from None
+
+
+@router.get("/at", response_model=PlacesAtResponse)
+async def places_at(
+    lat: Annotated[float, Query(ge=-90, le=90, allow_inf_nan=False)],
+    lng: Annotated[float, Query(ge=-180, le=180, allow_inf_nan=False)],
+    response: Response,
+    service: Service,
+) -> PlacesAtResponse:
+    """API-004. 부산 검색 범위 밖 좌표는 카카오를 부르지 않고 빈 결과다. 좌표는 로그·오류에 남기지 않는다."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return await service.at(lat, lng)
+    except KakaoLocalError:
+        raise PlaceAPIError(
+            503, "ERR-003", "이 위치의 장소를 잠시 찾을 수 없어요. 장소 검색으로 찾아 주세요."
+        ) from None
     except PlaceLookupError:
         raise PlaceAPIError(503, "ERR-017", "장소 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.") from None
 

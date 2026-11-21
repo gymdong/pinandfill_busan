@@ -35,6 +35,8 @@ class SamplePlace:
     closed_days_text: str | None = None
     # 표본 CSV 의 출처 표기(source_label_original) 그대로. 예: '한국관광공사 TourAPI, 비짓부산'
     source_org: str | None = None
+    # 공공 데이터의 장소 설명(description 열, 있으면). 분위기 추천의 근거 문장은 여기서 원문 그대로 발췌한다.
+    description: str | None = None
 
 
 class SamplePlaceData:
@@ -163,6 +165,7 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
                 indoor_outdoor=row.get("indoor_outdoor") or None,
                 closed_days_text=row.get("closed_days_raw") or None,
                 source_org=row.get("source_label_original") or None,
+                description=row.get("description") or None,
             )
         )
     if skipped:
