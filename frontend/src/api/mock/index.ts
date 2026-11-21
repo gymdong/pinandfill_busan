@@ -79,6 +79,18 @@ function invalid(): never {
   throw new ApiError({ id: 'ERR-001', status: 400 });
 }
 
+/** 백엔드(#25·#28)와 같은 '체류시간 근거 없음' 응답. 화면은 `fields.stayMin`을 보고 머무를 시간을 입력받는다. */
+export const STAY_REQUIRED_MESSAGE = '체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.';
+
+function stayRequired(): never {
+  throw new ApiError({ id: 'ERR-001', status: 400, message: STAY_REQUIRED_MESSAGE, fields: { stayMin: STAY_REQUIRED_MESSAGE } });
+}
+
+function minutesOf(time: string): number {
+  const [hour = 0, minute = 0] = time.split(':').map(Number);
+  return hour * 60 + minute;
+}
+
 interface AffectedRange { dayNo: number; startIndex: number }
 
 function mutate(tripId: string, change: (draft: Schedule, state: MockTripState) => AffectedRange | null): ScheduleMutationResponse {
@@ -126,9 +138,12 @@ function addEmptyDay(draft: Schedule, dayNo: number, trip: Trip): ScheduleDay {
 
 function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationResponse {
   if (!body?.place) return invalid();
-  // @provisional stayMin 은 백엔드 API-006 에 아직 없는 필드를 먼저 반영한 것이다(#27). 실제 서버는 이 필드가 있으면 거절한다.
-  // 백엔드 형식이 정해지면(API-006 필드 또는 API-009 initial.selections[].stayMin) 이 검사와 mock 테스트를 함께 맞춘다.
-  if (body.stayMin !== undefined && (!Number.isInteger(body.stayMin) || body.stayMin <= 0)) return invalid();
+  // 백엔드와 같이 체류시간은 정수 1~1440이고, 시간창과 함께 보내면 길이가 같아야 한다.
+  if (body.stayMin !== undefined && (!Number.isInteger(body.stayMin) || body.stayMin <= 0 || body.stayMin > 1440)) return invalid();
+  if (body.stayMin !== undefined && body.fixedWindow
+    && minutesOf(body.fixedWindow.end) - minutesOf(body.fixedWindow.start) !== body.stayMin) return invalid();
+  // 공공 DB에 없는 카카오 장소는 체류시간 근거가 없다. 서버는 기본값을 만들지 않는다(#18 PM 결정 4).
+  if (!('placeId' in body.place) && body.stayMin === undefined) return stayRequired();
   return mutate(tripId, (draft, tripState) => {
     const anchored = body.fromBlockId ? findBlock(draft, body.fromBlockId) : null;
     // 백엔드와 동일: 앵커가 있으면 앵커의 일차, 없으면 dayNo → fixedWindow.dayNo, 모두 없으면 ERR-001
@@ -152,7 +167,7 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
       id: `00000000-0000-4000-8000-${String(tripState.nextBlockNumber++).padStart(12, '0')}`,
       dayNo, seq: index + 1, place, isFixed: body.isFixed,
       fixedStart: body.fixedWindow?.start ?? null, fixedEnd: body.fixedWindow?.end ?? null,
-      // 사용자가 정한 체류시간이 있으면 쓰고, 없으면 목업 장소값(40분)을 쓴다.
+      // 사용자가 정한 체류시간이 있으면 쓰고, 없으면 공공 장소의 목업 값(40분)을 쓴다.
       stayMin: body.stayMin ?? 40, arriveAt: body.fixedWindow?.start ?? null,
       departAt: body.fixedWindow?.end ?? null, origin: body.origin, warnings: [],
     };
@@ -235,7 +250,8 @@ const routes: [HttpMethod, RegExp, Handler][] = [
       return { places: searchItems.filter((item) => item.name.includes(q)) };
     },
   ],
-  ['GET', /^\/places\/at$/, (): PlacesAtResponse => ({ places: searchItems.slice(0, 1), nearbyCount: 4 })],
+  // 공공 DB 장소와 공공 DB에 없는 카카오 장소를 함께 돌려줘 지도(UI-06)의 '머무를 시간' 칸을 볼 수 있게 한다.
+  ['GET', /^\/places\/at$/, (): PlacesAtResponse => ({ places: [searchItems[0]!, searchItems[2]!], nearbyCount: 4 })],
   ['GET', /^\/places\/([^/]+)\/crowd$/, () => taejongdaeCrowd],
   ['GET', /^\/places\/([^/]+)$/, (_request, [placeId]) => placeDetail(placeId ?? '')],
   ['POST', /^\/trips\/([^/]+)\/blocks$/, ({ body }, [tripId]) => addBlock(tripId ?? '', body as AddBlockRequest)],

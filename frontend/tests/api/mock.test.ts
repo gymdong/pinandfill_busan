@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiRequest } from '@/api';
-import { INTERPRETABLE_TEXT, mockRequest, resetMockSchedule } from '@/api/mock';
+import { INTERPRETABLE_TEXT, STAY_REQUIRED_MESSAGE, mockRequest, resetMockSchedule } from '@/api/mock';
 import { PLACE_IDS, mockKakaoKey } from '@/api/mock/fixtures/places';
 import { schedule as fixtureSchedule } from '@/api/mock/fixtures/schedule';
-import type { CreateTripResponse, MoodResponse, PlaceDetailResponse, PlaceSearchResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, TripDetailResponse, UndoResponse } from '@/types/api';
+import type { CreateTripResponse, MoodResponse, PlaceDetailResponse, PlaceSearchResponse, PlacesAtResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, TripDetailResponse, UndoResponse } from '@/types/api';
 
 const TRIP = '/trips/t1';
 const BLOCK_ID = '00000000-0000-4000-8000-000000000302';
@@ -159,9 +159,32 @@ describe('mockRequest', () => {
     const body = { place: mockKakaoKey(1), isFixed: false, origin: 'USER', dayNo: 1 };
     const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin: 120 } });
     expect(added.schedule.days[0]!.blocks.at(-1)).toMatchObject({ place: { source: 'KAKAO' }, stayMin: 120 });
-    for (const stayMin of [0, -30, 1.5]) {
+    for (const stayMin of [0, -30, 1.5, 1441]) {
       await expect(mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin } })).rejects.toMatchObject({ id: 'ERR-001' });
     }
+  });
+
+  it('백엔드처럼 체류시간 근거가 없는 카카오 장소는 fields.stayMin으로 거절하고, 공공 장소는 장소 값을 쓴다', async () => {
+    const kakao = { place: mockKakaoKey(1), isFixed: false, origin: 'USER', dayNo: 1 };
+    const rejected = mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body: kakao });
+    await expect(rejected).rejects.toMatchObject({ id: 'ERR-001', status: 400, message: STAY_REQUIRED_MESSAGE, fields: { stayMin: STAY_REQUIRED_MESSAGE } });
+    // 거절된 요청은 되돌리기 지점을 남기지 않는다.
+    await expect(mockRequest({ method: 'POST', path: `${TRIP}/undo` })).rejects.toMatchObject({ id: 'ERR-001' });
+
+    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { ...kakao, place: { placeId: PLACE_IDS.jagalchi } } });
+    expect(added.schedule.days[0]!.blocks.at(-1)).toMatchObject({ place: { id: PLACE_IDS.jagalchi }, stayMin: 40 });
+  });
+
+  it('시간창과 체류시간을 함께 보내면 길이가 같아야 한다', async () => {
+    const body = { place: mockKakaoKey(1), isFixed: true, origin: 'USER', dayNo: 1, fixedWindow: { dayNo: 1, start: '15:00', end: '16:30' } };
+    await expect(mockRequest({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin: 60 } })).rejects.toMatchObject({ id: 'ERR-001' });
+    const added = await mockRequest<ScheduleMutationResponse>({ method: 'POST', path: `${TRIP}/blocks`, body: { ...body, stayMin: 90 } });
+    expect(added.schedule.days[0]!.blocks.at(-1)).toMatchObject({ isFixed: true, stayMin: 90, arriveAt: '15:00', departAt: '16:30' });
+  });
+
+  it('지도 길게 누르기(API-004)는 공공 DB 장소와 공공 DB에 없는 카카오 장소를 함께 돌려준다', async () => {
+    const result = await mockRequest<PlacesAtResponse>({ method: 'GET', path: '/places/at', query: { lat: 35, lng: 129 } });
+    expect(result.places.map((place) => place.placeId === null)).toEqual([false, true]);
   });
 
   it('dayNo만 주면 해당 일차의 끝에 추가하고 빈 일차에도 추가한다', async () => {

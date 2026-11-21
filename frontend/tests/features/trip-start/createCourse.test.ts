@@ -4,6 +4,7 @@ import { schedule } from '@/api/mock/fixtures/schedule';
 import {
   CourseIncompleteError,
   createCourse,
+  stayRequired,
   toAddBlockRequest,
   validatePlans,
 } from '@/features/trip-start/createCourse';
@@ -90,6 +91,8 @@ describe('코스 만들기', () => {
     expect(error).toMatchObject({
       progress: { tripId: 't9', addedKeys: ['public:p1'] },
       apiError: { id: 'ERR-001' },
+      // 어느 장소에서 실패했는지 알려 줘 그 장소에 머무를 시간을 입력받을 수 있게 한다.
+      failedKey: 'kakao:123',
     });
     expect(addBlock).toHaveBeenCalledTimes(2);
     expect(generate).not.toHaveBeenCalled();
@@ -131,6 +134,31 @@ describe('장소별 방문 시간 검증', () => {
     expect(validatePlans([cafe], { 'kakao:123': { dayNo: 1, fixed: null, stayMin: 90 } }, 1)).toEqual({});
     // 공공 DB 장소는 서버가 장소별 체류시간을 쓰므로 고르지 않아도 된다.
     expect(validatePlans([park], {}, 1)).toEqual({});
+  });
+});
+
+describe('서버가 체류시간을 요구한 장소(fields.stayMin)', () => {
+  const asked = new Set(['public:p1']);
+
+  it('공공 DB 장소라도 요구받으면 시간을 정하거나 머무를 시간을 골라야 한다', () => {
+    expect(stayRequired(park)).toBe(false);
+    expect(stayRequired(park, asked)).toBe(true);
+    expect(validatePlans([park], {}, 1, asked)).toEqual({ 'public:p1': '머무를 시간을 골라 주세요.' });
+    expect(validatePlans([park], { 'public:p1': { dayNo: 1, fixed: null, stayMin: 60 } }, 1, asked)).toEqual({});
+  });
+
+  it('요구받은 공공 DB 장소에는 고른 체류시간을, 시간을 정했으면 시간창 길이를 붙인다', () => {
+    expect(toAddBlockRequest(park, { dayNo: 1, fixed: null, stayMin: 60 }, asked)).toEqual({
+      dayNo: 1, place: { placeId: 'p1' }, origin: 'USER', stayMin: 60, isFixed: false,
+    });
+    expect(toAddBlockRequest(park, { dayNo: 1, fixed: { start: '10:00', end: '10:45' }, stayMin: 60 }, asked))
+      .toMatchObject({ stayMin: 45, isFixed: true });
+  });
+
+  it('이어서 시도할 때 요구받은 장소 목록을 요청에 반영한다', async () => {
+    const { addBlock } = mockApis();
+    await createCourse(conditions, [park], { 'public:p1': { dayNo: 1, fixed: null, stayMin: 90 } }, { tripId: 't7', addedKeys: [] }, asked);
+    expect(addBlock.mock.calls[0]![1]).toMatchObject({ place: { placeId: 'p1' }, stayMin: 90 });
   });
 });
 

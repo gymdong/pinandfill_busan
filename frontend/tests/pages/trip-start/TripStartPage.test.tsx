@@ -309,6 +309,43 @@ describe('UI-01 여행 시작', () => {
       ]);
     });
 
+    it('서버가 공공 DB 장소의 체류시간을 요구하면(fields.stayMin) 그 장소에 머무를 시간을 고르게 하고 이어서 담는다', async () => {
+      const { create, addBlock } = mockCourseApis();
+      const message = '체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.';
+      addBlock
+        .mockResolvedValueOnce({ schedule, violations: [] })
+        .mockRejectedValueOnce(new ApiError({ id: 'ERR-001', status: 400, message, fields: { stayMin: message } }))
+        .mockResolvedValue({ schedule, violations: [] });
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      const name = searchItems[1]!.name;
+      // 공공 DB 장소는 처음에는 머무를 시간을 묻지 않는다.
+      expect(screen.queryByLabelText(`${name} 머무를 시간`)).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText(new RegExp(message))).toBeInTheDocument();
+      const stay = screen.getByLabelText(`${name} 머무를 시간`);
+      expect(stay).toHaveValue('');
+      expect(screen.getByText('머무를 시간을 골라 주세요.')).toBeInTheDocument();
+
+      // 고르지 않고 다시 누르면 요청하지 않는다.
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(addBlock).toHaveBeenCalledTimes(2);
+
+      await userEvent.selectOptions(stay, '60');
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+      // 체류시간만 바꿨으므로 새 여행을 만들지 않고 실패한 장소부터 이어 간다.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(addBlock.mock.calls.map(([, body]) => [body.place, body.stayMin])).toEqual([
+        [{ placeId: searchItems[0]!.placeId }, undefined],
+        [{ placeId: searchItems[1]!.placeId }, undefined],
+        [{ placeId: searchItems[1]!.placeId }, 60],
+        [{ kakaoPlaceId: searchItems[2]!.kakaoPlaceId, placeUrl: searchItems[2]!.placeUrl }, 90],
+      ]);
+    });
+
     it('장소 추가 실패 뒤 입력을 바꾸면 이어 쓰지 않고 새 여행을 만든다', async () => {
       const { create, addBlock } = mockCourseApis();
       addBlock.mockRejectedValueOnce(new ApiError({ id: 'NETWORK' })).mockResolvedValue({ schedule, violations: [] });
