@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { placesApi, tripsApi } from '@/api';
+import { parseErrorResponse } from '@/api/errors';
 import { schedule, trip } from '@/api/mock/fixtures/schedule';
 import { searchItems } from '@/api/mock/fixtures/places';
 import TimelinePage from '@/pages/timeline';
@@ -191,5 +192,55 @@ describe('코스 타임라인', () => {
     await userEvent.click(screen.getByRole('button', { name: '체류시간 변경' }));
     expect(await screen.findByText(/체류 2시간/)).toBeInTheDocument();
     expect(tripsApi.updateBlock).toHaveBeenCalledWith('t1', schedule.days[0]!.blocks[0]!.id, { stayMin: 120 });
+  });
+  describe('블록 편집기 체류시간(fields.stayMin)', () => {
+    function renderPage() {
+      render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    }
+    async function search(place: (typeof searchItems)[number]) {
+      vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [place] });
+      await screen.findByText('코스 타임라인');
+      await userEvent.click(screen.getByRole('button', { name: '장소 추가' }));
+      await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
+      await userEvent.click(screen.getByRole('button', { name: '검색' }));
+      return screen.findByRole('button', { name: '추가' });
+    }
+
+    it('서버가 체류시간을 물으면 머무를 시간 칸을 띄우고 고른 값으로 다시 보낸다', async () => {
+      const message = '체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.';
+      vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+      const add = vi.spyOn(tripsApi, 'addBlock')
+        .mockRejectedValueOnce(parseErrorResponse(400, { error: { id: 'ERR-001', message, fields: { stayMin: message } } }))
+        .mockResolvedValueOnce({ schedule, violations: [] });
+      renderPage();
+      const place = searchItems[0]!;
+      expect(screen.queryByLabelText(`${place.name} 머무를 시간`)).not.toBeInTheDocument();
+      await userEvent.click(await search(place));
+      const select = await screen.findByLabelText(`${place.name} 머무를 시간`);
+      expect(add).toHaveBeenLastCalledWith('t1', { place: { placeId: place.placeId }, isFixed: false, origin: 'USER', dayNo: 1 });
+      expect(screen.getAllByText(message).length).toBeGreaterThan(0);
+      await userEvent.selectOptions(select, '60');
+      await userEvent.click(screen.getByRole('button', { name: '추가' }));
+      await waitFor(() => expect(add).toHaveBeenLastCalledWith('t1', {
+        place: { placeId: place.placeId }, isFixed: false, origin: 'USER', dayNo: 1, stayMin: 60,
+      }));
+      await waitFor(() => expect(screen.queryByLabelText('장소 검색')).not.toBeInTheDocument());
+    });
+
+    it('공공 DB에 없는 카카오 장소는 머무를 시간을 고르기 전에는 보내지 않는다', async () => {
+      vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+      const add = vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] });
+      renderPage();
+      const place = searchItems.find((item) => item.placeId === null)!;
+      await userEvent.click(await search(place));
+      expect(await screen.findByText('머무를 시간을 골라 주세요.')).toHaveAttribute('role', 'alert');
+      expect(add).not.toHaveBeenCalled();
+      await userEvent.selectOptions(screen.getByLabelText(`${place.name} 머무를 시간`), '90');
+      expect(screen.queryByText('머무를 시간을 골라 주세요.')).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: '추가' }));
+      await waitFor(() => expect(add).toHaveBeenCalledWith('t1', {
+        place: { kakaoPlaceId: place.kakaoPlaceId, placeUrl: place.placeUrl }, isFixed: false, origin: 'USER', dayNo: 1, stayMin: 90,
+      }));
+    });
   });
 });
