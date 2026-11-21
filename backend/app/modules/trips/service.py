@@ -1,5 +1,6 @@
 """Trip facade for explicitly positioned edits and already anchored schedules."""
 
+import logging
 from collections.abc import Callable
 from threading import RLock
 
@@ -33,13 +34,22 @@ from app.modules.trips.schemas import (
     UpdateBlockRequest,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class TripNotFoundError(Exception):
     pass
 
 
 class FixedScheduleConflictError(Exception):
-    """No payload attached: request coordinates must never escape through errors."""
+    """Only request clientIds may be attached: request coordinates must never escape through errors.
+
+    `client_ids` is filled by initial generation alone (request order); edit APIs leave it empty.
+    """
+
+    def __init__(self, client_ids: tuple[str, ...] = ()) -> None:
+        super().__init__()
+        self.client_ids = client_ids
 
 
 class StayDurationRequiredError(PolicyRequiredError):
@@ -110,6 +120,12 @@ class TripService:
 
         `days` 를 주면 그 날만 본다. 편집은 편집한 날만 보아, 다른 날에 이미 있던 충돌이 편집을 막지 않게 한다.
         """
+        if self._timing_conflicts(result, days=days):
+            raise FixedScheduleConflictError
+
+    @staticmethod
+    def _timing_conflicts(result: EngineResult, *, days: set[int] | None = None) -> set[str]:
+        """고정 시각을 지킬 수 없는 고정 블록 ID."""
         timing_errors = {
             "TRAVEL_TIME_CONFLICT",
             "FIXED_TIME_CONFLICT",
@@ -117,13 +133,13 @@ class TripService:
             "DAY_WINDOW_CONFLICT",
             "TIME_WINDOW_UNSUPPORTED",
         }
-        if any(
-            block.is_fixed and any(warning.type in timing_errors for warning in block.warnings)
+        return {
+            block.id
             for day in result.schedule.days
             if days is None or day.day_no in days
             for block in day.blocks
-        ):
-            raise FixedScheduleConflictError
+            if block.is_fixed and any(warning.type in timing_errors for warning in block.warnings)
+        }
 
     def _commit_edit(self, trip_id: str, record: TripRecord, result: EngineResult) -> ScheduleMutationResponse:
         """편집 한 번을 확정한다: 수락 검사 → 편집 전 스냅샷 기록 → 저장.
@@ -208,10 +224,14 @@ class TripService:
             self.repository.save(trip_id, TripRecord(record.trip, result.state))
         except Exception:
             # Also compensate a provider that writes before reporting failure.
-            # Restore history even if restoring the schedule itself fails.
+            # Restore history even if restoring the schedule itself fails, and
+            # re-raise the original failure rather than the restore failure.
             try:
                 if self.repository.get(trip_id) != record:
                     self.repository.save(trip_id, record)
+            except Exception as restore_error:
+                # Type only: repository errors may carry stored schedule data.
+                logger.warning("trip_generation restore_failed error=%s", type(restore_error).__name__)
             finally:
                 if changed:
                     self.history.restore(trip_id, previous)
@@ -231,9 +251,10 @@ class TripService:
             raise NeedsConfirmationError("Initial schedule presentation is unavailable")
         saved = not planned.unplaced
         if saved:
+            result = EngineResult(planned.state, planned.schedule)
             # Includes global fixed-order conflicts, which have no block warning.
-            if planned.conflicts:
-                raise FixedScheduleConflictError
+            conflicted = {block_id for conflict in planned.conflicts for block_id in conflict.block_ids}
+            conflicted |= self._timing_conflicts(result)
             # A missing route is not a zero-minute route. Even without a route
             # estimate, a previous visit ending after the next fixed start is
             # already impossible; do not store that preview as a valid schedule.
@@ -246,8 +267,11 @@ class TripService:
                     and following.fixed_start is not None
                     and previous.depart_at > following.fixed_start
                 ):
-                    raise FixedScheduleConflictError
-            self._commit_generation(trip_id, record, EngineResult(planned.state, planned.schedule))
+                    conflicted |= {previous.id, following.id}
+            if planned.conflicts or conflicted:
+                # Request-local mapping only, in request order; server UUIDs never leave as error data.
+                raise FixedScheduleConflictError(tuple(cid for bid, cid in client_ids.items() if bid in conflicted))
+            self._commit_generation(trip_id, record, result)
         return InitialScheduleResponse(
             days=planned.schedule.days,
             violations=planned.schedule.violations,
@@ -259,6 +283,7 @@ class TripService:
                     InitialUnplaced(client_id=client_ids[item.block_id], reason=item.reason)
                     for item in planned.unplaced
                 ),
+                preview_client_ids={} if saved else {block.id: client_ids[block.id] for block in planned.state.blocks},
             ),
         )
 

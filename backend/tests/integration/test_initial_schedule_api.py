@@ -11,7 +11,9 @@ from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.schemas import OpeningHours, ScheduleState
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.trips.repository import FakeTripRepository, TripRecord
-from app.modules.trips.service import TripService
+from app.modules.trips.router import translate_error
+from app.modules.trips.schemas import MAX_INITIAL_SELECTIONS, GenerateScheduleRequest
+from app.modules.trips.service import FixedScheduleConflictError, TripService
 from tests.unit.engine.test_initial import Places, Routes, Stays, command
 
 TRIP = "initial-trip"
@@ -64,7 +66,7 @@ def test_initial_generation_saves_server_uuids_and_preserves_trip():
     assert response.headers["cache-control"] == "no-store"
     result = response.json()
     assert set(result) == {"days", "violations", "conflicts", "generation"}
-    assert result["generation"] == {"saved": True, "confirmed": True, "unplaced": []}
+    assert result["generation"] == {"saved": True, "confirmed": True, "unplaced": [], "previewClientIds": {}}
     values = blocks(result)
     assert len(values) == 2 and {UUID(value["id"]).version for value in values} == {4}
     assert not {value["id"] for value in values} & {"selection-a", "selection-b"}
@@ -185,7 +187,7 @@ def test_unknown_public_hours_are_placed_saved_but_not_confirmed():
     places.hours[("a", date(2026, 11, 14))] = None
     response = client.post(URL, json=body(item()))
     assert response.status_code == 200, response.text
-    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": []}
+    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": [], "previewClientIds": {}}
     assert "HOURS_NEEDS_CHECK" in {w["type"] for w in blocks(response.json())[0]["warnings"]}
     assert len(repository.get(TRIP).schedule.blocks) == 1
 
@@ -219,7 +221,7 @@ def test_fixed_times_with_unknown_route_can_save_without_confirmation():
     routes.source = "UNKNOWN"
     response = client.post(URL, json=body(pinned("a"), pinned("b", "12:00", "12:30")))
     assert response.status_code == 200, response.text
-    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": []}
+    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": [], "previewClientIds": {}}
     assert response.json()["days"][0]["legs"] == []
     assert repository.get(TRIP).schedule.legs[0].duration_min is None
     assert repository.get(TRIP).schedule.legs[0].source == "UNKNOWN"
@@ -372,7 +374,7 @@ def test_missing_kakao_coordinates_do_not_trigger_route_calls_or_invent_values()
         ),
     )
     assert response.status_code == 200, response.text
-    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": []}
+    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": [], "previewClientIds": {}}
     assert routes.departures == []
     assert response.json()["days"][0]["legs"] == []
     assert repository.get(TRIP).schedule.legs[0].duration_min is None
@@ -389,7 +391,7 @@ def test_kakao_without_coordinates_skips_overlapping_pin_and_uses_next_day():
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": []}
+    assert response.json()["generation"] == {"saved": True, "confirmed": False, "unplaced": [], "previewClientIds": {}}
     values = blocks(response.json())
     assert [(value["place"]["source"], value["dayNo"], value["arriveAt"]) for value in values] == [
         ("PUBLIC", 1, "10:00"),
@@ -451,4 +453,96 @@ def test_known_visit_overlap_is_not_saved_when_route_is_unknown():
         }
     ]
     assert repository.get(TRIP) == before
+    assert service.history.latest_edit(TRIP) == previous
+
+
+CONFLICT_MESSAGE = "고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요."
+
+
+def test_fixed_conflict_names_conflicting_client_ids_only():
+    client, _, _, _, _ = setup_api()
+    response = client.post(URL, json=body(pinned("a"), pinned("b", "10:35", "11:05"), item("c")))
+    assert_error(response, 409, "ERR-009")
+    assert response.json()["error"]["fields"] == {"selections.selection-b": CONFLICT_MESSAGE}
+
+
+def test_reversed_fixed_order_conflict_names_out_of_order_client_id():
+    client, _, _, _, _ = setup_api(days=2)
+    response = client.post(
+        URL,
+        json=body(
+            item("a", fixedWindow={"dayNo": 2, "start": "10:00", "end": "10:30"}),
+            pinned("b", "12:00", "12:30"),
+        ),
+    )
+    assert_error(response, 409, "ERR-009")
+    assert response.json()["error"]["fields"] == {"selections.selection-b": CONFLICT_MESSAGE}
+
+
+def test_edit_conflict_error_has_no_selection_fields():
+    # API-006/007/008 raise without clientIds, so their 409 body is unchanged.
+    error = translate_error(FixedScheduleConflictError())
+    assert (error.status, error.error_id, error.fields) == (409, "ERR-009", None)
+
+
+def test_preview_maps_blocks_and_conflicts_to_client_ids_without_persisting():
+    client, _, repository, _, _ = setup_api(days=2)
+    before = repository.get(TRIP)
+    response = client.post(
+        URL,
+        json=body(
+            item("a", fixedWindow={"dayNo": 2, "start": "10:00", "end": "10:30"}),
+            # Same public place twice: only clientId tells the two blocks apart.
+            {**pinned("b", "12:00", "12:30"), "clientId": "dup-1"},
+            {**item("b", dayNo=1, stayMin=30), "clientId": "dup-2"},
+            item("c", dayNo=1, stayMin=900),
+        ),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    generation = result["generation"]
+    assert not generation["saved"]
+    mapping = generation["previewClientIds"]
+    assert sorted(mapping.values()) == ["dup-1", "dup-2", "selection-a"]
+    assert {mapping[block["id"]] for block in blocks(result) if block["place"]["id"] == "b"} == {"dup-1", "dup-2"}
+    assert [mapping[block_id] for conflict in result["conflicts"] for block_id in conflict["blockIds"]] == ["dup-1"]
+    assert [item["clientId"] for item in generation["unplaced"]] == ["selection-c"]
+    assert repository.get(TRIP) == before
+
+
+def test_selection_count_is_capped():
+    client, _, repository, _, _ = setup_api()
+    too_many = [item(f"p{i}", stayMin=5) for i in range(MAX_INITIAL_SELECTIONS + 1)]
+    assert_error(client.post(URL, json=body(*too_many)))
+    assert repository.get(TRIP).schedule == ScheduleState()
+
+
+def test_restore_failure_preserves_original_error_and_history(monkeypatch, caplog):
+    _, service, repository, _, _ = setup_api()
+    before = repository.get(TRIP)
+    previous = service.history.record_before_edit(TRIP, before.schedule)
+    original_get = repository.get
+    gets = 0
+
+    class OriginalError(Exception):
+        pass
+
+    def fail_save(trip_id, record):
+        raise OriginalError("original")
+
+    def get_then_fail(trip_id):
+        # The service lookup succeeds; the compensation read fails.
+        nonlocal gets
+        gets += 1
+        if gets > 1:
+            raise OSError("synthetic-restore 35.9876543")
+        return original_get(trip_id)
+
+    monkeypatch.setattr(repository, "save", fail_save)
+    monkeypatch.setattr(repository, "get", get_then_fail)
+    with pytest.raises(OriginalError):
+        service.generate(TRIP, GenerateScheduleRequest.model_validate(body(item())))
+    assert gets == 2
+    assert "trip_generation restore_failed error=OSError" in caplog.text
+    assert "synthetic-restore" not in caplog.text and "35.9876543" not in caplog.text
     assert service.history.latest_edit(TRIP) == previous

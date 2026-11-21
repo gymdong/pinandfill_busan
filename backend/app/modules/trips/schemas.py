@@ -138,8 +138,12 @@ class InitialSelectionInput(ContractModel):
         return self
 
 
+# 잠정 상한(PM 결정, 2026-11-22). 경로 조회 상한(engine.initial.MAX_ROUTE_LOOKUPS_PER_PLAN)과 함께 정했다.
+MAX_INITIAL_SELECTIONS = 30
+
+
 class InitialGenerationInput(ContractModel):
-    selections: tuple[InitialSelectionInput, ...] = Field(min_length=1)
+    selections: tuple[InitialSelectionInput, ...] = Field(min_length=1, max_length=MAX_INITIAL_SELECTIONS)
     policy: Literal["FIRST_FEASIBLE"]
 
     @model_validator(mode="after")
@@ -170,6 +174,9 @@ class GenerationMetadata(ContractModel):
     saved: bool
     confirmed: bool
     unplaced: tuple[InitialUnplaced, ...] = ()
+    # saved=false 미리보기에서만 채운다: 응답의 서버 블록 ID(blocks[].id, conflicts[].blockIds) → 요청 clientId.
+    # 같은 장소를 여러 번 고른 선택을 구분하려는 응답 전용 매핑이며 저장하지 않는다.
+    preview_client_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class InitialScheduleResponse(Schedule):
