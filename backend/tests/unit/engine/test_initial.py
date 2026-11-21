@@ -5,7 +5,13 @@ from datetime import UTC, date, datetime, time
 import pytest
 from pydantic import ValidationError
 
-from app.modules.engine.initial import InitialScheduleCommand, InitialSchedulePlanner, InitialSelection
+import app.modules.engine.initial as initial
+from app.modules.engine.initial import (
+    MAX_ROUTE_LOOKUPS_PER_PLAN,
+    InitialScheduleCommand,
+    InitialSchedulePlanner,
+    InitialSelection,
+)
 from app.modules.engine.interfaces import RouteEstimate
 from app.modules.engine.schemas import (
     CalculationContext,
@@ -17,8 +23,8 @@ from app.modules.engine.schemas import (
     TransientPlaceDetails,
     TripWindow,
 )
-from app.modules.engine.service import BasicItineraryEngine
-from app.modules.trips.schemas import Schedule
+from app.modules.engine.service import BasicItineraryEngine, NeedsConfirmationError
+from app.modules.trips.schemas import MAX_INITIAL_SELECTIONS, Schedule
 
 
 class Places:
@@ -583,3 +589,86 @@ def test_route_memo_queries_each_pair_departure_once_per_plan(monkeypatch):
     assert result.state.blocks
     planner.plan(request)
     assert calls[len(first) :] == first  # no cross-request/shared memo
+
+
+class CountingRoutes(Routes):
+    """Counts every provider call so the per-plan lookup cap is observable."""
+
+    def __init__(self):
+        super().__init__()
+        self.duration = 1
+        self.calls = 0
+
+    def estimate_at(self, origin, destination, *, mode, departure_at):
+        self.calls += 1
+        return super().estimate_at(origin, destination, mode=mode, departure_at=departure_at)
+
+
+def counting_setup():
+    routes = CountingRoutes()
+    engine = BasicItineraryEngine(Places(), routes)
+    return InitialSchedulePlanner(engine, Stays(10)), routes
+
+
+def test_route_lookup_cap_holds_and_reports_remaining_flexible_selections():
+    planner, routes = counting_setup()
+    request = command(*[selection(f"s{i}") for i in range(MAX_INITIAL_SELECTIONS)], end=time(23))
+    result = planner.plan(request)
+
+    # Without the cap this request needs more than 300 lookups (insertion at gap 0 shifts every later leg).
+    assert routes.calls == MAX_ROUTE_LOOKUPS_PER_PLAN == 300
+    assert result.unplaced and not result.confirmed
+    assert {item.reason.type for item in result.unplaced} == {"PLACEMENT_NEEDS_CHECK"}
+    placed = [block.id for block in result.state.blocks]
+    unplaced = [item.block_id for item in result.unplaced]
+    # Caller order: everything after the first budget miss is reported, nothing is lost or duplicated.
+    assert sorted(placed + unplaced) == sorted(f"s{i}" for i in range(MAX_INITIAL_SELECTIONS))
+    assert unplaced == [f"s{i}" for i in range(len(placed), MAX_INITIAL_SELECTIONS)]
+
+
+def test_small_route_lookup_cap_stops_further_placement(monkeypatch):
+    monkeypatch.setattr(initial, "MAX_ROUTE_LOOKUPS_PER_PLAN", 2)
+    planner, routes = counting_setup()
+    result = planner.plan(command(selection("a"), selection("b"), selection("c"), selection("d")))
+    assert routes.calls == 2
+    assert sorted(block.id for block in result.state.blocks) == ["a", "b"]
+    assert [(item.block_id, item.reason.type) for item in result.unplaced] == [
+        ("c", "PLACEMENT_NEEDS_CHECK"),
+        ("d", "PLACEMENT_NEEDS_CHECK"),
+    ]
+
+
+def test_fixed_selections_exhausting_cap_are_not_silently_dropped(monkeypatch):
+    monkeypatch.setattr(initial, "MAX_ROUTE_LOOKUPS_PER_PLAN", 0)
+    planner, _ = counting_setup()
+    fixed = [
+        selection(key, stay_min=30, fixed_window=FixedWindow(day_no=1, start=time(hour), end=time(hour, 30)))
+        for key, hour in (("a", 10), ("b", 12))
+    ]
+    with pytest.raises(NeedsConfirmationError):
+        planner.plan(command(*fixed))
+
+
+def test_provider_failures_are_logged_with_type_and_place_reference_only(caplog):
+    secret = "synthetic-key 35.9876543,129.9876543 private-body"
+
+    class FailingPlaces(Places):
+        def get(self, ref, *, on_date):
+            if ref.place_id == "broken":
+                raise RuntimeError(secret)
+            return super().get(ref, on_date=on_date)
+
+    class FailingStays:
+        def get(self, place_ref, *, on_date):
+            raise ValueError(secret)
+
+    engine = BasicItineraryEngine(FailingPlaces(), Routes())
+    planner = InitialSchedulePlanner(engine, FailingStays(), tag_stays=FailingStays())
+    caplog.set_level("WARNING", logger="app.modules.engine.initial")
+    planner.plan(command(selection("broken", stay_min=30), selection("nostay")))
+
+    assert "initial_place_lookup failed error=RuntimeError place_id=broken" in caplog.text
+    assert "initial_stay_lookup failed error=ValueError place_id=nostay" in caplog.text
+    assert "initial_tag_stay_lookup failed error=ValueError place_id=nostay" in caplog.text
+    for leaked in ("35.9876543", "129.9876543", "synthetic-key", "private-body", "35.123", "129.123"):
+        assert leaked not in caplog.text

@@ -7,6 +7,7 @@ request contract; a later adapter can translate an agreed selection contract.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Literal, Protocol
@@ -23,6 +24,7 @@ from app.modules.engine.schemas import (
     FixedWindow,
     KakaoPlaceRef,
     PlaceRef,
+    PublicPlaceRef,
     ScheduleConflict,
     ScheduleState,
     StoredBlock,
@@ -34,6 +36,12 @@ from app.modules.engine.schemas import (
 )
 from app.modules.engine.service import BasicItineraryEngine, EngineInputError, NeedsConfirmationError
 from app.modules.trips.schemas import Schedule
+
+logger = logging.getLogger(__name__)
+
+# 잠정 상한(PM 결정, 2026-11-22). 요청 하나의 경로 조회(캐시 미스) 횟수가 이 값에 닿으면
+# 남은 유연 선택은 더 시도하지 않고 PLACEMENT_NEEDS_CHECK 로 미배치한다.
+MAX_ROUTE_LOOKUPS_PER_PLAN = 300
 
 
 class StayDurationProvider(Protocol):
@@ -99,6 +107,16 @@ class InitialScheduleResult(ContractModel):
     violations: tuple[Violation, ...] = ()
     conflicts: tuple[ScheduleConflict, ...] = ()
     confirmed: bool = False
+
+
+class _RouteBudgetExhausted(Exception):
+    """Internal signal; carries no request data."""
+
+
+@dataclass
+class _RouteBudget:
+    limit: int
+    used: int = 0
 
 
 @dataclass(frozen=True)
@@ -170,6 +188,8 @@ class InitialSchedulePlanner:
         details_cache: dict[tuple[str, date], TransientPlaceDetails] = {}
         accepted: dict[int, _Day] = {}
         route_cache: dict[tuple[str, str, datetime, str], RouteEstimate | None] = {}
+        budget = _RouteBudget(MAX_ROUTE_LOOKUPS_PER_PLAN)
+        exhausted = False
         previous_fixed_position: tuple[int, time] | None = None
 
         # Preserve the caller's relative order for fixed selections.  Sorting by
@@ -190,10 +210,17 @@ class InitialSchedulePlanner:
                 by_day[item.fixed_window.day_no].append(selected)
 
         for day_no, items in by_day.items():
-            checked = self._day(command.trip, day_no, items, request_context, details_cache, route_cache)
+            try:
+                checked = self._day(command.trip, day_no, items, request_context, details_cache, route_cache, budget)
+            except _RouteBudgetExhausted:
+                # Fixed selections alone cannot be dropped; unreachable while the selection cap stays small.
+                raise NeedsConfirmationError("Route lookup budget exhausted by fixed selections") from None
             accepted[day_no] = checked
 
         for selection in flexible:
+            if exhausted:
+                unplaced.append(self._budget_unplaced(selection))
+                continue
             allowed = selection.allowed_days or tuple(range(1, day_count + 1))
             valid_days = sorted({day for day in allowed if 1 <= day <= day_count})
             if not valid_days:
@@ -214,7 +241,13 @@ class InitialSchedulePlanner:
                 for position in range(len(by_day[day_no]) + 1):
                     trial = list(by_day[day_no])
                     trial.insert(position, candidate)
-                    checked = self._day(command.trip, day_no, trial, request_context, details_cache, route_cache)
+                    try:
+                        checked = self._day(
+                            command.trip, day_no, trial, request_context, details_cache, route_cache, budget
+                        )
+                    except _RouteBudgetExhausted:
+                        exhausted = True
+                        break
                     first_reason = first_reason or checked.reason
                     baseline = {(block_id, code): amount for block_id, code, amount in accepted[day_no].failures}
                     preserves_conflicts = all(
@@ -225,9 +258,11 @@ class InitialSchedulePlanner:
                         accepted[day_no] = checked
                         placed = True
                         break
-                if placed:
+                if placed or exhausted:
                     break
-            if not placed:
+            if exhausted:
+                unplaced.append(self._budget_unplaced(selection))
+            elif not placed:
                 unplaced.append(
                     UnplacedSelection(
                         block_id=selection.block_id,
@@ -298,7 +333,8 @@ class InitialSchedulePlanner:
         duration: int | None
         try:
             duration = self.stay_durations.get(item.place_ref, on_date=on_date)
-        except Exception:
+        except Exception as exc:
+            self._log_failure("stay_lookup", exc, item.place_ref)
             duration = None
         if duration is not None:
             return duration if type(duration) is int and duration > 0 else None
@@ -306,7 +342,8 @@ class InitialSchedulePlanner:
             return None
         try:
             duration = self.tag_stays.get(item.place_ref, on_date=on_date)
-        except Exception:
+        except Exception as exc:
+            self._log_failure("tag_stay_lookup", exc, item.place_ref)
             return None
         return duration if type(duration) is int and duration > 0 else None
 
@@ -320,7 +357,8 @@ class InitialSchedulePlanner:
             )
         try:
             details = self.engine.places.get(ref, on_date=on_date)
-        except Exception:
+        except Exception as exc:
+            self._log_failure("place_lookup", exc, ref)
             return TransientPlaceDetails(place_ref=ref)
         if details.place_ref != ref:
             raise EngineInputError("Place provider returned a different reference")
@@ -334,6 +372,7 @@ class InitialSchedulePlanner:
         context: CalculationContext,
         details_cache: dict[tuple[str, date], TransientPlaceDetails],
         route_cache: dict[tuple[str, str, datetime, str], RouteEstimate | None],
+        budget: _RouteBudget,
     ) -> _Day:
         on_date = trip.start_date + timedelta(days=day_no - 1)
         blocks: list[StoredBlock] = []
@@ -367,6 +406,9 @@ class InitialSchedulePlanner:
                     # details. Coordinates and keys never enter the memo key.
                     route_key = (previous.id, selected.block_id, departure, trip.transport_mode)
                     if route_key not in route_cache:
+                        if budget.used >= budget.limit:
+                            raise _RouteBudgetExhausted
+                        budget.used += 1
                         try:
                             route_cache[route_key] = estimate_departing(
                                 self.engine.routes,
@@ -524,6 +566,19 @@ class InitialSchedulePlanner:
             computed_at=route.computed_at if successful and route is not None else None,
             time_semantics=route.time_semantics if route is not None else "unspecified",
             lookup_failed=route.lookup_failed if route is not None else False,
+        )
+
+    @staticmethod
+    def _log_failure(event: str, exc: Exception, ref: PlaceRef) -> None:
+        # NFR-010: exception type and public place reference only. No message,
+        # coordinates, keys, response bodies or user text.
+        place = ref.place_id if isinstance(ref, PublicPlaceRef) else "KAKAO"
+        logger.warning("initial_%s failed error=%s place_id=%s", event, type(exc).__name__, place)
+
+    @staticmethod
+    def _budget_unplaced(item: InitialSelection) -> UnplacedSelection:
+        return InitialSchedulePlanner._unplaced(
+            item, "PLACEMENT_NEEDS_CHECK", "경로 조회 한도에 도달해 배치 위치를 확인하지 못했습니다."
         )
 
     @staticmethod
