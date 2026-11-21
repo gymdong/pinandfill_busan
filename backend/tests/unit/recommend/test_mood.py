@@ -148,6 +148,20 @@ async def test_explicit_avoid_found_by_rules_is_kept_when_llm_drops_it():
     assert ([tag.code for tag in result.tags], result.avoid, result.source) == (["SEA_VIEW"], ("실내 제외",), "llm")
 
 
+async def test_rule_tags_are_kept_when_llm_returns_no_tags():
+    # LLM 이 형식은 맞지만 태그를 하나도 못 고르면, 문장에 명시된 사전 키워드로 찾은 태그를 남긴다(#32 리뷰 후속).
+    llm = FakeLlm({"tags": [], "avoid": []})
+    result = await service(llm).interpret("바다 보이는 골목")
+    assert ([tag.code for tag in result.tags], result.source) == (["SEA_VIEW", "ALLEY_WALK"], "llm")
+
+
+async def test_llm_tags_replace_rule_tags_when_present():
+    # LLM 이 고른 태그가 있으면 그 결과를 쓴다(부정 표현 등은 LLM 이 더 잘 읽는다).
+    llm = FakeLlm({"tags": ["QUIET"], "avoid": []})
+    result = await service(llm).interpret("바다 보이는 골목")
+    assert [tag.code for tag in result.tags] == ["QUIET"]
+
+
 async def test_llm_avoid_is_added_to_rule_avoid_without_duplicates():
     llm = FakeLlm({"tags": ["SEA_VIEW"], "avoid": ["야외 제외", "실내 제외"]})
     result = await service(llm).interpret("실내 말고 바다 보이는 곳")
