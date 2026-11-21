@@ -1,6 +1,6 @@
 import { toApiError, tripsApi, type ApiError } from '@/api';
 import { needsStayInput, pinnedKey, planOf, toBlockPlaceInput, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
-import type { AddBlockRequest, TripConditions } from '@/types/api';
+import type { InitialSelection, TripConditions, Violation } from '@/types/api';
 import { isLocalTime } from './conditions';
 
 /** 장소별 방문 시간 오류. 키는 `pinnedKey` */
@@ -12,12 +12,15 @@ function minutesOf(time: string): number {
 }
 
 /**
- * 서버가 체류시간을 정할 수 없다고 알려 준(`fields.stayMin`) 장소의 `pinnedKey`.
+ * 서버가 체류시간 근거가 없다고 알려 준(API-009 `STAY_NEEDS_CHECK`) 장소의 `pinnedKey`.
  * 공공 DB 장소라도 기본 체류시간이 없으면 여기에 들어가고, 카카오 장소처럼 머무를 시간을 고른다.
  */
 export type StayAsked = ReadonlySet<string>;
 
 const NONE: StayAsked = new Set();
+
+/** 체류시간 근거가 없어 미배치될 때 서버가 주는 이유 코드 */
+export const STAY_NEEDS_CHECK = 'STAY_NEEDS_CHECK';
 
 /** 사용자가 체류시간을 정해야 하는 장소: 공공 DB에 없는 카카오 장소, 또는 서버가 근거가 없다고 알려 준 장소 */
 export function stayRequired(place: PinnedPlace, asked: StayAsked = NONE): boolean {
@@ -25,8 +28,8 @@ export function stayRequired(place: PinnedPlace, asked: StayAsked = NONE): boole
 }
 
 /**
- * 시간을 정하기로 한 장소는 도착·출발 시각이 모두 있어야 고정할 수 있다.
- * 체류시간 근거가 없는 장소는 시간을 정하거나 머무를 시간을 골라야 한다.
+ * 시간을 정하기로 한 장소는 일차와 도착·출발 시각이 모두 있어야 고정할 수 있다.
+ * 체류시간 근거가 없는 장소는 시간을 정하거나 머무를 시간을 골라야 한다. 일차는 비워 두면 '알아서'다.
  */
 export function validatePlans(
   pinned: PinnedPlace[],
@@ -37,99 +40,120 @@ export function validatePlans(
   const errors: PlanErrors = {};
   for (const place of pinned) {
     const key = pinnedKey(place);
-    const { dayNo, fixed } = planOf(plans, key);
-    if (dayNo < 1 || dayNo > days) errors[key] = '여행 기간 안의 일차를 골라 주세요.';
+    const { dayNo, fixed, stayMin } = planOf(plans, key);
+    if (dayNo !== null && (dayNo < 1 || dayNo > days)) errors[key] = '여행 기간 안의 일차를 골라 주세요.';
+    else if (fixed && dayNo === null) errors[key] = '시간을 정한 장소는 일차를 골라 주세요.';
     else if (fixed && (!isLocalTime(fixed.start) || !isLocalTime(fixed.end))) errors[key] = '도착·출발 시각을 모두 정해 주세요.';
     else if (fixed && fixed.start >= fixed.end) errors[key] = '출발 시각은 도착 시각보다 늦어야 해요.';
-    else if (!fixed && stayRequired(place, asked) && !planOf(plans, key).stayMin) errors[key] = '머무를 시간을 골라 주세요.';
+    else if (!fixed && stayRequired(place, asked) && !stayMin) errors[key] = '머무를 시간을 골라 주세요.';
   }
   return errors;
 }
 
 /**
- * API-006 요청. 시간을 정한 장소만 고정 블록으로 보낸다(FR-003).
- * 체류시간 근거가 없는 장소는 `stayMin`을 함께 보낸다. 시간을 정했으면 도착~출발 시간이 체류시간이다
- * (서버는 시간창과 길이가 다른 `stayMin`을 거절한다). 그 밖의 공공 DB 장소에는 붙이지 않아 서버가 장소별 값을 쓴다.
+ * API-009 최초 생성의 선택 한 곳. `clientId`는 `pinnedKey`라 응답의 미배치 항목을 담은 장소에 바로 잇는다.
+ * - 시간을 정한 장소만 `fixedWindow`로 고정한다(FR-003). 일차를 '알아서'로 두면 `dayNo`를 보내지 않는다.
+ * - 체류시간 근거가 없는 장소는 `stayMin`을 보낸다. 시간을 정했으면 도착~출발 시간이다(서버는 길이가 다르면 거절).
+ *   그 밖의 공공 DB 장소에는 붙이지 않아 서버가 장소별 값을 쓴다.
+ * - 카카오 장소의 이름·좌표는 넣지 않는다(D6). 좌표는 `sessionCoords`로 계산에만 쓰인다.
  */
-export function toAddBlockRequest(place: PinnedPlace, plan: PinnedPlan, asked: StayAsked = NONE): AddBlockRequest {
-  const base = { dayNo: plan.dayNo, place: toBlockPlaceInput(place), origin: 'USER' as const };
+export function toInitialSelection(place: PinnedPlace, plan: PinnedPlan, asked: StayAsked = NONE): InitialSelection {
   const fixed = plan.fixed && isLocalTime(plan.fixed.start) && isLocalTime(plan.fixed.end) ? plan.fixed : null;
   const stayMin = !stayRequired(place, asked)
     ? undefined
     : fixed
       ? minutesOf(fixed.end) - minutesOf(fixed.start)
       : (plan.stayMin ?? undefined);
-  const stay = stayMin ? { stayMin } : {};
-  if (fixed) {
-    return { ...base, ...stay, isFixed: true, fixedWindow: { dayNo: plan.dayNo, start: fixed.start, end: fixed.end } };
-  }
-  return { ...base, ...stay, isFixed: false };
+  return {
+    clientId: pinnedKey(place),
+    place: toBlockPlaceInput(place),
+    ...(plan.dayNo === null ? {} : { dayNo: plan.dayNo }),
+    ...(fixed && plan.dayNo !== null ? { fixedWindow: { dayNo: plan.dayNo, start: fixed.start, end: fixed.end } } : {}),
+    ...(stayMin ? { stayMin } : {}),
+  };
 }
 
-export interface CourseResult {
-  tripId: string;
-  /** 여행과 장소는 저장됐지만 일정 계산(API-009)이 실패한 경우의 오류. 예: 시간 부족 ERR-009 */
-  scheduleError: ApiError | null;
-}
+export type CourseOutcome =
+  /**
+   * 일정이 저장됐다. 경로·영업시간 확인 필요 경고는 타임라인이 보여 준다.
+   * `earlier`가 참이면 이번 요청이 아니라 응답을 못 받은 이전 요청이 저장한 것이다. 그 뒤 고친 선택은 반영되지 않았을 수 있다.
+   */
+  | { kind: 'saved'; tripId: string; earlier: boolean }
+  /** 넣지 못한 장소가 있어 저장되지 않았다. 키는 `pinnedKey`. 같은 빈 여행(`tripId`)에 다시 보낼 수 있다. */
+  | { kind: 'unplaced'; tripId: string; reasons: Record<string, Violation> };
 
-/** 만들다 만 여행. 다시 시도할 때 넘기면 같은 여행에 남은 장소만 이어서 추가한다. */
-export interface CourseProgress {
-  tripId: string;
-  /** 이미 블록으로 추가한 장소의 `pinnedKey` */
-  addedKeys: string[];
-}
-
-/** 여행은 만들었지만 장소 추가(API-006)가 중간에 실패했다. `progress`로 이어서 시도할 수 있다. */
-export class CourseIncompleteError extends Error {
-  readonly progress: CourseProgress;
+/** 여행은 만들었지만 일정 생성이 실패했다. 일정은 저장되지 않았거나 확인할 수 없으며, `tripId`로 다시 시도한다. */
+export class CourseFailedError extends Error {
+  readonly tripId: string;
   readonly apiError: ApiError;
-  /** 추가하지 못한 장소의 `pinnedKey`. `apiError.fields?.stayMin`이면 이 장소에 머무를 시간을 입력받는다. */
-  readonly failedKey: string;
 
-  constructor(progress: CourseProgress, apiError: ApiError, failedKey: string) {
+  constructor(tripId: string, apiError: ApiError) {
     super(apiError.message);
-    this.name = 'CourseIncompleteError';
-    this.progress = progress;
+    this.name = 'CourseFailedError';
+    this.tripId = tripId;
     this.apiError = apiError;
-    this.failedKey = failedKey;
   }
+}
+
+/** 응답을 받지 못해 서버가 저장했는지 알 수 없는 오류 */
+const UNCERTAIN = new Set(['NETWORK', 'TIMEOUT', 'UNKNOWN']);
+
+/** 이미 일정이 있는 여행에 최초 생성을 보냈다(덮어쓰기 방지, 400 ERR-001 `fields.initial`). 이전 요청이 저장한 경우다. */
+function isOverwriteRejected(error: ApiError): boolean {
+  return error.id === 'ERR-001' && Boolean(error.fields?.initial);
+}
+
+async function alreadySaved(tripId: string): Promise<boolean> {
+  const { schedule } = await tripsApi.get(tripId);
+  return schedule?.days.some((day) => day.blocks.length > 0) ?? false;
 }
 
 /**
- * '코스 만들기': 여행 생성(API-002) → 담은 장소를 블록으로 추가(API-006) → 일정 계산(API-009).
+ * '코스 만들기': 여행 생성(API-002) → 담은 장소 전체로 최초 일정 생성(API-009 `initial`) 한 번.
  *
- * @provisional 현재 합의된 API만 쓴다. API-006은 일차(`dayNo`)가 필요해 화면에서 일차를 고르게 했다.
- * API-009가 담은 장소 목록을 한 번에 받아 배치하도록 바뀌면(PR #18 제안) 이 함수만 바꾸면 된다.
- *
- * 여행 생성이 실패하면 그 오류를 그대로 던진다. 장소 추가가 중간에 실패하면 `CourseIncompleteError`를 던지며,
- * 그 `progress`를 `resume`으로 넘기면 여행을 새로 만들지 않고 남은 장소부터 이어 간다.
- * 이어 가기는 조건과 담은 장소가 실패했을 때와 같을 때만 쓴다(호출한 쪽이 보장한다). 다만 실패한 장소의
- * 체류시간은 바뀌어도 된다: 서버가 `fields.stayMin`으로 거절하면 그 장소의 머무를 시간을 고른 뒤 이어 간다.
+ * - 여행 생성이 실패하면 그 오류를 그대로 던진다.
+ * - `retryTripId`를 넘기면 여행을 새로 만들지 않고 그 빈 여행에 다시 보낸다(미배치·충돌·네트워크 실패 뒤).
+ *   이전 요청이 응답 없이 저장됐을 수 있어 먼저 여행 조회(API-026)로 확인한다. 그 사이 저장이 끝나 덮어쓰기 방지 400이
+ *   오면 다시 확인한다. 두 경우 모두 이전 요청이 저장한 것이라 `earlier: true`다.
+ * - 일정 생성이 실패하면 `CourseFailedError`다. 응답을 못 받은 경우에는 여행 조회로 저장됐는지 확인한다.
+ * - 호출한 쪽은 여행 조건이 그대로일 때만 `retryTripId`를 넘긴다. 담은 장소·계획은 바뀌어도 된다(전체를 다시 보냄).
  */
 export async function createCourse(
   conditions: TripConditions,
   pinned: PinnedPlace[],
   plans: Record<string, PinnedPlan>,
-  resume?: CourseProgress,
-  asked: StayAsked = NONE,
-): Promise<CourseResult> {
-  const tripId = resume?.tripId ?? (await tripsApi.create(conditions)).tripId;
-  const addedKeys = [...(resume?.addedKeys ?? [])];
-  // 같은 날 안의 순서가 담은 순서대로 되도록 차례로 보낸다.
-  for (const place of pinned) {
-    const key = pinnedKey(place);
-    if (addedKeys.includes(key)) continue;
+  { retryTripId, asked = NONE }: { retryTripId?: string; asked?: StayAsked } = {},
+): Promise<CourseOutcome> {
+  let tripId: string;
+  if (retryTripId) {
+    tripId = retryTripId;
     try {
-      await tripsApi.addBlock(tripId, toAddBlockRequest(place, planOf(plans, key), asked));
+      if (await alreadySaved(tripId)) return { kind: 'saved', tripId, earlier: true };
     } catch (error) {
-      throw new CourseIncompleteError({ tripId, addedKeys }, toApiError(error), key);
+      throw new CourseFailedError(tripId, toApiError(error));
     }
-    addedKeys.push(key);
+  } else {
+    tripId = (await tripsApi.create(conditions)).tripId;
   }
+
+  const selections = pinned.map((place) => toInitialSelection(place, planOf(plans, pinnedKey(place)), asked));
   try {
-    await tripsApi.generateSchedule(tripId);
-    return { tripId, scheduleError: null };
+    // 경로 조회가 여러 번 일어날 수 있어 시간 제한을 늘린다.
+    const result = await tripsApi.createInitialSchedule(
+      tripId,
+      { policy: 'FIRST_FEASIBLE', selections },
+      { timeoutMs: 30_000 },
+    );
+    if (result.generation.saved) return { kind: 'saved', tripId, earlier: false };
+    const reasons = Object.fromEntries(result.generation.unplaced.map((item) => [item.clientId, item.reason]));
+    return { kind: 'unplaced', tripId, reasons };
   } catch (error) {
-    return { tripId, scheduleError: toApiError(error) };
+    const apiError = toApiError(error);
+    // 응답을 못 받았으면 이번 요청이 저장했을 수 있고, 덮어쓰기 방지면 이전 요청이 이미 저장한 것이다.
+    if (UNCERTAIN.has(apiError.id) || isOverwriteRejected(apiError)) {
+      const saved = await alreadySaved(tripId).catch(() => false);
+      if (saved) return { kind: 'saved', tripId, earlier: isOverwriteRejected(apiError) };
+    }
+    throw new CourseFailedError(tripId, apiError);
   }
 }

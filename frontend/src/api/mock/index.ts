@@ -1,5 +1,9 @@
 import type {
   AddBlockRequest,
+  GenerateScheduleRequest,
+  InitialScheduleRequest,
+  InitialScheduleResponse,
+  InitialSelection,
   AdminSourcesResponse,
   Block,
   CreateTripResponse,
@@ -18,6 +22,7 @@ import type {
   Trip,
   TripConditions,
   TripDetailResponse,
+  Violation,
   UpdateBlockRequest,
 } from '@/types/api';
 import type { ApiRequest, HttpMethod } from '../client';
@@ -176,6 +181,76 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
   });
 }
 
+const STAY_NEEDS_CHECK: Violation = { type: 'STAY_NEEDS_CHECK', cause: '체류시간 근거 확인이 필요합니다.' };
+/** 목업 fixture의 공공 장소에는 기본 체류시간이 없어 쓰는 목업 값이다(실제 값 아님). API-006 mock과 같은 40분이다. */
+const MOCK_PUBLIC_STAY_MIN = 40;
+
+/**
+ * API-009. `initial`이 없으면 지금 일정을 그대로 돌려준다(목업은 재계산하지 않는다).
+ * `initial`이 있으면 PR #35 계약대로 최초 생성을 흉내 낸다. 시각·이동시간은 계산하지 않는다.
+ * - 이미 블록이 있는 여행, `options`와 함께 보냄, 빈 선택, 중복 clientId, dayNo·시간창·체류시간 모순은 ERR-001
+ * - 체류시간 근거가 없는 카카오 장소(stayMin·시간창 없음)는 STAY_NEEDS_CHECK로 미배치하고 저장하지 않는다.
+ * - 모두 넣으면 저장한다. 일차를 정하지 않은 장소는 1일차에 넣는다(목업은 날짜를 고르지 않는다).
+ */
+function generateSchedule(tripId: string, body: GenerateScheduleRequest | InitialScheduleRequest | undefined): Schedule | InitialScheduleResponse {
+  if (!body || !('initial' in body)) return snapshot(tripId);
+  if ('options' in body) return invalid();
+  const tripState = state(tripId);
+  if (tripState.schedule.days.some((day) => day.blocks.length > 0)) return invalid();
+  const selections = body.initial?.selections ?? [];
+  if (body.initial?.policy !== 'FIRST_FEASIBLE' || selections.length === 0) return invalid();
+  if (new Set(selections.map((item) => item.clientId)).size !== selections.length) return invalid();
+  selections.forEach(checkSelection);
+
+  const draft: Schedule = { days: [], violations: [], conflicts: [] };
+  const unplaced: { clientId: string; reason: Violation }[] = [];
+  let nextBlockNumber = tripState.nextBlockNumber;
+  for (const selection of selections) {
+    const input = selection.place;
+    if (!('placeId' in input) && selection.stayMin === undefined && !selection.fixedWindow) {
+      unplaced.push({ clientId: selection.clientId, reason: STAY_NEEDS_CHECK });
+      continue;
+    }
+    const place = 'placeId' in input
+      ? Object.values(placeSummaries).find((item) => item.id === input.placeId)
+      : { source: 'KAKAO' as const, ...input };
+    if (!place) return invalid();
+    const dayNo = selection.fixedWindow?.dayNo ?? selection.dayNo ?? 1;
+    const day = draft.days.find((item) => item.dayNo === dayNo) ?? addEmptyDay(draft, dayNo, tripState.trip);
+    const window = selection.fixedWindow;
+    day.blocks.push({
+      id: `00000000-0000-4000-8000-${String(nextBlockNumber++).padStart(12, '0')}`,
+      dayNo, seq: day.blocks.length + 1, place, isFixed: Boolean(window),
+      fixedStart: window?.start ?? null, fixedEnd: window?.end ?? null,
+      stayMin: selection.stayMin ?? (window ? minutesOf(window.end) - minutesOf(window.start) : MOCK_PUBLIC_STAY_MIN),
+      arriveAt: window?.start ?? null, departAt: window?.end ?? null, origin: 'USER', warnings: [],
+    });
+  }
+  const saved = unplaced.length === 0;
+  draft.violations = saved
+    ? [{ type: 'MOCK_RECALC_PENDING', cause: '목업에서는 이동·영업시간을 계산하지 않습니다.' }]
+    : unplaced.map((item) => item.reason);
+  if (saved) {
+    // 최초 생성은 되돌리기 지점을 만들지 않는다(PR #35).
+    tripState.schedule = draft;
+    tripState.previous = null;
+    tripState.nextBlockNumber = nextBlockNumber;
+  }
+  return { ...structuredClone(draft), generation: { saved, confirmed: false, unplaced } };
+}
+
+function checkSelection(selection: InitialSelection): void {
+  if (!selection.clientId || !selection.place) return invalid();
+  const window = selection.fixedWindow;
+  // 백엔드처럼 시간창 길이가 0 이하이면 거절한다.
+  if (window && minutesOf(window.end) - minutesOf(window.start) <= 0) return invalid();
+  if (window && selection.dayNo !== undefined && selection.dayNo !== window.dayNo) return invalid();
+  if (selection.stayMin !== undefined) {
+    if (!Number.isInteger(selection.stayMin) || selection.stayMin <= 0 || selection.stayMin > 1440) return invalid();
+    if (window && minutesOf(window.end) - minutesOf(window.start) !== selection.stayMin) return invalid();
+  }
+}
+
 function visitEnd(arriveAt: string | null, stayMin: number): string | null {
   if (!arriveAt) return null;
   const [hour = 0, minute = 0] = arriveAt.split(':').map(Number);
@@ -262,7 +337,7 @@ const routes: [HttpMethod, RegExp, Handler][] = [
     day.crowd = day.crowd.filter((item) => item.blockId !== blockId);
     return { dayNo: day.dayNo, startIndex: index };
   })],
-  ['POST', /^\/trips\/([^/]+)\/schedule$/, (_request, [tripId]) => snapshot(tripId ?? '')],
+  ['POST', /^\/trips\/([^/]+)\/schedule$/, (request, [tripId]) => generateSchedule(tripId ?? '', request.body as GenerateScheduleRequest | InitialScheduleRequest | undefined)],
   ['POST', /^\/trips\/([^/]+)\/undo$/, (_request, [tripId]) => {
     const tripState = state(tripId ?? '');
     if (!tripState.previous) return invalid();

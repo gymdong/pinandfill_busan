@@ -325,7 +325,8 @@ export interface AddBlockRequest extends WithSessionCoords {
    * 사용자가 정한 체류시간(분, 정수 1~1440). 보내면 공공 장소 값보다 먼저 쓴다(#18 PM 결정 4, 백엔드 #25).
    * - 서버는 기본값을 만들지 않는다. 보내지 않았는데 공공 장소 값도 없으면 400 ERR-001, `fields.stayMin`이다.
    * - `fixedWindow`와 함께 보내면 시간창 길이와 같아야 한다(다르면 400 ERR-001).
-   * - 화면은 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소, 서버가 `fields.stayMin`으로 알려 준 장소)에만 보낸다.
+   * - 지도(UI-06)는 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소, 서버가 `fields.stayMin`으로 알려 준 장소)에만 보낸다.
+   *   여행 시작(UI-01)의 최초 생성은 API-009 `InitialSelection.stayMin`을 쓴다.
    */
   stayMin?: number;
   /**
@@ -343,6 +344,36 @@ export type UpdateBlockRequest = ({ isFixed: boolean } | { seq: number } | { sta
 export interface GenerateScheduleRequest extends WithSessionCoords {
   options?: Record<string, unknown>;
 }
+
+/**
+ * API-009 최초 생성의 선택 한 곳(PR #35, docs/initial-schedule-api.md). 이름·좌표는 넣지 않는다(D6).
+ * - `clientId`: 요청 안에서 유일한 화면 쪽 식별자. 서버 블록 ID가 아니다.
+ * - `dayNo`: 없으면 서버가 여행 기간의 날짜를 차례로 시도한다. `fixedWindow`가 있으면 그 `dayNo`와 같아야 한다.
+ * - `fixedWindow`: 있을 때만 고정 블록이 된다. `stayMin`을 함께 보내면 시간창 길이와 같아야 한다.
+ * - `stayMin`: 사용자 지정 → 공공 장소 값 순서로 쓴다. 근거가 없으면 `STAY_NEEDS_CHECK`로 미배치된다.
+ */
+export interface InitialSelection {
+  clientId: string;
+  place: BlockPlaceInput;
+  dayNo?: number;
+  fixedWindow?: { dayNo: number; start: LocalTime; end: LocalTime };
+  stayMin?: number;
+}
+
+/** API-009 최초 생성 요청. `options`와 함께 보내지 않고, 이미 블록이 있는 여행에는 보내지 않는다(400). */
+export interface InitialScheduleRequest extends WithSessionCoords {
+  initial: { policy: 'FIRST_FEASIBLE'; selections: InitialSelection[] };
+}
+
+/** 최초 생성 결과. `saved=false`면 저장되지 않은 미리보기라 그 블록 ID를 편집에 쓰지 않는다. */
+export interface InitialGeneration {
+  saved: boolean;
+  /** 경고 없이 엔진이 확정했는지. 저장 여부와 별개다(경로·영업시간 미확인이면 false여도 저장된다). */
+  confirmed: boolean;
+  unplaced: { clientId: string; reason: Violation }[];
+}
+
+export type InitialScheduleResponse = Schedule & { generation: InitialGeneration };
 
 /** API-010 */
 export interface UndoResponse {

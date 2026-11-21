@@ -4,6 +4,8 @@ import type {
   ApplyPlanBResponse,
   CreateTripResponse,
   GenerateScheduleRequest,
+  InitialScheduleRequest,
+  InitialScheduleResponse,
   InterpretRequest,
   InterpretResponse,
   PlanBResponse,
@@ -85,6 +87,18 @@ export const tripsApi = {
       method: 'POST',
       path: `/trips/${tripId}/schedule`,
       body: withSessionCoords(body),
+      ...options,
+    }),
+
+  /**
+   * API-009 최초 생성: 빈 여행에 담은 장소 전체를 한 번에 보내 배치한다(PR #35).
+   * `generation.saved=false`면 저장되지 않았다. 카카오 장소 좌표는 `sessionCoords`로 자동으로 붙는다.
+   */
+  createInitialSchedule: (tripId: string, initial: InitialScheduleRequest['initial'], options?: CallOptions) =>
+    apiRequest<InitialScheduleResponse>({
+      method: 'POST',
+      path: `/trips/${tripId}/schedule`,
+      body: withSessionCoords({ initial }),
       ...options,
     }),
 

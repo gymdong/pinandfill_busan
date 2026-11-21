@@ -88,7 +88,10 @@ try {
 - HTTP 오류는 모두 `ApiError`로 던진다. `id`, `status`, `message`(사용자 문구), `fields`(항목별 오류)를 가진다.
 - `ERROR_CATALOG`에서 ERR-001~017의 기본 문구를 찾을 수 있다. 서버 문구가 있으면 서버 문구가 우선이다.
 - `delivery: 'inline'`인 항목(ERR-002, ERR-010 등)은 200 응답 안의 값으로 표현되므로 예외가 아니라 화면 상태로 처리한다.
-- ERR-001에 `fields.stayMin`이 있으면 서버가 그 장소의 체류시간을 정할 수 없다는 뜻이다. 그 장소에 '머무를 시간'(`@/features/place-search`의 `STAY_OPTIONS`)을 띄워 다시 보낸다(UI-01·UI-06).
+- 체류시간 근거가 없으면 그 장소에 '머무를 시간'(`@/features/place-search`의 `STAY_OPTIONS`)을 띄워 다시 보낸다.
+  - 지도·타임라인의 장소 추가(API-006)는 400 ERR-001 `fields.stayMin`으로 알려 준다(UI-06).
+  - 여행 시작의 최초 생성(API-009 `initial`)은 미배치 이유 `STAY_NEEDS_CHECK`로 알려 준다(UI-01).
+- 최초 생성에서 ERR-001 `fields.initial`은 이미 저장된 여행에 다시 보냈다는 뜻이다(덮어쓰기 방지). UI-01은 여행 조회로 저장을 확인한다.
 - 클라이언트가 붙이는 ID는 `NETWORK`, `TIMEOUT`, `UNKNOWN`이다. 성공 응답이어도 본문이 비었거나 JSON이 아니면 `UNKNOWN`으로 던진다(204 제외).
 - 시간 제한은 기본 15초다. 사진 업로드나 AI 해석처럼 오래 걸리는 호출은 `{ timeoutMs: 30_000 }`처럼 호출마다 늘린다.
 
@@ -99,7 +102,7 @@ try {
 - 응답은 고정값이다. 블록을 추가·삭제해도 일정이 바뀌지 않는다.
 - 주소에 `?mockError=ERR-003`을 붙이면 그 페이지의 API 호출이 해당 오류로 실패한다.
 - API-001은 `10/17~19 2박 3일 대중교통`만 해석에 성공하고, 나머지 문장은 폼 전환(`needsForm`)으로 응답한다.
-- API-002는 입력한 조건으로 여행을 만들고 빈 일정에서 시작한다. UI-01에서 담은 장소가 API-006으로 그 일정에 들어간다. 여행 ID는 하나뿐이라 새로 만들면 이전 mock 여행을 덮어쓴다. 다른 주소(`/trips/t1` 등)는 예시 일정을 그대로 보여 준다.
+- API-002는 입력한 조건으로 여행을 만들고 빈 일정에서 시작한다. UI-01에서 담은 장소는 API-009 최초 생성(`initial`)으로 한 번에 들어간다. mock은 시각·이동시간을 계산하지 않고, 일차를 정하지 않은 장소는 1일차에 넣는다. 체류시간 근거가 없는 카카오 장소는 `STAY_NEEDS_CHECK`로 미배치(`saved=false`)한다. 여행 ID는 하나뿐이라 새로 만들면 이전 mock 여행을 덮어쓴다. 다른 주소(`/trips/t1` 등)는 예시 일정을 그대로 보여 준다.
 - API-013은 SD-03 순서대로 문장을 보내면 태그만, 태그를 보내면 추천을 돌려준다.
 - API-014~021(P1)은 타입만 있고 mock은 없다.
 - fixture는 목업의 예시 값이며 실제 공공 DB 값이 아니다. 좌표는 근사값이고, 태그 3종은 확정된 테마 태그 사전이 아니다.
@@ -116,10 +119,10 @@ try {
 | API-002 시작·종료 위치 | `startPlaceId`, `endPlaceId` 추가 제안 | 정현빈 |
 | API-003 배지 | `badge`와 `hoursStatus` 분리, `placeId`·`category`·`address` 추가 | 박범찬 |
 | API-013 `avoid` 요청 필드 | 피할 조건 수정을 위해 추가 제안 | 박범찬 |
-| UI-01 코스 만들기 순서 | API-002 → 담은 장소마다 API-006(`dayNo` 필수라 화면에서 일차를 고름) → API-009. 담은 목록을 API-009가 한 번에 받게 되면(PR #18 제안) `features/trip-start/createCourse.ts`만 바꾼다 | 정현빈 |
+| UI-01 코스 만들기 순서 | API-002 → API-009 최초 생성(`initial.selections`, `clientId`=`pinnedKey`) 한 번. 일차는 '알아서'(보내지 않음)가 기본이다. `saved=false`면 저장되지 않아 같은 빈 여행에 다시 보내고, 응답을 못 받으면 API-026으로 저장 여부를 확인한다. 덮어쓰기 방지 400(`fields.initial`)도 여행 조회로 저장을 확인한다. 근거: `docs/initial-schedule-api.md` | 정현빈 (#35 병합) |
 | 여행 기간 상한 | 3일(`MAX_TRIP_DAYS`). SRS에 상한이 없어 README의 '1~3일'을 따름 | 김동현 |
 | API-006 장소·삽입 위치 | 백엔드(PR #11)와 맞춤. `place`는 `{placeId}` 또는 `{kakaoPlaceId, placeUrl}`, 위치는 `dayNo`(그날 마지막) 또는 `fromBlockId`·`toBlockId`(두 블록 사이). 카카오 ID는 숫자, URL은 `https://place.map.kakao.com/{id}`. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest` | 정현빈 (PR #11 병합) |
-| API-006 `stayMin` | 백엔드(#25·#28)와 맞춤. 정수 1~1440, 보내면 공공 장소 값보다 먼저 쓰고, `fixedWindow`와 함께 보내면 길이가 같아야 한다. 근거가 없으면 400 ERR-001 `fields.stayMin`. 최초 생성이 API-009 `initial.selections[].stayMin`으로 바뀌면 그쪽으로 옮긴다. 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest.stay_min`·`stay_matches_window`, `trips/router.py`의 `StayDurationRequiredError` 변환 | 정현빈 (#25·#28 병합) |
+| API-006 `stayMin` | 백엔드(#25·#28)와 맞춤. 정수 1~1440, 보내면 공공 장소 값보다 먼저 쓰고, `fixedWindow`와 함께 보내면 길이가 같아야 한다. 근거가 없으면 400 ERR-001 `fields.stayMin`. 여행 시작(UI-01)의 최초 생성은 API-009 `initial.selections[].stayMin`을 쓴다(#35). 근거: `backend/app/modules/trips/schemas.py`의 `AddBlockRequest.stay_min`·`stay_matches_window`, `trips/router.py`의 `StayDurationRequiredError` 변환 | 정현빈 (#25·#28 병합) |
 | 카카오 장소 좌표 전달 | API-006~011 요청의 `sessionCoords`(`kakaoPlaceId` → 좌표). DELETE에도 본문 사용 | 정현빈 |
 | 블록의 카카오 장소 | `place: {source: 'KAKAO', kakaoPlaceId, placeUrl}`, 좌표 없는 구간은 `durationMin: null` | 정현빈·김동현 |
 
