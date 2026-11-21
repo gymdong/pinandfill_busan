@@ -14,6 +14,7 @@ from app.adapters.kakao import KakaoLocalAdapter, KakaoSettings
 from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
+from app.db.session import Database, DatabaseSettings
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
@@ -22,27 +23,38 @@ from app.modules.places.router import PlaceAPIError
 from app.modules.places.samples import SamplePlaceData, load_sample_places
 from app.modules.places.service import PlaceSearchService
 from app.modules.places.settings import PlaceMatchSettings
+from app.modules.trips.edit_history import EditHistory
 from app.modules.trips.initial import PublicStayDurations
 from app.modules.trips.repository import FakeTripRepository
 from app.modules.trips.router import TripAPIError
 from app.modules.trips.service import TripService
+from app.modules.trips.sql_repository import SqlSnapshotRepository, SqlTripRepository
 
 logger = logging.getLogger(__name__)
 
 
 def default_trip_service(places: SamplePlaceData) -> TripService:
-    """로컬 기본 구성: 메모리 저장소·메모리 되돌리기 이력, 표본 장소, 경로 키가 있을 때만 실제 경로 조회.
+    """로컬 기본 구성: 표본 장소, 경로 키가 있을 때만 실제 경로 조회.
 
-    프로세스가 재시작되면 여행과 이력이 사라진다. DB 저장소가 생기면 바꿔 주입한다.
+    `DATABASE_URL` 이 있으면 여행·되돌리기 이력을 DB(trips·blocks·legs·schedule_snapshots)에 저장하고,
+    편집 한 번(일정 저장 + 스냅샷)을 한 트랜잭션으로 처리한다. 스키마는 `alembic upgrade head` 로 만든다.
+    없으면 메모리 저장소를 쓰며, 프로세스가 재시작되면 여행과 이력이 사라진다.
     """
     engine = BasicItineraryEngine(places, build_route_provider())
-    # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포 전에 DB 저장소로 바꿔야 한다.
-    logger.warning("trip storage is in-memory: trips and undo history are lost on restart and not shared")
+    initial_planner = InitialSchedulePlanner(engine, PublicStayDurations(places.stay_min))
+    url = DatabaseSettings().url()
+    if url is None:
+        # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포에는 DATABASE_URL 을 설정한다.
+        logger.warning("trip storage is in-memory (DATABASE_URL unset): trips and undo history are lost on restart")
+        return TripService(FakeTripRepository({}), engine, places.stay_min, initial_planner=initial_planner)
+    database = Database(url)
     return TripService(
-        FakeTripRepository({}),
+        SqlTripRepository(database),
         engine,
         places.stay_min,
-        initial_planner=InitialSchedulePlanner(engine, PublicStayDurations(places.stay_min)),
+        history=EditHistory(SqlSnapshotRepository(database)),
+        initial_planner=initial_planner,
+        transaction=database.transaction,
     )
 
 

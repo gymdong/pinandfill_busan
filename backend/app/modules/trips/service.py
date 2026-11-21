@@ -1,6 +1,7 @@
 """Trip facade for explicitly positioned edits and already anchored schedules."""
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from threading import RLock
 
 from app.modules.engine.initial import InitialSchedulePlanner
@@ -60,6 +61,7 @@ class TripService:
         recommender: WaypointRecommender | None = None,
         history: EditHistory | None = None,
         initial_planner: InitialSchedulePlanner | None = None,
+        transaction: Callable[[], AbstractContextManager[object]] = nullcontext,
     ) -> None:
         self.repository = repository
         self.engine = engine
@@ -70,11 +72,13 @@ class TripService:
         # DB 저장소를 붙일 때 schedule_snapshots 를 쓰는 SnapshotRepository 구현으로 바꿔 주입해야 한다.
         self.history = history if history is not None else EditHistory(InMemorySnapshotRepository())
         # Serializes edits of this local Fake service, including read/compute/save.
-        # A database implementation must replace this with transactional concurrency.
+        # With DB repositories, `transaction` (Database.transaction) wraps each call: schedule and
+        # history writes commit together or roll back together, and the trip row lock serializes workers.
         self._lock = RLock()
+        self.transaction = transaction
 
     def suggest(self, trip_id: str, request: SuggestWaypointsRequest) -> SuggestWaypointsResponse:
-        with self._lock:
+        with self._lock, self.transaction():
             record = self._get(trip_id)
             if self.recommender is None:
                 raise NeedsConfirmationError("Waypoint providers are not configured")
@@ -82,7 +86,7 @@ class TripService:
 
     def detail(self, trip_id: str) -> TripDetailResponse:
         """API-026. 저장된 일정을 다시 계산하지 않고 투영한다(경로 조회 없음). GET 이라 카카오 좌표는 받지 않는다."""
-        with self._lock:
+        with self._lock, self.transaction():
             record = self._get(trip_id)
             result = self.engine.project(
                 ValidateInput(trip=record.trip, schedule=record.schedule), context=CalculationContext()
@@ -154,7 +158,7 @@ class TripService:
         return self.engine.project(command, context=context)
 
     def insert(self, trip_id: str, request: AddBlockRequest) -> ScheduleMutationResponse:
-        with self._lock:
+        with self._lock, self.transaction():
             record = self._get(trip_id)
             # 사용자 지정 → 공공 장소 값 순서. 둘 다 없으면 기본값을 만들지 않는다(#18 PM 결정 4).
             stay = request.stay_min if request.stay_min is not None else self.stay_duration(request.place)
@@ -165,20 +169,20 @@ class TripService:
             return self._commit_edit(trip_id, record, result)
 
     def update_block(self, trip_id: str, block_id: str, request: UpdateBlockRequest) -> ScheduleMutationResponse:
-        with self._lock:
+        with self._lock, self.transaction():
             record = self._get(trip_id)
             command = update_command(request, record.trip, record.schedule, block_id)
             return self._commit_edit(trip_id, record, self._run(command, calculation_context(request)))
 
     def delete_block(self, trip_id: str, block_id: str, request: DeleteBlockRequest) -> ScheduleMutationResponse:
-        with self._lock:
+        with self._lock, self.transaction():
             record = self._get(trip_id)
             command = delete_command(record.trip, record.schedule, block_id)
             return self._commit_edit(trip_id, record, self._run(command, calculation_context(request)))
 
     def undo(self, trip_id: str, request: UndoRequest) -> UndoResponse:
         """직전 편집 전 상태를 다시 계산하지 않고 그대로 저장한다. 되돌리기 자체는 스냅샷을 남기지 않는다."""
-        with self._lock:
+        with self._lock, self.transaction():
             record = self._get(trip_id)
             snapshot = self.history.latest_edit(trip_id)
             state = self.history.undo(trip_id)
@@ -263,7 +267,7 @@ class TripService:
         )
 
     def generate(self, trip_id: str, request: GenerateScheduleRequest) -> Schedule | InitialScheduleResponse:
-        with self._lock:
+        with self._lock, self.transaction():
             record = self._get(trip_id)
             if request.initial is not None:
                 return self._generate_initial(trip_id, record, request)
