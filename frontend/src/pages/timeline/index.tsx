@@ -6,6 +6,7 @@ import { paths } from '@/app/paths';
 import { Banner, Button } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
 import { BlockEditor } from '@/features/block-editor/BlockEditor';
+import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
 import { blockRole, formatDayDate, formatDuration, legBetween, legLabel, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
 import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, UndoIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
@@ -127,6 +128,8 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
   onChange: Change;
   onSlotChange: Change;
 }) {
+  // 경유지 추천 시트(UI-03)를 연 구간의 앞 블록 ID. 조기 return보다 앞에서 항상 같은 순서로 호출한다.
+  const [recommendedSlot, setRecommendedSlot] = useState<string | null>(null);
   const blocks = [...day.blocks].sort((a, b) => a.seq - b.seq);
   if (blocks.length === 0) return <p className={styles.empty}>이 날은 아직 장소가 없어요. 아래 ‘장소 추가’로 담아 보세요.</p>;
 
@@ -139,10 +142,27 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
       </BlockCard>
       {next && <div className={styles.between}>
         <p className={styles.leg}>{leg ? legLabel(leg) : '이동시간 확인 필요'}</p>
-        <button type="button" className={styles.slotButton} aria-expanded={slot === block.id} onClick={() => onSlot(block.id)}>
+        <button type="button" className={styles.slotButton} aria-expanded={slot === block.id} disabled={pending} onClick={() => onSlot(block.id)}>
           <PlusIcon />사이에 들를 곳 찾기
         </button>
+        <Button variant="outline" disabled={pending} onClick={() => setRecommendedSlot(block.id)}>추천 보기</Button>
         {slot === block.id && <BlockEditor key={`slot-${block.id}`} tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending} onChange={onSlotChange} />}
+        {recommendedSlot === block.id && <WaypointSheet
+          tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending}
+          onClose={() => setRecommendedSlot(null)}
+          onDirectSearch={() => {
+            setRecommendedSlot(null);
+            if (slot !== block.id) onSlot(block.id);
+          }}
+          onChange={async (action) => {
+            await onChange(async () => {
+              const result = await action(); // 실패하면 아래 닫기를 건너뛰어 시트와 후보·오류가 남는다.
+              // 요청 중 시트를 닫고 다른 구간을 열었으면 그 시트는 닫지 않는다.
+              setRecommendedSlot((current) => (current === block.id ? null : current));
+              return result;
+            });
+          }}
+        />}
       </div>}
     </li>;
   })}</ol>;

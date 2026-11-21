@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { placesApi, tripsApi } from '@/api';
 import { parseErrorResponse } from '@/api/errors';
 import { schedule, trip } from '@/api/mock/fixtures/schedule';
-import { searchItems } from '@/api/mock/fixtures/places';
+import { searchItems, waypointCandidates } from '@/api/mock/fixtures/places';
 import TimelinePage from '@/pages/timeline';
 
 afterEach(() => vi.restoreAllMocks());
@@ -193,6 +193,82 @@ describe('코스 타임라인', () => {
     expect(await screen.findByText(/체류 2시간/)).toBeInTheDocument();
     expect(tripsApi.updateBlock).toHaveBeenCalledWith('t1', schedule.days[0]!.blocks[0]!.id, { stayMin: 120 });
   });
+  describe('경유지 추천 시트(UI-03)', () => {
+    const [first, second] = schedule.days[0]!.blocks;
+    const candidate = waypointCandidates[0]!;
+    function renderPage() {
+      render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    }
+
+    it('추천을 열고 삽입이 실패하면 시트 안에 오류를 두고, 직접 검색으로 바꾼 뒤 일차를 바꾸면 닫힌다', async () => {
+      const twoDays = { ...schedule, days: [schedule.days[0]!, { ...schedule.days[0]!, dayNo: 2, blocks: [], legs: [], crowd: [] }] };
+      vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule: twoDays });
+      const suggest = vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
+      const add = vi.spyOn(tripsApi, 'addBlock').mockRejectedValue(new Error('private raw error'));
+      renderPage();
+      await screen.findByText('코스 타임라인');
+      // 기존 직접 검색 버튼은 그대로 남는다.
+      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 찾기' })[0]).toHaveAttribute('aria-expanded', 'false');
+      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
+      const sheet = await screen.findByRole('dialog');
+      expect(suggest).toHaveBeenCalledWith('t1', { fromBlockId: first!.id, toBlockId: second!.id, thresholdMin: 15 }, expect.anything());
+      await userEvent.click(await within(sheet).findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
+      expect(add).toHaveBeenCalledWith('t1', {
+        place: { placeId: candidate.place.id }, fromBlockId: first!.id, toBlockId: second!.id,
+        isFixed: false, origin: 'SUGGESTED', stayMin: candidate.stayMin,
+      });
+      const alert = await within(sheet).findByRole('alert');
+      expect(alert).not.toHaveTextContent('private raw error');
+      expect(screen.getByRole('dialog')).toBe(sheet);
+      expect(screen.getByRole('button', { name: '직전 편집 되돌리기' })).toBeDisabled();
+
+      await userEvent.click(within(sheet).getByRole('button', { name: '직접 검색해서 넣기' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.getByRole('region', { name: '경유지 추가' })).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 찾기' })[0]).toHaveAttribute('aria-expanded', 'true');
+
+      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: '2일차' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.queryByRole('region', { name: '경유지 추가' })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: '1일차' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('추천을 수락하면 새 일정을 반영하고 시트를 닫으며 되돌리기를 켠다', async () => {
+      const changed = {
+        ...schedule,
+        days: [{ ...schedule.days[0]!, blocks: schedule.days[0]!.blocks.map((block, i) => i === 0 ? { ...block, stayMin: 120 } : block) }],
+      };
+      vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+      vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
+      vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule: changed, violations: [] });
+      renderPage();
+      await screen.findByText('코스 타임라인');
+      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
+      await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(await screen.findByText(/체류 2시간/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '직전 편집 되돌리기' })).toBeEnabled();
+    });
+
+    it('삽입 요청 중에는 구간 버튼을 잠근다', async () => {
+      vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+      vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
+      let resolve!: (value: { schedule: typeof schedule; violations: [] }) => void;
+      vi.spyOn(tripsApi, 'addBlock').mockReturnValue(new Promise((done) => { resolve = done; }));
+      renderPage();
+      await screen.findByText('코스 타임라인');
+      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
+      await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
+      for (const button of screen.getAllByRole('button', { name: '추천 보기', hidden: true })) expect(button).toBeDisabled();
+      for (const button of screen.getAllByRole('button', { name: '사이에 들를 곳 찾기', hidden: true })) expect(button).toBeDisabled();
+      resolve({ schedule, violations: [] });
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+  });
+
   describe('블록 편집기 체류시간(fields.stayMin)', () => {
     function renderPage() {
       render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
