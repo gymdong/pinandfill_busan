@@ -67,6 +67,23 @@ jobs:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    # DB 저장소 시험(tests/integration/test_db_persistence.py)이 실제 PostgreSQL 에서도 돌게 한다. 시험 전용 계정이다.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pinandfill
+          POSTGRES_PASSWORD: pinandfill
+          POSTGRES_DB: pinandfill_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pinandfill -d pinandfill_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://pinandfill:pinandfill@localhost:5432/pinandfill_test
     defaults:
       run:
         working-directory: backend
