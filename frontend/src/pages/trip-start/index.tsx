@@ -43,7 +43,10 @@ export default function TripStartPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const startDateRef = useRef<HTMLInputElement>(null);
   // 일정을 저장하지 못한 빈 여행. 여행 조건이 그대로면 다시 누를 때 새로 만들지 않고 이 여행에 다시 보낸다.
-  const unsaved = useRef<{ tripId: string; conditionsKey: string } | null>(null);
+  // `selectionKey`는 그때 보낸 담은 장소·계획이다. 이전 요청이 뒤늦게 저장됐을 때 그 뒤 고친 내용이 있는지 가린다.
+  const unsaved = useRef<{ tripId: string; conditionsKey: string; selectionKey: string } | null>(null);
+  // 응답을 못 받은 이전 요청이 이미 저장해서, 그 뒤 고친 내용이 반영되지 않은 여행
+  const [savedEarlier, setSavedEarlier] = useState<string | null>(null);
   // 서버가 체류시간 근거가 없다고 알려 준(STAY_NEEDS_CHECK) 장소. 공공 DB 장소라도 머무를 시간을 고른다.
   const [stayAsked, setStayAsked] = useState<StayAsked>(new Set());
   // 서버가 일정에 넣지 못한 장소와 그 이유(API-009 generation.unplaced). 키는 pinnedKey
@@ -65,6 +68,17 @@ export default function TripStartPage() {
   const errors = showErrors && !validation.ok ? validation.errors : {};
   const planErrors = showErrors ? validatePlans(pinned, effectivePlans, dayCount, stayAsked) : {};
   const conditionsKey = JSON.stringify(validation.ok ? validation.value : draft);
+  const selectionKey = JSON.stringify([pinned.map(pinnedKey), effectivePlans]);
+
+  // 장소의 계획을 고치거나 빼면 그 장소의 미배치 이유는 지난 결과라 지운다.
+  function clearUnplaced(key: string) {
+    setUnplaced((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
 
   async function interpret(event: FormEvent) {
     event.preventDefault();
@@ -111,19 +125,29 @@ export default function TripStartPage() {
     try {
       const outcome = await createCourse(validation.value, pinned, effectivePlans, { retryTripId, asked: stayAsked });
       if (outcome.kind === 'saved') {
+        const sentBefore = unsaved.current?.selectionKey;
         unsaved.current = null;
+        if (outcome.earlier && sentBefore !== selectionKey) {
+          // 이전 요청이 이미 저장해서 방금 고친 내용은 보내지 않았다. 조용히 이동하지 않고 알린다.
+          setSavedEarlier(outcome.tripId);
+          return;
+        }
         goToTimeline(outcome.tripId);
         return;
       }
-      unsaved.current = { tripId: outcome.tripId, conditionsKey };
+      unsaved.current = { tripId: outcome.tripId, conditionsKey, selectionKey };
       setUnplaced(Object.fromEntries(Object.entries(outcome.reasons).map(([key, reason]) => [key, reason.cause])));
       // 체류시간 근거가 없어 넣지 못한 장소는 공공 DB 장소라도 머무를 시간을 고르게 한다(#18 PM 결정 4).
       const needStay = Object.entries(outcome.reasons).filter(([, reason]) => reason.type === STAY_NEEDS_CHECK);
       if (needStay.length > 0) setStayAsked((prev) => new Set([...prev, ...needStay.map(([key]) => key)]));
-      setSubmitError('일정에 넣지 못한 장소가 있어 아직 저장하지 않았어요. 표시된 장소를 고친 뒤 다시 눌러 주세요.');
+      setSubmitError(
+        Object.keys(outcome.reasons).length > 0
+          ? '일정에 넣지 못한 장소가 있어 아직 저장하지 않았어요. 표시된 장소를 고친 뒤 다시 눌러 주세요.'
+          : '일정을 저장하지 못했어요. 장소나 시간을 바꿔 다시 눌러 주세요.',
+      );
     } catch (error) {
       if (error instanceof CourseFailedError) {
-        unsaved.current = { tripId: error.tripId, conditionsKey };
+        unsaved.current = { tripId: error.tripId, conditionsKey, selectionKey };
         setSubmitError(`${error.apiError.message} 다시 누르면 같은 여행으로 이어서 만들어요.`);
       } else {
         unsaved.current = null;
@@ -285,8 +309,14 @@ export default function TripStartPage() {
                   dayCount={dayCount}
                   startDate={conditions.dates?.start}
                   error={planErrors[key] ?? unplaced[key]}
-                  onPlan={(plan) => setPlan(key, plan)}
-                  onRemove={() => removePinned(key)}
+                  onPlan={(plan) => {
+                    setPlan(key, plan);
+                    clearUnplaced(key);
+                  }}
+                  onRemove={() => {
+                    removePinned(key);
+                    clearUnplaced(key);
+                  }}
                 />
               );
             })}
@@ -307,13 +337,24 @@ export default function TripStartPage() {
       </section>
 
       <footer className={styles.footer}>
-        {submitError && <Banner tone="warn">{submitError}</Banner>}
-        <p className={styles.footerNote}>
-          {pinned.length === 0 ? '꼭 갈 곳을 1곳 이상 담으면 코스를 만들 수 있어요' : '사이 구간의 경유지는 코스를 만든 뒤에 찾아요'}
-        </p>
-        <Button block disabled={pinned.length === 0} loading={submitting} onClick={submit}>
-          {submitting ? '코스 만드는 중' : '코스 만들기'}
-        </Button>
+        {savedEarlier ? (
+          <>
+            <Banner tone="warn" title="이전 요청으로 코스가 이미 만들어졌어요">
+              응답을 받지 못했던 요청이 먼저 저장돼, 그 뒤 고친 내용은 반영되지 않았어요. 타임라인에서 고쳐 주세요.
+            </Banner>
+            <Button block onClick={() => goToTimeline(savedEarlier)}>타임라인에서 확인하기</Button>
+          </>
+        ) : (
+          <>
+            {submitError && <Banner tone="warn">{submitError}</Banner>}
+            <p className={styles.footerNote}>
+              {pinned.length === 0 ? '꼭 갈 곳을 1곳 이상 담으면 코스를 만들 수 있어요' : '사이 구간의 경유지는 코스를 만든 뒤에 찾아요'}
+            </p>
+            <Button block disabled={pinned.length === 0} loading={submitting} onClick={submit}>
+              {submitting ? '코스 만드는 중' : '코스 만들기'}
+            </Button>
+          </>
+        )}
       </footer>
     </main>
   );

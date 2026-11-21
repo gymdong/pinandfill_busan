@@ -74,8 +74,11 @@ export function toInitialSelection(place: PinnedPlace, plan: PinnedPlan, asked: 
 }
 
 export type CourseOutcome =
-  /** 일정이 저장됐다. 경로·영업시간 확인 필요 경고는 타임라인이 보여 준다. */
-  | { kind: 'saved'; tripId: string }
+  /**
+   * 일정이 저장됐다. 경로·영업시간 확인 필요 경고는 타임라인이 보여 준다.
+   * `earlier`가 참이면 이번 요청이 아니라 응답을 못 받은 이전 요청이 저장한 것이다. 그 뒤 고친 선택은 반영되지 않았을 수 있다.
+   */
+  | { kind: 'saved'; tripId: string; earlier: boolean }
   /** 넣지 못한 장소가 있어 저장되지 않았다. 키는 `pinnedKey`. 같은 빈 여행(`tripId`)에 다시 보낼 수 있다. */
   | { kind: 'unplaced'; tripId: string; reasons: Record<string, Violation> };
 
@@ -95,6 +98,11 @@ export class CourseFailedError extends Error {
 /** 응답을 받지 못해 서버가 저장했는지 알 수 없는 오류 */
 const UNCERTAIN = new Set(['NETWORK', 'TIMEOUT', 'UNKNOWN']);
 
+/** 이미 일정이 있는 여행에 최초 생성을 보냈다(덮어쓰기 방지, 400 ERR-001 `fields.initial`). 이전 요청이 저장한 경우다. */
+function isOverwriteRejected(error: ApiError): boolean {
+  return error.id === 'ERR-001' && Boolean(error.fields?.initial);
+}
+
 async function alreadySaved(tripId: string): Promise<boolean> {
   const { schedule } = await tripsApi.get(tripId);
   return schedule?.days.some((day) => day.blocks.length > 0) ?? false;
@@ -105,7 +113,8 @@ async function alreadySaved(tripId: string): Promise<boolean> {
  *
  * - 여행 생성이 실패하면 그 오류를 그대로 던진다.
  * - `retryTripId`를 넘기면 여행을 새로 만들지 않고 그 빈 여행에 다시 보낸다(미배치·충돌·네트워크 실패 뒤).
- *   이전 요청이 응답 없이 저장됐을 수 있어 먼저 여행 조회(API-026)로 확인한다. 저장된 생성을 다시 보내면 400이다.
+ *   이전 요청이 응답 없이 저장됐을 수 있어 먼저 여행 조회(API-026)로 확인한다. 그 사이 저장이 끝나 덮어쓰기 방지 400이
+ *   오면 다시 확인한다. 두 경우 모두 이전 요청이 저장한 것이라 `earlier: true`다.
  * - 일정 생성이 실패하면 `CourseFailedError`다. 응답을 못 받은 경우에는 여행 조회로 저장됐는지 확인한다.
  * - 호출한 쪽은 여행 조건이 그대로일 때만 `retryTripId`를 넘긴다. 담은 장소·계획은 바뀌어도 된다(전체를 다시 보냄).
  */
@@ -119,7 +128,7 @@ export async function createCourse(
   if (retryTripId) {
     tripId = retryTripId;
     try {
-      if (await alreadySaved(tripId)) return { kind: 'saved', tripId };
+      if (await alreadySaved(tripId)) return { kind: 'saved', tripId, earlier: true };
     } catch (error) {
       throw new CourseFailedError(tripId, toApiError(error));
     }
@@ -135,14 +144,15 @@ export async function createCourse(
       { policy: 'FIRST_FEASIBLE', selections },
       { timeoutMs: 30_000 },
     );
-    if (result.generation.saved) return { kind: 'saved', tripId };
+    if (result.generation.saved) return { kind: 'saved', tripId, earlier: false };
     const reasons = Object.fromEntries(result.generation.unplaced.map((item) => [item.clientId, item.reason]));
     return { kind: 'unplaced', tripId, reasons };
   } catch (error) {
     const apiError = toApiError(error);
-    if (UNCERTAIN.has(apiError.id)) {
+    // 응답을 못 받았으면 이번 요청이 저장했을 수 있고, 덮어쓰기 방지면 이전 요청이 이미 저장한 것이다.
+    if (UNCERTAIN.has(apiError.id) || isOverwriteRejected(apiError)) {
       const saved = await alreadySaved(tripId).catch(() => false);
-      if (saved) return { kind: 'saved', tripId };
+      if (saved) return { kind: 'saved', tripId, earlier: isOverwriteRejected(apiError) };
     }
     throw new CourseFailedError(tripId, apiError);
   }

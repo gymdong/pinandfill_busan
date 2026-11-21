@@ -388,6 +388,65 @@ describe('UI-01 여행 시작', () => {
       expect(create.mock.calls[1]![0]).toMatchObject({ mode: 'CAR' });
     });
 
+    it('응답을 못 받은 이전 요청이 저장됐는데 그 뒤 고친 내용이 있으면, 조용히 이동하지 않고 알린다', async () => {
+      const { initial, get } = mockCourseApis();
+      initial.mockRejectedValueOnce(new ApiError({ id: 'TIMEOUT' }));
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText(/다시 누르면 같은 여행으로 이어서 만들어요/)).toBeInTheDocument();
+
+      // 그 사이 첫 요청이 저장을 마쳤다. 사용자는 체류시간을 바꿔 다시 누른다.
+      get.mockResolvedValue({ trip, schedule });
+      await userEvent.selectOptions(screen.getByLabelText(`${searchItems[2]!.name} 머무를 시간`), '120');
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+
+      expect(await screen.findByText('이전 요청으로 코스가 이미 만들어졌어요')).toBeInTheDocument();
+      // 고친 선택은 보내지 않았고, 확인한 뒤 타임라인으로 간다.
+      expect(initial).toHaveBeenCalledTimes(1);
+      await userEvent.click(screen.getByRole('button', { name: '타임라인에서 확인하기' }));
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+    });
+
+    it('이전 요청이 저장됐고 고친 내용이 없으면 바로 타임라인으로 간다', async () => {
+      const { initial, get } = mockCourseApis();
+      initial.mockRejectedValueOnce(new ApiError({ id: 'TIMEOUT' }));
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      await screen.findByText(/다시 누르면 같은 여행으로 이어서 만들어요/);
+
+      get.mockResolvedValue({ trip, schedule });
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+    });
+
+    it('장소의 계획을 고치면 그 장소의 미배치 이유를 지운다', async () => {
+      const { initial } = mockCourseApis();
+      const other = { type: 'DAY_FULL', cause: '하루 일정 안에 넣을 수 없습니다.' };
+      initial.mockResolvedValueOnce(generated(false, [{ clientId: `public:${searchItems[0]!.placeId}`, reason: other }]));
+      renderPage();
+      setDates('2026-10-17', '2026-10-18');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText(other.cause)).toBeInTheDocument();
+
+      await userEvent.selectOptions(screen.getByLabelText(`${searchItems[0]!.name} 방문 일차`), '2');
+      expect(screen.queryByText(other.cause)).not.toBeInTheDocument();
+    });
+
+    it('저장되지 않았는데 표시할 장소가 없으면 일반 안내를 보여 준다', async () => {
+      const { initial } = mockCourseApis();
+      initial.mockResolvedValueOnce(generated(false, []));
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('일정을 저장하지 못했어요. 장소나 시간을 바꿔 다시 눌러 주세요.')).toBeInTheDocument();
+    });
+
     it('응답을 못 받았지만 서버에 저장됐으면 여행 조회로 확인하고 타임라인으로 간다', async () => {
       const { initial, get } = mockCourseApis();
       initial.mockRejectedValueOnce(new ApiError({ id: 'TIMEOUT' }));

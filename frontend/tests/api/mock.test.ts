@@ -293,6 +293,7 @@ describe('mockRequest', () => {
       ['dayNo 와 시간창 일차가 다름', initial([{ ...fixedCafe, dayNo: 2 }])],
       ['체류시간이 시간창 길이와 다름', initial([{ ...fixedCafe, stayMin: 60 }])],
       ['기간 밖 일차', initial([{ ...park, dayNo: 3 }])],
+      ['시간창 길이가 0', initial([{ ...fixedCafe, fixedWindow: { dayNo: 1, start: '10:00', end: '10:00' } }])],
     ])('%s 이면 ERR-001 이다', async (_name, body) => {
       const tripId = await newTrip();
       await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/schedule`, body })).rejects.toMatchObject({ id: 'ERR-001' });

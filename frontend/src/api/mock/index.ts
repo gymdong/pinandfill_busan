@@ -182,6 +182,8 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
 }
 
 const STAY_NEEDS_CHECK: Violation = { type: 'STAY_NEEDS_CHECK', cause: '체류시간 근거 확인이 필요합니다.' };
+/** 목업 fixture의 공공 장소에는 기본 체류시간이 없어 쓰는 목업 값이다(실제 값 아님). API-006 mock과 같은 40분이다. */
+const MOCK_PUBLIC_STAY_MIN = 40;
 
 /**
  * API-009. `initial`이 없으면 지금 일정을 그대로 돌려준다(목업은 재계산하지 않는다).
@@ -220,7 +222,7 @@ function generateSchedule(tripId: string, body: GenerateScheduleRequest | Initia
       id: `00000000-0000-4000-8000-${String(nextBlockNumber++).padStart(12, '0')}`,
       dayNo, seq: day.blocks.length + 1, place, isFixed: Boolean(window),
       fixedStart: window?.start ?? null, fixedEnd: window?.end ?? null,
-      stayMin: selection.stayMin ?? (window ? minutesOf(window.end) - minutesOf(window.start) : 40),
+      stayMin: selection.stayMin ?? (window ? minutesOf(window.end) - minutesOf(window.start) : MOCK_PUBLIC_STAY_MIN),
       arriveAt: window?.start ?? null, departAt: window?.end ?? null, origin: 'USER', warnings: [],
     });
   }
@@ -240,6 +242,8 @@ function generateSchedule(tripId: string, body: GenerateScheduleRequest | Initia
 function checkSelection(selection: InitialSelection): void {
   if (!selection.clientId || !selection.place) return invalid();
   const window = selection.fixedWindow;
+  // 백엔드처럼 시간창 길이가 0 이하이면 거절한다.
+  if (window && minutesOf(window.end) - minutesOf(window.start) <= 0) return invalid();
   if (window && selection.dayNo !== undefined && selection.dayNo !== window.dayNo) return invalid();
   if (selection.stayMin !== undefined) {
     if (!Number.isInteger(selection.stayMin) || selection.stayMin <= 0 || selection.stayMin > 1440) return invalid();

@@ -48,7 +48,7 @@ describe('코스 만들기 (API-002 → API-009 최초 생성)', () => {
       'kakao:123': { dayNo: 2, fixed: { start: '12:00', end: '13:00' } },
     } as const;
 
-    await expect(createCourse(conditions, [park, cafe], plans)).resolves.toEqual({ kind: 'saved', tripId: 't9' });
+    await expect(createCourse(conditions, [park, cafe], plans)).resolves.toEqual({ kind: 'saved', tripId: 't9', earlier: false });
 
     expect(create).toHaveBeenCalledWith(conditions);
     expect(initial).toHaveBeenCalledTimes(1);
@@ -109,7 +109,8 @@ describe('코스 만들기 (API-002 → API-009 최초 생성)', () => {
     const { initial, get } = mockApis();
     initial.mockRejectedValue(new ApiError({ id: 'TIMEOUT' }));
     get.mockResolvedValue({ trip, schedule });
-    await expect(createCourse(conditions, [park], {})).resolves.toEqual({ kind: 'saved', tripId: 't9' });
+    // 응답만 못 받았을 뿐 이번 요청이 저장한 것이다.
+    await expect(createCourse(conditions, [park], {})).resolves.toEqual({ kind: 'saved', tripId: 't9', earlier: false });
     expect(get).toHaveBeenCalledWith('t9');
   });
 
@@ -122,7 +123,7 @@ describe('코스 만들기 (API-002 → API-009 최초 생성)', () => {
   it('다시 시도하면 여행을 새로 만들지 않고 같은 빈 여행에 전체를 다시 보낸다', async () => {
     const { create, initial, get } = mockApis();
     await expect(createCourse(conditions, [park, cafe], { 'kakao:123': { dayNo: null, fixed: null, stayMin: 90 } }, { retryTripId: 't7' }))
-      .resolves.toEqual({ kind: 'saved', tripId: 't7' });
+      .resolves.toEqual({ kind: 'saved', tripId: 't7', earlier: false });
     expect(create).not.toHaveBeenCalled();
     expect(get).toHaveBeenCalledWith('t7');
     expect(initial.mock.calls[0]![1].selections.map((item) => item.clientId)).toEqual(['public:p1', 'kakao:123']);
@@ -131,8 +132,25 @@ describe('코스 만들기 (API-002 → API-009 최초 생성)', () => {
   it('다시 시도할 때 이전 요청이 이미 저장됐으면 다시 보내지 않는다(덮어쓰기 방지)', async () => {
     const { initial, get } = mockApis();
     get.mockResolvedValue({ trip, schedule });
-    await expect(createCourse(conditions, [park], {}, { retryTripId: 't7' })).resolves.toEqual({ kind: 'saved', tripId: 't7' });
+    await expect(createCourse(conditions, [park], {}, { retryTripId: 't7' })).resolves.toEqual({ kind: 'saved', tripId: 't7', earlier: true });
     expect(initial).not.toHaveBeenCalled();
+  });
+
+  it('다시 보낸 사이 이전 요청이 저장을 마쳐 덮어쓰기 방지(fields.initial)가 오면, 저장을 확인하고 이전 요청의 저장으로 본다', async () => {
+    const { initial, get } = mockApis();
+    const message = '기존 일정이 있어 최초 자동 생성으로 덮어쓸 수 없습니다.';
+    initial.mockRejectedValue(new ApiError({ id: 'ERR-001', status: 400, message, fields: { initial: message } }));
+    // 다시 시도 전 확인 때는 아직 비어 있었고, 400 뒤 확인 때는 저장돼 있다.
+    get.mockResolvedValueOnce({ trip, schedule: EMPTY }).mockResolvedValueOnce({ trip, schedule });
+    await expect(createCourse(conditions, [park], {}, { retryTripId: 't7' })).resolves.toEqual({ kind: 'saved', tripId: 't7', earlier: true });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('덮어쓰기 방지가 왔는데 여행 조회로도 저장을 확인하지 못하면 실패로 알린다', async () => {
+    const { initial } = mockApis();
+    const message = '기존 일정이 있어 최초 자동 생성으로 덮어쓸 수 없습니다.';
+    initial.mockRejectedValue(new ApiError({ id: 'ERR-001', status: 400, message, fields: { initial: message } }));
+    await expect(createCourse(conditions, [park], {})).rejects.toMatchObject({ tripId: 't9', apiError: { fields: { initial: message } } });
   });
 });
 
