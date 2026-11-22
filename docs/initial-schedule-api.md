@@ -31,7 +31,7 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 }
 ```
 
-- `selections`는 1~30개이며(30은 잠정 상한, `MAX_INITIAL_SELECTIONS`) `clientId`는 요청 안에서 유일한 비어 있지 않은 문자열이다.
+- `selections`는 1~30개이며(30은 잠정 상한, `MAX_INITIAL_SELECTIONS`) `clientId`는 요청 안에서 유일한 1~64자 문자열이다(공공 `placeId`도 64자 상한, 잠정).
   화면의 선택 항목 식별용으로만 사용한다. 서버 블록 ID는 각 선택에 새 UUID를 발급한다.
 - `place`는 기존 API-006과 같은 PUBLIC ID 또는 KAKAO ID·URL 형식이다. 이름·좌표를 넣지 않는다.
 - `dayNo`는 선택 사항이다. 없으면 여행 기간의 날짜를 순서대로 시도한다. 있으면 해당 날짜에만 배치한다.
@@ -185,5 +185,5 @@ Ruff 검사 통과, 포맷 113개 파일 통과, mypy Python 3.12 대상으로 a
 mypy 도구는 기존 별도 환경에서 Python 3.12 인터프리터를 지정해 실행했다.
 Starlette TestClient의 httpx 사용 중단 예정 경고 1건이 있으며 기존 잠금 의존성은 변경하지 않았다.
 
-2026-11-22 후속(409 fields·previewClientIds·상한·로그·보상) 검증: Python 3.12.0에서 전체 863 passed,
+2026-11-23 리뷰 반영(실패 로그에 장소 ID 대신 종류만, 일정·이력 복원 독립 보호, ID 64자 상한) 검증: 로컬 Python 3.12에서 전체 867 passed,
 Ruff 검사·포맷(120개 파일) 통과, `uv run --with mypy mypy app` 69개 소스 통과.

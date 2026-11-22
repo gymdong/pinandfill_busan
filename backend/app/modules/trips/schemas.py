@@ -115,13 +115,17 @@ class WithSessionCoords(ContractModel):
     session_coords: dict[str, SessionCoordinate] = Field(default_factory=dict, exclude=True, repr=False)
 
 
+# clientId 는 409 fields 키로 되돌아가므로 길이를 묶는다. 잠정값: API-002 start_place_id 상한과 같게 둔다.
+MAX_ID_LENGTH = 64
+
+
 class PublicPlaceInput(ContractModel):
-    place_id: str = Field(min_length=1)
+    place_id: str = Field(min_length=1, max_length=MAX_ID_LENGTH)
 
 
 class InitialSelectionInput(ContractModel):
     place: PublicPlaceInput | KakaoPlaceKey
-    client_id: str = Field(min_length=1)
+    client_id: str = Field(min_length=1, max_length=MAX_ID_LENGTH)
     day_no: StrictInt | None = Field(default=None, ge=1)
     fixed_window: FixedWindow | None = None
     stay_min: StrictInt | None = Field(default=None, gt=0, le=1440)

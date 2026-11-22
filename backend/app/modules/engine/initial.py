@@ -570,10 +570,10 @@ class InitialSchedulePlanner:
 
     @staticmethod
     def _log_failure(event: str, exc: Exception, ref: PlaceRef) -> None:
-        # NFR-010: exception type and public place reference only. No message,
-        # coordinates, keys, response bodies or user text.
-        place = ref.place_id if isinstance(ref, PublicPlaceRef) else "KAKAO"
-        logger.warning("initial_%s failed error=%s place_id=%s", event, type(exc).__name__, place)
+        # NFR-010: exception type and place kind only. No message, place id
+        # (request text that may carry newlines), coordinates, keys or bodies.
+        kind = "PUBLIC" if isinstance(ref, PublicPlaceRef) else "KAKAO"
+        logger.warning("initial_%s failed error=%s kind=%s", event, type(exc).__name__, kind)
 
     @staticmethod
     def _budget_unplaced(item: InitialSelection) -> UnplacedSelection:

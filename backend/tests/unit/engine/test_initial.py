@@ -667,8 +667,25 @@ def test_provider_failures_are_logged_with_type_and_place_reference_only(caplog)
     caplog.set_level("WARNING", logger="app.modules.engine.initial")
     planner.plan(command(selection("broken", stay_min=30), selection("nostay")))
 
-    assert "initial_place_lookup failed error=RuntimeError place_id=broken" in caplog.text
-    assert "initial_stay_lookup failed error=ValueError place_id=nostay" in caplog.text
-    assert "initial_tag_stay_lookup failed error=ValueError place_id=nostay" in caplog.text
+    assert "initial_place_lookup failed error=RuntimeError kind=PUBLIC" in caplog.text
+    assert "initial_stay_lookup failed error=ValueError kind=PUBLIC" in caplog.text
+    assert "initial_tag_stay_lookup failed error=ValueError kind=PUBLIC" in caplog.text
+    assert "broken" not in caplog.text and "nostay" not in caplog.text
     for leaked in ("35.9876543", "129.9876543", "synthetic-key", "private-body", "35.123", "129.123"):
         assert leaked not in caplog.text
+
+
+def test_request_place_id_never_reaches_failure_log(caplog):
+    forged = "SYNTHETIC_USER_TEXT\nFORGED_LOG_ENTRY"
+
+    class FailingPlaces(Places):
+        def get(self, ref, *, on_date):
+            raise RuntimeError("lookup failed")
+
+    planner = InitialSchedulePlanner(BasicItineraryEngine(FailingPlaces(), Routes()), Stays())
+    caplog.set_level("WARNING", logger="app.modules.engine.initial")
+    planner.plan(command(selection(forged, stay_min=30)))
+
+    assert "initial_place_lookup failed error=RuntimeError kind=PUBLIC" in caplog.text
+    assert "SYNTHETIC_USER_TEXT" not in caplog.text and "FORGED_LOG_ENTRY" not in caplog.text
+    assert all(len(record.getMessage().splitlines()) == 1 for record in caplog.records)

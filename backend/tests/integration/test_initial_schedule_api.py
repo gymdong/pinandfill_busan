@@ -517,32 +517,65 @@ def test_selection_count_is_capped():
     assert repository.get(TRIP).schedule == ScheduleState()
 
 
-def test_restore_failure_preserves_original_error_and_history(monkeypatch, caplog):
-    _, service, repository, _, _ = setup_api()
-    before = repository.get(TRIP)
-    previous = service.history.record_before_edit(TRIP, before.schedule)
-    original_get = repository.get
-    gets = 0
+def _fail_generation_save(monkeypatch, repository, *, fail_compensation_read: bool):
+    """The first save (generation) fails; optionally every later read fails too."""
 
     class OriginalError(Exception):
         pass
 
+    original_get = repository.get
+    state = {"saving": False}
+
     def fail_save(trip_id, record):
+        state["saving"] = True
         raise OriginalError("original")
 
-    def get_then_fail(trip_id):
-        # The service lookup succeeds; the compensation read fails.
-        nonlocal gets
-        gets += 1
-        if gets > 1:
+    def get(trip_id):
+        # Reads before the failed save are the service's own lookup.
+        if fail_compensation_read and state["saving"]:
             raise OSError("synthetic-restore 35.9876543")
         return original_get(trip_id)
 
     monkeypatch.setattr(repository, "save", fail_save)
-    monkeypatch.setattr(repository, "get", get_then_fail)
-    with pytest.raises(OriginalError):
+    monkeypatch.setattr(repository, "get", get)
+    return OriginalError
+
+
+def test_restore_failure_preserves_original_error_and_history(monkeypatch, caplog):
+    _, service, repository, _, _ = setup_api()
+    previous = service.history.record_before_edit(TRIP, repository.get(TRIP).schedule)
+    original_error = _fail_generation_save(monkeypatch, repository, fail_compensation_read=True)
+
+    with pytest.raises(original_error):
         service.generate(TRIP, GenerateScheduleRequest.model_validate(body(item())))
-    assert gets == 2
     assert "trip_generation restore_failed error=OSError" in caplog.text
     assert "synthetic-restore" not in caplog.text and "35.9876543" not in caplog.text
     assert service.history.latest_edit(TRIP) == previous
+
+
+@pytest.mark.parametrize("fail_compensation_read", [False, True])
+def test_history_restore_failure_still_raises_original_error(monkeypatch, caplog, fail_compensation_read):
+    _, service, repository, _, _ = setup_api()
+    service.history.record_before_edit(TRIP, repository.get(TRIP).schedule)
+    original_error = _fail_generation_save(monkeypatch, repository, fail_compensation_read=fail_compensation_read)
+
+    original_restore = service.history.restore
+
+    def fail_restore(trip_id, snapshot):
+        # discard() clears through restore(trip_id, None); fail only the compensation.
+        if snapshot is None:
+            return original_restore(trip_id, snapshot)
+        raise RuntimeError("synthetic-history 35.9876543")
+
+    monkeypatch.setattr(service.history, "restore", fail_restore)
+    with pytest.raises(original_error):
+        service.generate(TRIP, GenerateScheduleRequest.model_validate(body(item())))
+    assert "trip_generation history_restore_failed error=RuntimeError" in caplog.text
+    assert ("trip_generation restore_failed error=OSError" in caplog.text) is fail_compensation_read
+    assert "synthetic-history" not in caplog.text and "35.9876543" not in caplog.text
+
+
+def test_overlong_client_id_is_rejected():
+    client, _, repository, _, _ = setup_api()
+    assert_error(client.post(URL, json=body({**item("a"), "clientId": "x" * 65})))
+    assert repository.get(TRIP).schedule == ScheduleState()

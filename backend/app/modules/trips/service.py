@@ -224,17 +224,19 @@ class TripService:
             self.repository.save(trip_id, TripRecord(record.trip, result.state))
         except Exception:
             # Also compensate a provider that writes before reporting failure.
-            # Restore history even if restoring the schedule itself fails, and
-            # re-raise the original failure rather than the restore failure.
+            # Schedule and history restores are guarded separately so either
+            # failing never hides the original error or skips the other.
             try:
                 if self.repository.get(trip_id) != record:
                     self.repository.save(trip_id, record)
             except Exception as restore_error:
                 # Type only: repository errors may carry stored schedule data.
                 logger.warning("trip_generation restore_failed error=%s", type(restore_error).__name__)
-            finally:
-                if changed:
+            if changed:
+                try:
                     self.history.restore(trip_id, previous)
+                except Exception as restore_error:
+                    logger.warning("trip_generation history_restore_failed error=%s", type(restore_error).__name__)
             raise
 
     def _generate_initial(
