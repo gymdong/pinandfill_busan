@@ -74,6 +74,7 @@
 
 .results li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -85,6 +86,32 @@
 .results li > span {
   display: grid;
   min-width: 0;
+}
+
+.results li > .resultActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stayField {
+  min-height: var(--tap-min);
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-s);
+  background: var(--color-surface);
+}
+
+.stayField[aria-invalid='true'] {
+  border-color: var(--color-warn);
+}
+
+.stayError {
+  flex-basis: 100%;
+  color: var(--color-warn);
+  font-size: var(--text-s);
 }
 
 .resultName {

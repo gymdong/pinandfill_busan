@@ -1,7 +1,8 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { tripsApi } from '@/api';
+import { defaultMessage, tripsApi } from '@/api';
+import { parseErrorResponse } from '@/api/errors';
 import { placeSummaries } from '@/api/mock/fixtures/places';
 import { schedule } from '@/api/mock/fixtures/schedule';
 import { WaypointSheet, type WaypointSheetProps } from '@/features/waypoint-sheet/WaypointSheet';
@@ -75,6 +76,17 @@ describe('WaypointSheet', () => {
     expect(screen.queryByText(/secret raw/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '다시 시도' }));
     expect(await screen.findByText(candidate.place.name)).toBeInTheDocument();
+  });
+
+  it('조회 오류는 정제된 ApiError 문구로 표시한다', async () => {
+    vi.spyOn(tripsApi, 'suggestWaypoints').mockRejectedValueOnce(new Error('Traceback: provider exploded'));
+    const { unmount } = render(<WaypointSheet {...props()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(`경유지를 불러오지 못했어요. ${defaultMessage('UNKNOWN')}`);
+    expect(screen.queryByText(/Traceback/)).not.toBeInTheDocument();
+    unmount();
+    vi.spyOn(tripsApi, 'suggestWaypoints').mockRejectedValueOnce(parseErrorResponse(503, { error: { id: 'ERR-017', message: '일정 계산에 필요한 장소·경로 정보를 확인해 주세요.' } }));
+    render(<WaypointSheet {...props()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('경유지를 불러오지 못했어요. 일정 계산에 필요한 장소·경로 정보를 확인해 주세요.');
   });
 
   it('임계값이 바뀌면 이전 요청을 취소하고 늦은 결과를 무시한다', async () => {
