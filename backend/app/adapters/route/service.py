@@ -108,16 +108,11 @@ class UnconfiguredRouteProvider:
         return RouteEstimate(None, "UNKNOWN", self.clock())
 
 
-def _key(settings: TMAPSettings | ODsaySettings) -> SecretStr | None:
-    key = settings.api_key
-    return key if key is not None and key.get_secret_value() else None
-
-
 def build_route_provider(tmap: TMAPSettings | None = None, odsay: ODsaySettings | None = None) -> RouteProvider:
     """키가 있으면 TMAP 주력·ODsay 예비, 둘 다 없으면 조회하지 않는다. 만들 때 네트워크를 쓰지 않는다."""
     tmap = tmap if tmap is not None else TMAPSettings()
     odsay = odsay if odsay is not None else ODsaySettings()
-    tmap_key, odsay_key = _key(tmap), _key(odsay)
+    tmap_key, odsay_key = tmap.api_key, odsay.api_key
     if tmap_key is None and odsay_key is None:
         return UnconfiguredRouteProvider()
     transport = SafeHTTPTransport()
