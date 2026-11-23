@@ -13,6 +13,7 @@ CrowdGrade = Literal["여유", "보통", "붐빔", "매우 붐빔"]
 CrowdConfidence = Literal["높음", "중간", "낮음", "없음"]
 
 
+
 class CrowdHour(ContractModel):
     """한 시간대의 예상 혼잡도."""
 
