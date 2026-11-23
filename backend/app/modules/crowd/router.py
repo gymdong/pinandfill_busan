@@ -2,6 +2,7 @@
 """API-012: 장소별 시간대 예상 혼잡 조회."""
 
 from datetime import date
+from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, Response
 
@@ -27,7 +28,7 @@ def get_place_crowd(
     place_id: str,
     request: Request,
     response: Response,
-    visit_date: date | None = Query(default=None, alias="date"),
+    visit_date: Annotated[date | None, Query(alias="date")] = None,
 ) -> PlaceCrowdResponse:
     """선택한 장소와 날짜의 예상 혼잡 정보를 조회한다."""
     response.headers["Cache-Control"] = "no-store"
