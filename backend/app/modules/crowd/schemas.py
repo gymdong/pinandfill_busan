@@ -1,4 +1,3 @@
-
 """FR-008 예상 혼잡 API의 응답 데이터 형식."""
 
 from datetime import datetime
@@ -10,7 +9,6 @@ from app.modules.engine.schemas import ContractModel
 
 CrowdGrade = Literal["여유", "보통", "붐빔", "매우 붐빔"]
 CrowdConfidence = Literal["높음", "중간", "낮음", "없음"]
-
 
 
 class CrowdHour(ContractModel):

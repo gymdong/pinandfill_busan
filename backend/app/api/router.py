@@ -18,6 +18,7 @@ router.include_router(places_router)
 router.include_router(crowd_router)
 router.include_router(mood_router)
 
+
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
 

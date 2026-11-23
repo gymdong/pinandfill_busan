@@ -1,4 +1,3 @@
-
 """FR-008 예상 혼잡 API 통합 테스트."""
 
 from fastapi.testclient import TestClient

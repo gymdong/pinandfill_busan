@@ -1,4 +1,3 @@
-
 """API-012: 장소별 시간대 예상 혼잡 조회."""
 
 from datetime import date

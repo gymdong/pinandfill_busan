@@ -1,4 +1,3 @@
-
 """FR-008 장소별 예상 혼잡도 조회 서비스."""
 
 from datetime import date
@@ -14,8 +13,7 @@ class CrowdDataProvider(Protocol):
         self,
         place_id: str,
         on_date: date | None,
-    ) -> PlaceCrowdResponse | None:
-        ...
+    ) -> PlaceCrowdResponse | None: ...
 
 
 class CrowdService:
