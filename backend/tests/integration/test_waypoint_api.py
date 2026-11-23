@@ -597,3 +597,17 @@ def test_no_candidates_skip_the_llm() -> None:
     _with_reason_llm(client, llm)
     assert client.post("/api/trips/trip/waypoints/suggest", json=_request()).json() == {"candidates": []}
     assert llm.users == []
+
+
+def test_invalid_ai_settings_do_not_break_api_011(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#46 리뷰: GEMINI_* 설정 오류로 API-011 이 500 이 되면 안 된다. 기본 생성 경로를 그대로 쓴다."""
+    from app.modules.ai.waypoint_reason import build_waypoint_reason_service
+
+    monkeypatch.setattr("app.modules.trips.router.build_waypoint_reason_service", build_waypoint_reason_service)
+    monkeypatch.setenv("GEMINI_EXPLAIN_BUDGET_SECONDS", "abc")
+    client, _, _, _, _ = _setup((_candidate("x"),), {("a", "b"): 20, ("a", "x"): 10, ("x", "b"): 15})
+
+    response = client.post("/api/trips/trip/waypoints/suggest", json=_request())
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["reason"].startswith("우회 5분·체류 30분")

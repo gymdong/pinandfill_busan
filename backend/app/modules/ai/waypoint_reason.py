@@ -16,6 +16,8 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from pydantic import ValidationError
+
 from app.modules.trips.schemas import SuggestWaypointsResponse, WaypointCandidate
 
 from .providers.base import LlmError, LlmProvider
@@ -27,8 +29,18 @@ logger = logging.getLogger(__name__)
 RULE_CAVEAT_SEPARATOR = "; "
 REASON_MAX_CHARS = 60
 
-# 확인할 수 없는 단정·실시간 표현(NFR-012, AI-REQ-04)
-_FORBIDDEN = re.compile(r"실시간|라이브|지금|현재|보장|반드시|무조건|확실|영업\s*중|문\s*(을\s*)?열|https?://|www\.")
+# 확인할 수 없는 단정·실시간 표현, 사실로 넘기지 않은 영업·요금 정보(NFR-012, AI-REQ-04)
+_FORBIDDEN = re.compile(
+    r"실시간|라이브|지금|현재|보장|반드시|무조건|확실|영업|문\s*(을\s*)?열|휴무|무휴|휴관|무료|유료|입장료|요금|가격|할인"
+    r"|https?://|www\."
+)
+# 엔진 값은 숫자+'분'으로만 쓴다. 글자로 쓴 수치·시간 길이는 엔진 값과 맞는지 확인할 수 없어 막는다.
+_SPELLED_DURATION = re.compile(
+    r"시간|반나절|하루|(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|반|십|이십|삼십|사십|오십|육십|백)\s*분"
+)
+# '가장'·'제일' 같은 비교는 엔진이 넘긴 비교 사실(shortestDetour·leastCrowded)이 있을 때만 쓴다.
+_SUPERLATIVE = re.compile(r"가장|제일|최단|최소|최고|최적|유일")
+_DETOUR_WORDS = re.compile(r"우회|가까|가깝|짧|최단|이동|가는\s*길|들르기\s*쉬")
 # 혼잡을 말하는 표현. 혼잡 근거가 없으면 쓰지 못하고, 근거가 있으면 '예상'과 함께 등급에 맞게만 쓴다.
 _QUIET_WORDS = re.compile(r"여유|한산|한적|조용")
 _BUSY_WORDS = re.compile(r"붐비|붐빔|북적|복잡")
@@ -43,10 +55,12 @@ _SYSTEM_PROMPT = (
     "prices or events.\n"
     "- One reason per candidate, in Korean, at most 40 characters, a noun-phrase style like the examples. "
     "No line breaks.\n"
-    "- Numbers: you may only use detourMin or stayMin of that candidate, followed by '분'. No other numbers.\n"
+    "- Numbers: you may only use detourMin or stayMin of that candidate, written in digits followed by '분' "
+    "(for example '체류 40분'). No other numbers, no '시간', no numbers written in words.\n"
+    "- Use '가장' only when shortestDetour is true (about detour) or leastCrowded is true (about crowd).\n"
     "- Crowd: mention crowd only if crowdGrade is not null, and then always with the word '예상' "
     "(for example '예상 혼잡 여유'). Never say real-time, now or currently.\n"
-    "- Do not mention opening hours, and do not mention other candidates by name.\n"
+    "- Do not mention opening hours, holidays, fees or prices, and do not mention other candidates by name.\n"
     "- Examples: '우회가 가장 짧은 전시·문화 공간', '체류 40분이면 둘러보기 좋은 관광지', '예상 혼잡 여유로운 시장'.\n"
     'Return JSON: {"reasons": [{"placeId": string, "text": string}]}'
 )
@@ -104,9 +118,14 @@ def facts_for(candidates: Sequence[WaypointCandidate]) -> list[ReasonFacts]:
                 stay_min=candidate.stay_min,
                 crowd_grade=grade,
                 crowd_confidence=candidate.crowd.confidence if candidate.crowd is not None and grade else None,
-                # 후보가 둘 이상일 때만 비교 사실을 준다. 하나뿐이면 '가장'이라는 말이 근거가 없다.
-                shortest_detour=len(candidates) > 1 and candidate.detour_min == min(detours),
-                least_crowded=len(graded) > 1 and grade is not None and order[grade] == min(graded),
+                # '가장'은 후보가 둘 이상이고 혼자 가장 작을 때만 참이다. 하나뿐이거나 동점이면 근거가 없다.
+                shortest_detour=detours.count(min(detours)) == 1
+                and candidate.detour_min == min(detours)
+                and len(candidates) > 1,
+                least_crowded=len(graded) > 1
+                and graded.count(min(graded)) == 1
+                and grade is not None
+                and order[grade] == min(graded),
             )
         )
     return facts
@@ -136,16 +155,28 @@ def guard_reason(text: object, item: ReasonFacts, others: Sequence[str]) -> str 
     if not isinstance(text, str):
         return None
     cleaned = _WHITESPACE.sub(" ", text).strip()
-    if not cleaned or len(cleaned) > REASON_MAX_CHARS or any(char in cleaned for char in "<>{}\n"):
+    # ';' 는 확인 필요 안내를 붙이는 구분자라, 문장 안에 있으면 안내처럼 보이는 조각이 생긴다.
+    if not cleaned or len(cleaned) > REASON_MAX_CHARS or any(char in cleaned for char in "<>{};\n"):
         return None
     if _FORBIDDEN.search(cleaned):
         return None
-    # 수치는 엔진이 낸 이 후보의 값만 쓸 수 있다(AI-REQ-04). 장소 이름·분류에 든 숫자('168계단')는 수치가 아니다.
-    numbers_text = cleaned.replace(item.name, " ").replace(item.category, " ")
-    if any(int(number) not in {item.detour_min, item.stay_min} for number in _NUMBER.findall(numbers_text)):
+    # 장소 이름·분류에 든 숫자·낱말('168계단')은 설명이 아니므로 지우고 본다.
+    claim_text = cleaned.replace(item.name, " ").replace(item.category, " ")
+    # 수치는 엔진이 낸 이 후보의 값만, 숫자+'분'으로만 쓸 수 있다(AI-REQ-04).
+    if any(int(number) not in {item.detour_min, item.stay_min} for number in _NUMBER.findall(claim_text)):
+        return None
+    if _SPELLED_DURATION.search(claim_text):
         return None
     quiet, busy = bool(_QUIET_WORDS.search(cleaned)), bool(_BUSY_WORDS.search(cleaned))
-    if quiet or busy or _CROWD_WORDS.search(cleaned):
+    crowd = quiet or busy or bool(_CROWD_WORDS.search(cleaned))
+    # '가장 짧은'·'가장 한산한' 은 엔진이 넘긴 비교 사실이 참일 때만 쓴다. 무엇을 비교하는지 모르면 막는다.
+    if _SUPERLATIVE.search(claim_text):
+        detour = bool(_DETOUR_WORDS.search(claim_text))
+        if not (detour or crowd):
+            return None
+        if (detour and not item.shortest_detour) or (crowd and not item.least_crowded):
+            return None
+    if crowd:
         if item.crowd_grade is None or "예상" not in cleaned:
             return None
         if quiet and item.crowd_grade != "여유":
@@ -259,9 +290,20 @@ def _texts(raw: object, known: set[str]) -> dict[str, object] | None:
 
 
 def build_waypoint_reason_service(settings: AISettings | None = None) -> WaypointReasonService:
-    """환경 설정으로 서비스를 만든다. 키가 없으면 규칙 문구를 그대로 둔다."""
+    """환경 설정으로 서비스를 만든다. 키가 없으면 규칙 문구를 그대로 둔다.
+
+    GEMINI_* 설정값이 잘못돼도(예: GEMINI_EXPLAIN_BUDGET_SECONDS=abc) 예외를 던지지 않고 LLM 없이 만든다.
+    설명은 부가 기능이라 설정 오류가 API-011 후보 응답을 막으면 안 된다.
+    """
     from .providers.gemini import GeminiProvider
 
-    config = settings if settings is not None else AISettings()
-    llm = GeminiProvider(config) if config.api_key is not None else None
-    return WaypointReasonService(config, llm)
+    if settings is None:
+        try:
+            settings = AISettings()
+        except ValidationError as error:
+            # 잘못된 값이 무엇인지(설정 이름)만 남긴다. 값에는 키가 섞일 수 있어 남기지 않는다.
+            names = ",".join(sorted({str(item["loc"][0]) for item in error.errors() if item["loc"]}))
+            logger.warning("ai_waypoint_reason disabled reason=invalid_settings fields=%s", names)
+            return WaypointReasonService(AISettings.model_construct(), None)
+    llm = GeminiProvider(settings) if settings.api_key is not None else None
+    return WaypointReasonService(settings, llm)

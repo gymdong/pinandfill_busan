@@ -199,6 +199,66 @@ def test_guard_rejects_ungrounded_or_unsafe_reasons(text, item):
     )
 
 
+TEMPLE = facts_for(
+    (
+        candidate("q1", "범어사", detour=20, stay=30, grade="여유"),
+        candidate("q2", "다른 곳", detour=5, stay=30, grade="여유"),
+    )
+)[0]  # #46 리뷰 재현: 우회 20·체류 30, 가장 짧지도 가장 한산하지도 않음
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 비교 사실이 거짓인 '가장'
+        "우회가 가장 짧은 관광지",
+        "예상 혼잡 가장 한산한 관광지",
+        "가장 가까운 관광지",
+        "최단 우회 관광지",
+        # 무엇을 비교하는지 알 수 없는 '가장'·'최고'
+        "가장 아름다운 관광지",
+        "전망이 최고인 관광지",
+        # 글자로 쓴 시간·수치
+        "한 시간 둘러보기 좋은 관광지",
+        "두 시간이면 충분한 관광지",
+        "삼십 분이면 되는 관광지",
+        "반나절 코스로 좋은 관광지",
+        # 영업·요금 단정
+        "연중무휴로 들르기 좋은 관광지",
+        "입장료 무료인 관광지",
+        "주말 휴관 없는 관광지",
+        # 구분자
+        "들르기 좋은 관광지; 무료 입장",
+        "들르기 좋은 관광지; 기존 장소 영업시간 확인",
+    ],
+)
+def test_guard_rejects_claims_the_engine_did_not_make(text):
+    assert (TEMPLE.shortest_detour, TEMPLE.least_crowded) == (False, False)
+    assert guard_reason(text, TEMPLE, ["다른 곳"]) is None
+
+
+def test_superlatives_pass_only_when_the_comparison_fact_is_true():
+    shortest, _ = facts_for(
+        (
+            candidate("s1", "짧은 곳", detour=3, stay=30, grade="보통"),
+            candidate("s2", "긴 곳", detour=9, stay=30, grade="여유"),
+        )
+    )
+    _, quietest = facts_for(
+        (
+            candidate("s1", "짧은 곳", detour=3, stay=30, grade="보통"),
+            candidate("s2", "긴 곳", detour=9, stay=30, grade="여유"),
+        )
+    )
+    assert guard_reason("우회가 가장 짧은 관광지", shortest, []) is not None
+    assert guard_reason("최단 우회 관광지", shortest, []) is not None
+    assert guard_reason("예상 혼잡 가장 한산한 관광지", shortest, []) is None
+    assert guard_reason("예상 혼잡 가장 여유로운 관광지", quietest, []) is not None
+    assert guard_reason("우회가 가장 짧은 관광지", quietest, []) is None
+    # 비교 사실이 참이어도 두 가지를 섞어 말하면 둘 다 참이어야 한다.
+    assert guard_reason("가장 가깝고 예상 혼잡 여유로운 곳", quietest, []) is None
+
+
 def test_guard_allows_numbers_that_are_part_of_the_place_name():
     [ibagu] = facts_for((candidate("p9", "초량 168계단", detour=8, stay=30),))
     assert guard_reason("초량 168계단에서 보는 항구", ibagu, []) == "초량 168계단에서 보는 항구"
@@ -345,6 +405,19 @@ async def test_logs_counts_only(caplog):
 
 def test_service_built_without_a_key_has_no_llm():
     assert build_waypoint_reason_service(AISettings(_env_file=None, api_key=None))._llm is None
+
+
+def test_invalid_settings_disable_the_llm_instead_of_failing(monkeypatch, caplog):
+    monkeypatch.setenv("GEMINI_EXPLAIN_BUDGET_SECONDS", "abc")
+    with caplog.at_level(logging.WARNING):
+        built = build_waypoint_reason_service()
+    assert built._llm is None
+    assert "ai_waypoint_reason disabled reason=invalid_settings fields=explain_budget_seconds" in caplog.messages
+
+
+async def test_service_built_from_invalid_settings_returns_rule_reasons(monkeypatch):
+    monkeypatch.setenv("GEMINI_EXPLAIN_BUDGET_SECONDS", "abc")
+    assert await build_waypoint_reason_service().explain(RESPONSE) is RESPONSE
 
 
 def test_service_built_with_a_key_uses_gemini():
