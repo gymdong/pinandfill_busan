@@ -8,7 +8,6 @@ from pydantic import Field
 
 from app.modules.engine.schemas import ContractModel
 
-
 CrowdGrade = Literal["여유", "보통", "붐빔", "매우 붐빔"]
 CrowdConfidence = Literal["높음", "중간", "낮음", "없음"]
 
