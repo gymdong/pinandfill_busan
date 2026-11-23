@@ -60,6 +60,7 @@ def sample_response() -> SuggestWaypointsResponse:
 async def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    print("※ 우회 분과 예상 혼잡 등급은 확인용 예시 값입니다. 실제 경로 조회·혼잡 데이터가 아닙니다.")
     before = sample_response()
     after = await build_waypoint_reason_service().explain(before)
     for old, new in zip(before.candidates, after.candidates, strict=True):

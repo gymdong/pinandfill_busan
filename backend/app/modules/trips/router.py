@@ -183,4 +183,5 @@ async def suggest_waypoints(
         result = await run_in_threadpool(service.suggest, trip_id, body)
     except Exception as exc:
         raise translate_error(exc) from None
+    # 설명 단계는 예외를 던지지 않고, 실패하면 규칙 문구 그대로다(ERR-002). 오류 변환(503)을 거치지 않는 것이 맞다.
     return await explainer.explain(result)

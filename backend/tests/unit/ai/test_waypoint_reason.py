@@ -205,6 +205,21 @@ def test_guard_allows_numbers_that_are_part_of_the_place_name():
     assert guard_reason("168개의 계단", ibagu, []) is None
 
 
+def test_own_name_containing_another_candidate_name_is_allowed():
+    temple, museum = facts_for(
+        (
+            candidate("q1", "범어사", detour=10, stay=60),
+            candidate("q2", "범어사 성보박물관", detour=12, stay=40),
+        )
+    )
+    # 자기 이름을 쓰는 것은 되지만, 자기 이름 밖에서 다른 후보를 말하면 안 된다.
+    assert guard_reason("범어사 성보박물관의 불교 유물", museum, ["범어사"]) is not None
+    assert guard_reason("범어사와 함께 들르기", museum, ["범어사"]) is None
+    assert guard_reason("범어사 성보박물관 옆 사찰", temple, ["범어사 성보박물관"]) is None
+    # 한 글자 이름은 일반 단어와 겹치기 쉬워 보지 않는다.
+    assert guard_reason("산사 산책", temple, ["산"]) is not None
+
+
 def test_busy_grade_allows_busy_words_with_expected():
     [busy] = facts_for((candidate("p8", "시장", detour=5, stay=30, grade="매우 붐빔"),))
     assert guard_reason("예상 혼잡 붐비는 곳이라 짧게 들르기", busy, []) is not None
@@ -294,6 +309,23 @@ async def test_schema_violation_is_requested_once_more(raw):
     llm = FakeLlm(raw, raw)
     assert await service(llm).explain(RESPONSE) is RESPONSE
     assert len(llm.calls) == 2
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("공급자 내부 오류"), ValueError("bad"), KeyError("x")])
+async def test_unexpected_errors_keep_rule_reasons_and_log_only_the_type(failure, caplog):
+    llm = FakeLlm(failure)
+    with caplog.at_level(logging.DEBUG):
+        assert await service(llm).explain(RESPONSE) is RESPONSE
+    messages = " | ".join(caplog.messages)
+    assert f"ai_waypoint_reason failed reason=unexpected error={type(failure).__name__}" in messages
+    assert "공급자 내부 오류" not in messages
+
+
+def test_unknown_crowd_grade_gives_no_crowd_fact():
+    odd = HUIN.model_copy(update={"crowd": HUIN.crowd.model_copy(update={"grade": "알 수 없음"})})
+    [item, other] = facts_for((odd, KKANG))
+    assert (item.crowd_grade, item.crowd_confidence, item.least_crowded) == (None, None, False)
+    assert other.least_crowded is False
 
 
 async def test_slow_llm_is_cut_off_by_the_time_budget():

@@ -84,11 +84,17 @@ class ReasonFacts:
 
 def facts_for(candidates: Sequence[WaypointCandidate]) -> list[ReasonFacts]:
     detours = [candidate.detour_min for candidate in candidates]
+    # 응답 모델(CrowdSummary)이 등급을 네 값으로 제한한다. 모르는 값이 와도 혼잡 사실을 넘기지 않을 뿐 실패하지 않는다.
     order = {"여유": 0, "보통": 1, "붐빔": 2, "매우 붐빔": 3}
-    graded = [order[c.crowd.grade] for c in candidates if c.crowd is not None and c.crowd.grade is not None]
+
+    def grade_of(candidate: WaypointCandidate) -> str | None:
+        grade = candidate.crowd.grade if candidate.crowd is not None else None
+        return grade if grade in order else None
+
+    graded = [order[grade] for grade in map(grade_of, candidates) if grade is not None]
     facts = []
     for candidate in candidates:
-        grade = candidate.crowd.grade if candidate.crowd is not None else None
+        grade = grade_of(candidate)
         facts.append(
             ReasonFacts(
                 place_id=candidate.place.id,
@@ -146,9 +152,15 @@ def guard_reason(text: object, item: ReasonFacts, others: Sequence[str]) -> str 
             return None
         if busy and item.crowd_grade not in {"붐빔", "매우 붐빔"}:
             return None
-    # 다른 후보를 섞어 말하지 않는다.
-    if any(name and name in cleaned for name in others):
-        return None
+    # 다른 후보를 섞어 말하지 않는다. 자기 이름 안에 다른 후보 이름이 들어 있을 수 있어('범어사 성보박물관'과 '범어사')
+    # 자기 이름을 먼저 지우고 본다. 한국어는 조사가 붙어 단어 경계로 나눌 수 없어 이름 전체가 들어 있는지로 본다.
+    # 반대로 다른 후보 이름이 자기 이름을 품고 있으면('범어사'에게 '범어사 성보박물관') 지우기 전 문장에서 찾는다.
+    others_text = cleaned.replace(item.name, " ")
+    for name in others:
+        if len(name) < 2 or name == item.name:
+            continue
+        if name in (cleaned if item.name in name else others_text):
+            return None
     return cleaned
 
 
@@ -170,9 +182,18 @@ class WaypointReasonService:
         self._llm = llm
 
     async def explain(self, response: SuggestWaypointsResponse) -> SuggestWaypointsResponse:
-        candidates = response.candidates
-        if self._llm is None or not candidates:
+        """예외를 던지지 않는다. 설명 단계에서 무엇이 실패해도 규칙 문구 그대로 돌려준다(ERR-002)."""
+        if self._llm is None or not response.candidates:
             return response
+        try:
+            return await self._explain(response)
+        except Exception as error:  # noqa: BLE001 - 설명은 부가 기능이라 어떤 실패도 후보 응답을 막지 않는다.
+            # 예외 메시지에는 요청·응답 내용이 담길 수 있어 종류 이름만 남긴다(NFR-010).
+            logger.warning("ai_waypoint_reason failed reason=unexpected error=%s", type(error).__name__)
+            return response
+
+    async def _explain(self, response: SuggestWaypointsResponse) -> SuggestWaypointsResponse:
+        candidates = response.candidates
         facts = facts_for(candidates)
         try:
             texts = await asyncio.wait_for(self._ask(facts), timeout=self._settings.explain_budget_seconds)
