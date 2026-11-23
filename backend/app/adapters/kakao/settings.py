@@ -3,6 +3,8 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.secrets import blank_key_is_no_key
+
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
 
@@ -16,7 +18,9 @@ class KakaoSettings(BaseSettings):
         env_prefix="KAKAO_", env_file=BACKEND_DIR / ".env", extra="ignore", hide_input_in_errors=True
     )
 
+    # 빈 값·공백뿐인 키는 None 이 되어 검증 오류(rest_api_key)로 끝난다. 앱은 그때 장소 검색을 끈다.
     rest_api_key: SecretStr
+    _normalize_key = field_validator("rest_api_key", mode="before")(blank_key_is_no_key)
     base_url: str = "https://dapi.kakao.com"
     timeout_seconds: float = Field(3.0, gt=0)
     # 한 번의 검색으로 받을 결과 수. 카카오 상한은 15

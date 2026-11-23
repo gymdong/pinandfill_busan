@@ -2,8 +2,7 @@
 
 컴포넌트: `frontend/src/features/waypoint-sheet/WaypointSheet.tsx`.
 기존 직접 검색 BlockEditor를 삭제하지 않는다. 아래는 김동현 담당
-`frontend/src/pages/timeline/index.tsx`의 `DayTimeline`에 적용할 예시이며,
-이번 PR은 그 파일을 수정하지 않는다.
+`frontend/src/pages/timeline/index.tsx`의 `DayTimeline`에 적용한 연결이다(타임라인 연결 PR에서 반영).
 
 ## 두 진입점
 
@@ -35,7 +34,8 @@ const [recommendedSlot, setRecommendedSlot] = useState<string | null>(null);
   onChange={async (action) => {
     await onChange(async () => {
       const result = await action(); // 실패하면 아래 닫기 실행 안 됨
-      setRecommendedSlot(null);
+      // 요청 중 Esc로 닫고 다른 구간을 열었으면 그 시트는 닫지 않는다(요청 구간 ID 대조).
+      setRecommendedSlot((current) => (current === block.id ? null : current));
       return result; // 기존 TimelineTrip.run이 일정/경고/undo 갱신
     });
   }}
@@ -72,7 +72,9 @@ API-006은 #25의 선택적 stayMin을 사용해 서버 후보의 표시된 체�
 AddBlockRequest에 stayMin이 있으므로 그대로 사용한다. types/api.ts의 이전 잠정 주석은
 실제 타임라인 연결 PR에서 확정 계약에 맞게 정리한다.
 카카오 sessionCoords는 공통 클라이언트가 처리하며 이 컴포넌트는 저장하지 않는다.
-API-011 기본 CandidateProvider는 아직 미설정이므로 실서버 추천 완료를 주장하지 않는다.
+프런트는 `tripsApi.suggestWaypoints`(API-011)를 그대로 부른다. mock 모드(`VITE_API_MODE=mock`)는 고정 후보를
+돌려준다. 백엔드 `default_trip_service`에는 아직 `WaypointRecommender`(CandidateProvider·ScoreWeights)가 주입되지
+않아 실서버는 503 ERR-017을 돌려주고, 시트는 정제된 오류와 다시 시도·직접 검색을 보여 준다. 실서버 추천 완료는 주장하지 않는다.
 
 ## 검증
 
