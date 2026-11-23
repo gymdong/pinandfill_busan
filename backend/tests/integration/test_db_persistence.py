@@ -2,7 +2,8 @@
 
 - `memory`·`sqlite` 는 항상 돈다. SQLite 는 alembic 마이그레이션으로 만든 메모리 DB 다.
 - `postgres` 는 `TEST_DATABASE_URL`(예: postgresql://pinandfill:pinandfill@localhost:5432/pinandfill_test)이
-  있을 때만 돈다. 그 DB 의 스키마는 시험마다 지우고 다시 만든다. 운영 DB 를 가리키지 않는다.
+  있을 때만 돈다. 그 DB 의 스키마는 시험마다 지우고 다시 만든다. 잘못 가리켜 데이터를 지우지 않도록
+  DB 이름이 `_test` 로 끝나지 않으면 지우기 전에 시험을 멈춘다.
 """
 
 import os
@@ -19,7 +20,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
-from sqlalchemy import StaticPool, inspect, select, text
+from sqlalchemy import StaticPool, inspect, make_url, select, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
@@ -78,9 +79,17 @@ def downgrade(database: Database, revision: str = "base") -> None:
         command.downgrade(config, revision)
 
 
+def require_test_database(url: str) -> None:
+    """Refuse to wipe a database whose name does not mark it as a test database."""
+    name = make_url(url).database or ""
+    if not name.endswith("_test"):
+        pytest.fail("TEST_DATABASE_URL must name a database ending in _test; refusing to drop its schema")
+
+
 def open_database(kind: str) -> Database:
     if kind == "sqlite":
         return Database("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    require_test_database(POSTGRES_URL)
     database = Database(POSTGRES_URL)
     with database.engine.begin() as connection:
         connection.execute(text("DROP SCHEMA public CASCADE"))
@@ -347,3 +356,20 @@ def test_default_app_uses_database_when_url_is_set(tmp_path: Path, monkeypatch: 
         assert undone.status_code == 200
         assert undone.json()["schedule"]["days"][0]["blocks"] == []
         assert client.get("/api/trips/not-a-uuid").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:p@localhost:5432/pinandfill",
+        "postgresql://u:p@localhost:5432/test_pinandfill",
+        "postgresql://u:p@localhost:5432/",
+    ],
+)
+def test_non_test_database_is_never_wiped(url: str):
+    with pytest.raises(pytest.fail.Exception, match="_test"):
+        require_test_database(url)
+
+
+def test_test_database_name_is_accepted():
+    require_test_database("postgresql://u:p@localhost:5432/pinandfill_test")
