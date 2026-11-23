@@ -1,17 +1,18 @@
 # 타임라인·편집·지도 파트 인수인계 (김동현 → 팀)
 
-작성일 2026-11-11, 갱신 2026-11-15(PR #10·#17 리뷰 반영). 대상 FR-006(블록 편집·되돌리기), FR-007(지도 보기·지도에서 고르기).
+작성일 2026-11-11, 갱신 2026-11-15(PR #10·#17 리뷰 반영), 2026-11-22(P0 마무리: 상태 갱신, 미결 사항 결정). 대상 FR-006(블록 편집·되돌리기), FR-007(지도 보기·지도에서 고르기).
 
 ## 현재 상태
 
 | 영역 | 상태 | 위치 |
 |---|---|---|
-| 타임라인 편집 UI(추가·삭제·순서·체류시간·경유지 삽입·되돌리기) | 완료(mock). PR #9 | `frontend/src/pages/timeline`, `features/block-editor` |
+| 타임라인 편집 UI(추가·삭제·순서·체류시간·경유지 삽입·되돌리기) | 완료(mock). PR #9. 블록 편집기의 체류시간 재입력(`fields.stayMin`)과 경유지 시트(UI-03, #24) 연결은 `feature/FR-004-timeline-waypoint-sheet` PR 리뷰 중 | `frontend/src/pages/timeline`, `features/block-editor` |
 | 지도 보기(경로·마커·목록 동기화·길게 누르기) | 완료(mock·단위 테스트). 실제 키로 수동 확인 전. PR #9 | `frontend/src/map/KakaoMap.tsx`, `pages/map-view` |
 | EditHistory(1단계 되돌리기)·AC-006 판정 | 완료. 엔진 `ScheduleState` 기준, 메모리 저장소(시험용). PR #10 | `backend/app/modules/trips/edit_history.py` |
 | 엔진 `insert`·`recompute`·`validate`, API-006·009·011 | 병합됨(PR #11, 정현빈) | `backend/app/modules/engine`, `modules/trips` |
-| `schedule_snapshots` 테이블·마이그레이션 | 미착수. ORM이 `core/db`에 아직 없음 | - |
-| API-007(PATCH)·008(DELETE)·010(undo) 라우터, `TripService` 에 EditHistory 연결(API-006 포함) | 완료. `feature/FR-006-edit-api` 브랜치. 이력 저장소는 아직 메모리 구현 | `backend/app/modules/trips/{service,router,commands,schemas}.py`, 엔진 `project` |
+| `schedule_snapshots` 테이블·마이그레이션 | 진행 중. DB 계층(ORM·alembic·여행/스냅샷 저장소)은 담당이 없어 김동현이 맡았다. `feature/FR-006-db-persistence` PR 리뷰 중(리뷰: 정현빈 core/db, 홍민지 마이그레이션 순서) | `backend/app/db`, `backend/alembic` |
+| API-007(PATCH)·008(DELETE)·010(undo) 라우터, `TripService` 에 EditHistory 연결(API-006 포함) | 완료. dev 병합됨. 이력 저장소는 DB PR 병합 전까지 메모리 구현 | `backend/app/modules/trips/{service,router,commands,schemas}.py`, 엔진 `project` |
+| API-009 최초 생성(`initial`) 뒤 편집·삭제·되돌리기 | 백엔드 통합 테스트로 확인(#35). 화면 연결은 #36(박범찬) 병합 후 실서버로 확인 | `backend/tests/integration/test_initial_schedule_api.py` |
 
 ## 합의된 계약 (PR #11)
 
@@ -38,7 +39,21 @@
 - 카카오 블록이 있는 날을 편집할 때 요청에 `sessionCoords` 가 없으면, 엔진 기존 계약대로 그 블록으로 가는 이동시간을 알 수 없어 그 뒤 일반 블록 시각이 비워지고 `COORDS_NEEDS_CHECK` 경고가 붙는다(시험으로 고정해 둠).
 - 저장 실패: 편집 저장이 실패하면 되돌리기 지점을 편집 전 그대로(`EditHistory.latest_edit` 로 받아 둔 스냅샷을 `restore`) 되살리고, 되돌리기 저장이 실패하면 소비한 스냅샷을 되살린다. DB 구현에서는 한 트랜잭션의 롤백으로 대신한다.
 
-### 미결 사항 (팀 확인 필요)
+### 미결 사항 결정 (2026-11-22, PM)
+
+P0 범위에서는 아래처럼 정한다. 반대 의견은 이 문서를 고치는 PR 에 남긴다. 각 항목의 현재 동작 설명은 그 아래 원문에 그대로 둔다.
+
+| # | 항목 | 결정 | 근거 |
+|---|---|---|---|
+| 1 | 그날 첫 블록이 바뀔 때의 시작 시각 | 현재 동작으로 확정(원래 첫 블록의 도착 시각을 이어받고, 고정이면 지정 시각 유지) | 사용자가 정한 하루 시작 시각을 편집이 바꾸지 않는다(FR-006 "앞쪽 블록은 바뀌지 않아야") |
+| 2 | 그날 유일한 블록 삭제 | 현재 동작으로 확정(빈 날, 경로 조회 없음) | 계산할 구간이 없다 |
+| 3 | 고정 해제 시 시각 | 현재 동작으로 확정(도착 시각 유지) | 해제만으로 블록이 움직이면 사용자가 원인을 알기 어렵다. 당기기는 순서 변경·체류 조정으로 할 수 있다 |
+| 4 | 고정 켜기 | P0 는 현재 동작 유지(시각이 없으면 400, 다시 추가로 고정). 시각을 함께 받는 `PATCH {isFixed:true, fixedWindow}` 는 P1 에서 정한다 | API-007 계약을 P0 검증 끝에 바꾸지 않는다 |
+| 5 | 되돌릴 편집 없음의 오류 ID | ERR-001(400) 확정 | 프런트 catalog·mock·백엔드가 이미 같다 |
+| 6 | API-009 뒤 되돌리기 | P0 는 생성(재계산·최초 생성 모두)을 되돌리지 않는다. 생성이 일정을 바꾸면 되돌리기 지점을 없앤다(현재 동작) | 1단계 되돌리기(FR-006)는 "직전 편집"이 대상이다. GENERATE 스냅샷 되돌리기는 P1 플랜 B(FR-010)와 함께 정한다 |
+| 7 | 자정 넘김 계산 | 현재 동작으로 확정(`visit_end` 한 곳, 넘기면 출발 비움 + `DAY_OVERFLOW`) | 이미 엔진·편집이 같은 함수를 쓴다 |
+
+### 미결 사항 원문 (2026-11-15)
 
 1. **그날 첫 블록이 바뀔 때의 시작 시각**: 첫 블록 삭제, 첫 위치로의 이동 등으로 새 첫 블록이 일반 블록이면 원래 첫 블록의 도착 시각(그날 시작 시각)을 이어받는다. 새 첫 블록이 고정이면 지정 시각을 그대로 둔다. 원래 첫 블록 시각이 없으면 새 첫 블록 시각도 비운다.
 2. **그날 유일한 블록 삭제**: 그날은 빈 날이 되고 재계산 없이 투영만 한다(경로 조회 없음).

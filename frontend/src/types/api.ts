@@ -325,8 +325,9 @@ export interface AddBlockRequest extends WithSessionCoords {
    * 사용자가 정한 체류시간(분, 정수 1~1440). 보내면 공공 장소 값보다 먼저 쓴다(#18 PM 결정 4, 백엔드 #25).
    * - 서버는 기본값을 만들지 않는다. 보내지 않았는데 공공 장소 값도 없으면 400 ERR-001, `fields.stayMin`이다.
    * - `fixedWindow`와 함께 보내면 시간창 길이와 같아야 한다(다르면 400 ERR-001).
-   * - 지도(UI-06)는 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소, 서버가 `fields.stayMin`으로 알려 준 장소)에만 보낸다.
-   *   여행 시작(UI-01)의 최초 생성은 API-009 `InitialSelection.stayMin`을 쓴다.
+   * - 화면이 보내는 경우: 체류시간 근거가 없는 장소(공공 DB에 없는 카카오 장소, 서버가 `fields.stayMin`으로 알려 준 장소)에
+   *   사용자가 고른 값, 그리고 경유지 시트(UI-03)가 공공 후보를 넣을 때 API-011 후보의 `stayMin`(추천과 삽입 체류시간을 맞춘다).
+   * - 여행 시작(UI-01)의 최초 생성은 이 요청이 아니라 API-009 `InitialSelection.stayMin`을 쓴다.
    */
   stayMin?: number;
   /**

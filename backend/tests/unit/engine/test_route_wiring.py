@@ -35,7 +35,7 @@ def transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTransport:
     return recording
 
 
-@pytest.mark.parametrize("keys", [(None, None), ("", "")])
+@pytest.mark.parametrize("keys", [(None, None), ("", ""), ("   ", "\t\n")])
 def test_without_keys_routes_are_not_looked_up(keys, transport):
     provider = build_route_provider(*settings(*keys))
     assert isinstance(provider, UnconfiguredRouteProvider)
