@@ -4,7 +4,7 @@
   `{schedule, violations}` 를 돌려주고 편집 전 상태를 1단계 되돌리기 스냅샷으로 남긴다.
 - API-009 일정 생성·검증은 스냅샷을 남기지 않는다.
 - API-010 되돌리기는 직전 편집 전 상태를 다시 계산하지 않고 복원해 `{schedule}` 을 돌려준다.
-- API-011 경유지 후보 제안.
+- API-011 경유지 후보 제안. 후보 계산이 끝난 뒤 이유 문구만 LLM 으로 다듬는다(실패하면 규칙 문구, ERR-002).
 
 DELETE·undo 본문은 선택이며 카카오 좌표(`sessionCoords`)만 담는다. 모든 응답은 `Cache-Control: no-store` 이고
 오류 메시지에는 요청 값을 넣지 않는다.
@@ -13,7 +13,9 @@ DELETE·undo 본문은 선택이며 카카오 좌표(`sessionCoords`)만 담는�
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
+from starlette.concurrency import run_in_threadpool
 
+from app.modules.ai.waypoint_reason import WaypointReasonService, build_waypoint_reason_service
 from app.modules.engine.service import (
     EngineInputError,
     NeedsConfirmationError,
@@ -159,12 +161,26 @@ def generate_schedule(
         raise translate_error(exc) from None
 
 
+def waypoint_reason_service(request: Request) -> WaypointReasonService:
+    """주입한 서비스가 없으면 환경 설정(GEMINI_*)으로 한 번 만들어 재사용한다. 키가 없으면 규칙 문구 그대로다."""
+    service = getattr(request.app.state, "waypoint_reason_service", None)
+    if not isinstance(service, WaypointReasonService):
+        service = build_waypoint_reason_service()
+        request.app.state.waypoint_reason_service = service
+    return service
+
+
+Explainer = Annotated[WaypointReasonService, Depends(waypoint_reason_service)]
+
+
 @router.post("/{trip_id}/waypoints/suggest", response_model=SuggestWaypointsResponse)
-def suggest_waypoints(
-    trip_id: str, body: SuggestWaypointsRequest, response: Response, service: Service
+async def suggest_waypoints(
+    trip_id: str, body: SuggestWaypointsRequest, response: Response, service: Service, explainer: Explainer
 ) -> SuggestWaypointsResponse:
     response.headers["Cache-Control"] = "no-store"
     try:
-        return service.suggest(trip_id, body)
+        # 후보 계산(엔진·경로 조회)은 동기 코드라 스레드에서 돌린다. 이유 문구는 그 결과만 받는다(AI-REQ-03).
+        result = await run_in_threadpool(service.suggest, trip_id, body)
     except Exception as exc:
         raise translate_error(exc) from None
+    return await explainer.explain(result)

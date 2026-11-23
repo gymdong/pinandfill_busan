@@ -27,6 +27,9 @@ class AISettings(BaseSettings):
     max_output_tokens: int = Field(default=512, ge=16)
     # 사용자 입력 최대 길이(글자). 잠정값이며 프런트 한 줄 입력의 maxLength 와 같다.
     max_input_chars: int = Field(default=200, ge=1)
+    # 경유지 추천 이유 문구(API-011)에 LLM 을 기다리는 총시간(초, 재시도 포함). 넘으면 규칙 문구로 응답한다(ERR-002).
+    # 잠정값: 후보 계산이 끝난 뒤 더해지는 지연이라 짧게 둔다.
+    explain_budget_seconds: float = Field(default=4.0, gt=0)
 
     @field_validator("api_key", mode="before")
     @classmethod
