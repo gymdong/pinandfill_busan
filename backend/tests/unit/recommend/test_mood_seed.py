@@ -48,7 +48,24 @@ def test_common_sentences_find_tags(text: str, codes: set[str]):
     assert {tag.code for tag in tags} == codes
 
 
-@pytest.mark.parametrize("text", ["절벽 위 카페", "아이스크림 먹으러", "친절한 식당"])
-def test_short_words_do_not_trigger_unrelated_tags(text: str):
+@pytest.mark.parametrize(
+    ("text", "unrelated"),
+    [
+        ("절벽 위 카페", "TEMPLE"),
+        ("아이스크림 먹으러", "FAMILY"),
+        ("친절한 식당", "TEMPLE"),
+        # 부분 일치로 다른 낱말에 섞이던 '공원'·'뷰'·'전통'은 사전에서 뺐다.
+        ("놀이공원 가고 싶어", "NATURE"),
+        ("리뷰 좋은 곳", "VIEWPOINT"),
+        ("인터뷰 영상에 나온 곳", "VIEWPOINT"),
+        ("전통시장 구경", "TEMPLE"),
+    ],
+)
+def test_short_words_do_not_trigger_unrelated_tags(text: str, unrelated: str):
     tags, _ = interpret_by_rules(text, load_theme_tags())
-    assert not {"TEMPLE", "FAMILY"} & {tag.code for tag in tags}
+    assert unrelated not in {tag.code for tag in tags}
+
+
+def test_amusement_park_is_activity_only():
+    tags, _ = interpret_by_rules("놀이공원 가고 싶어", load_theme_tags())
+    assert {tag.code for tag in tags} == {"ACTIVITY"}
