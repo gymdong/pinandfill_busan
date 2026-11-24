@@ -1,5 +1,6 @@
 """API-013 분위기 추천 통합 테스트. 실제 LLM 은 부르지 않는다. 사전·장소는 직접 만든 예시다."""
 
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.modules.ai.providers.base import LlmError
 from app.modules.ai.settings import AISettings
+from app.modules.places.api_schemas import PlaceDetailPhoto
 from app.modules.recommend.mood import MoodService
 from app.modules.recommend.mood_data import MoodCandidate, StaticMoodData, ThemeTag, load_mood_data
 
@@ -110,6 +112,32 @@ def test_blocked_text_is_err_001_without_echoing_it(client):
     assert "프롬프트" not in response.text
 
 
+def test_place_has_the_primary_photo_with_source_and_license(client):
+    # FR-014: 추천 카드의 대표 사진에 출처 기관과 저작권 유형이 붙는다. 없으면 null('사진 없음')이다.
+    photo = PlaceDetailPhoto(
+        id="photo-1",
+        url="https://img.example.com/village.jpg",
+        source_org="예시 기관",
+        license_type="공공누리 제1유형",
+        is_primary=True,
+    )
+    with_photo = MoodCandidate(**{**VILLAGE.__dict__, "photo": photo})
+    no_photo = MoodCandidate(**{**VILLAGE.__dict__, "place_id": "200"})
+    settings = AISettings(_env_file=None, api_key=None)
+    client.app.state.mood_service = MoodService(settings, StaticMoodData((SEA,), (with_photo, no_photo)))
+    places = client.post("/api/recommend/mood", json={"tags": ["SEA_VIEW"], "date": "2026-11-20"}).json()["places"]
+    assert [item["photo"] for item in places] == [
+        {
+            "id": "photo-1",
+            "url": "https://img.example.com/village.jpg",
+            "sourceOrg": "예시 기관",
+            "licenseType": "공공누리 제1유형",
+            "isPrimary": True,
+        },
+        None,
+    ]
+
+
 def test_evidence_source_is_null_without_excerpt_or_org(client):
     no_org = MoodCandidate(**{**VILLAGE.__dict__, "place_id": "200", "source_org": None})
     no_text = MoodCandidate(**{**VILLAGE.__dict__, "place_id": "300", "description": None})
@@ -131,3 +159,20 @@ def test_default_app_builds_the_mood_service_from_data_files(monkeypatch: pytest
         assert isinstance(client.app.state.mood_service, MoodService)
     assert response.status_code == 200
     assert response.json() == {"tags": [], "avoid": [], "places": []}
+
+
+def test_invalid_gemini_settings_do_not_break_api_013(monkeypatch, caplog):
+    """#46 리뷰 후속: GEMINI_* 설정이 잘못돼도 500 이 아니라 사전 키워드 규칙으로 200 이다."""
+    from app.modules.recommend.mood import build_mood_service
+
+    # conftest 의 no_real_llm 이 바꿔 둔 생성기를 실제 함수로 되돌려 운영과 같은 경로를 거치게 한다.
+    monkeypatch.setattr("app.modules.recommend.mood_router.build_mood_service", build_mood_service)
+    monkeypatch.setitem(AISettings.model_config, "env_file", None)
+    monkeypatch.setenv("GEMINI_MAX_ATTEMPTS", "abc")
+
+    with caplog.at_level(logging.WARNING), TestClient(create_app(Settings(app_name="Backend test"))) as client:
+        response = client.post("/api/recommend/mood", json={"text": "조용한 바다", "date": "2026-12-05"})
+
+    assert response.status_code == 200
+    assert "ai_settings invalid component=ai_mood fields=max_attempts llm=disabled" in caplog.messages
+    assert client.app.state.mood_service._llm is None

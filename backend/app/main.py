@@ -19,6 +19,7 @@ from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
 from app.modules.places.matcher import PlaceMatcher
+from app.modules.places.photos import load_place_photos
 from app.modules.places.router import PlaceAPIError
 from app.modules.places.samples import SamplePlaceData, load_sample_places
 from app.modules.places.service import PlaceSearchService
@@ -59,7 +60,7 @@ def default_trip_service(places: SamplePlaceData) -> TripService:
 
 
 def kakao_settings() -> KakaoSettings | None:
-    """KAKAO_REST_API_KEY 가 비어 있으면 None. 장소 검색은 그때 지금처럼 503(ERR-017)이다.
+    """KAKAO_REST_API_KEY 가 없거나 비어 있으면(공백뿐인 값 포함) None. 장소 검색은 그때 지금처럼 503(ERR-017)이다.
 
     키가 아닌 설정(예: KAKAO_SEARCH_RECT)이 잘못되면 검색을 조용히 끄지 않고 앱 시작을 실패시킨다.
     """
@@ -69,7 +70,7 @@ def kakao_settings() -> KakaoSettings | None:
         if all(item["loc"] == ("rest_api_key",) for item in error.errors()):
             return None
         raise
-    return kakao if kakao.rest_api_key.get_secret_value() else None
+    return kakao
 
 
 def default_place_search_service(places: SamplePlaceData, kakao: KakaoLocalAdapter) -> PlaceSearchService:
@@ -97,7 +98,7 @@ def create_app(
         trip_service = default_trip_service(places)
     # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
     if place_detail_service is None and places is not None:
-        place_detail_service = PlaceDetailService(SamplePlaceDetails(places))
+        place_detail_service = PlaceDetailService(SamplePlaceDetails(places, load_place_photos()))
     kakao = kakao_settings() if place_search_service is None else None
 
     @asynccontextmanager

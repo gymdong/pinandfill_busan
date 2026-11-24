@@ -13,11 +13,11 @@ import {
   validateConditions,
 } from '@/features/trip-start/conditions';
 import {
-  CourseIncompleteError,
+  CourseFailedError,
+  STAY_NEEDS_CHECK,
   createCourse,
   stayRequired,
   validatePlans,
-  type CourseProgress,
   type StayAsked,
 } from '@/features/trip-start/createCourse';
 import { pinnedKey, planOf, useTripDraft, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
@@ -26,19 +26,13 @@ import styles from './TripStartPage.module.css';
 
 type InterpretStatus = 'idle' | 'loading' | 'done' | 'needsForm';
 
-/** 여행과 장소는 저장됐지만 일정 계산이 실패한 상태. 입력이 그대로일 때만 보여 준다. */
-interface PendingTrip {
-  tripId: string;
-  message: string;
-  inputKey: string;
-}
-
 const MAP_HINT = '찾는 곳이 없으면 코스를 만든 뒤 지도 보기에서 직접 고를 수 있어요.';
 
 /** UI-01 여행 시작: 여행 조건 입력(FR-002)과 꼭 갈 곳 담기(FR-001) */
 export default function TripStartPage() {
   const navigate = useNavigate();
-  const { conditions: draft, pinned, plans, setConditions, addPinned, removePinned, setPlan, reset } = useTripDraft();
+  const { conditions: draft, pinned, plans, mood, setConditions, setMood, addPinned, removePinned, setPlan, reset } =
+    useTripDraft();
   const conditions = { ...DEFAULT_CONDITIONS, ...draft };
   const days = tripDays(conditions.dates);
   const dayCount = days ?? 1;
@@ -48,20 +42,24 @@ export default function TripStartPage() {
   const [showErrors, setShowErrors] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [pending, setPending] = useState<PendingTrip | null>(null);
   const startDateRef = useRef<HTMLInputElement>(null);
-  // 장소 추가가 중간에 실패한 여행. 같은 입력으로 다시 시도하면 새 여행을 만들지 않고 이어 간다.
-  // 실패한 장소(`failedKey`)의 체류시간은 바꿔도 이어 간다(서버가 체류시간을 요구한 경우).
-  const unfinished = useRef<{ progress: CourseProgress; inputKey: string; failedKey: string } | null>(null);
-  // 서버가 체류시간 근거가 없다고 알려 준(fields.stayMin) 장소. 공공 DB 장소라도 머무를 시간을 고른다.
+  // 일정을 저장하지 못한 빈 여행. 여행 조건이 그대로면 다시 누를 때 새로 만들지 않고 이 여행에 다시 보낸다.
+  // `selectionKey`는 그때 보낸 담은 장소·계획이다. 이전 요청이 뒤늦게 저장됐을 때 그 뒤 고친 내용이 있는지 가린다.
+  const unsaved = useRef<{ tripId: string; conditionsKey: string; selectionKey: string } | null>(null);
+  // 응답을 못 받은 이전 요청이 이미 저장해서, 그 뒤 고친 내용이 반영되지 않은 여행
+  const [savedEarlier, setSavedEarlier] = useState<string | null>(null);
+  // 서버가 체류시간 근거가 없다고 알려 준(STAY_NEEDS_CHECK) 장소. 공공 DB 장소라도 머무를 시간을 고른다.
   const [stayAsked, setStayAsked] = useState<StayAsked>(new Set());
+  // 서버가 일정에 넣지 못한 장소와 그 이유(API-009 generation.unplaced). 키는 pinnedKey
+  const [unplaced, setUnplaced] = useState<Record<string, string>>({});
 
-  // 여행 기간을 줄이면 사라진 일차에 둔 장소는 마지막 날로 옮겨 보여 준다.
+  // 당일 여행은 1일차뿐이다. 여행 기간을 줄이면 사라진 일차에 둔 장소는 마지막 날로 옮겨 보여 준다.
   const effectivePlans = useMemo(() => {
     const entries = pinned.map((place) => {
       const key = pinnedKey(place);
       const plan = planOf(plans, key);
-      return [key, { ...plan, dayNo: Math.min(Math.max(plan.dayNo, 1), dayCount) }] as const;
+      const dayNo = dayCount === 1 ? 1 : plan.dayNo === null ? null : Math.min(Math.max(plan.dayNo, 1), dayCount);
+      return [key, { ...plan, dayNo }] as const;
     });
     return Object.fromEntries(entries) as Record<string, PinnedPlan>;
   }, [pinned, plans, dayCount]);
@@ -70,13 +68,18 @@ export default function TripStartPage() {
   const validation = validateConditions(draft);
   const errors = showErrors && !validation.ok ? validation.errors : {};
   const planErrors = showErrors ? validatePlans(pinned, effectivePlans, dayCount, stayAsked) : {};
-  const inputKeyOf = (ignoreStayOf?: string) => JSON.stringify([
-    draft,
-    pinned.map(pinnedKey),
-    ignoreStayOf ? { ...effectivePlans, [ignoreStayOf]: { ...effectivePlans[ignoreStayOf], stayMin: null } } : effectivePlans,
-  ]);
-  const inputKey = inputKeyOf();
-  const pendingTrip = pending?.inputKey === inputKey ? pending : null;
+  const conditionsKey = JSON.stringify(validation.ok ? validation.value : draft);
+  const selectionKey = JSON.stringify([pinned.map(pinnedKey), effectivePlans]);
+
+  // 장소의 계획을 고치거나 빼면 그 장소의 미배치 이유는 지난 결과라 지운다.
+  function clearUnplaced(key: string) {
+    setUnplaced((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
 
   async function interpret(event: FormEvent) {
     event.preventDefault();
@@ -117,24 +120,38 @@ export default function TripStartPage() {
       return;
     }
     setSubmitting(true);
+    setUnplaced({});
+    // 여행 조건이 그대로일 때만 저장하지 못한 빈 여행을 다시 쓴다. 담은 장소·계획은 전체를 다시 보낸다.
+    const retryTripId = unsaved.current?.conditionsKey === conditionsKey ? unsaved.current.tripId : undefined;
     try {
-      const last = unfinished.current;
-      const resume = last && last.inputKey === inputKeyOf(last.failedKey) ? last.progress : undefined;
-      const { tripId, scheduleError } = await createCourse(validation.value, pinned, effectivePlans, resume, stayAsked);
-      unfinished.current = null;
-      if (scheduleError) setPending({ tripId, message: scheduleError.message, inputKey });
-      else goToTimeline(tripId);
-    } catch (error) {
-      if (error instanceof CourseIncompleteError) {
-        unfinished.current = { progress: error.progress, inputKey: inputKeyOf(error.failedKey), failedKey: error.failedKey };
-        if (error.apiError.fields?.stayMin) {
-          // 서버가 그 장소의 체류시간을 정할 수 없다고 하면 머무를 시간 칸을 띄운다(#18 PM 결정 4).
-          const failedKey = error.failedKey;
-          setStayAsked((prev) => new Set(prev).add(failedKey));
+      const outcome = await createCourse(validation.value, pinned, effectivePlans, { retryTripId, asked: stayAsked });
+      if (outcome.kind === 'saved') {
+        const sentBefore = unsaved.current?.selectionKey;
+        unsaved.current = null;
+        if (outcome.earlier && sentBefore !== selectionKey) {
+          // 이전 요청이 이미 저장해서 방금 고친 내용은 보내지 않았다. 조용히 이동하지 않고 알린다.
+          setSavedEarlier(outcome.tripId);
+          return;
         }
-        setSubmitError(`${error.apiError.message} 다시 누르면 남은 장소부터 이어서 담아요.`);
+        goToTimeline(outcome.tripId);
+        return;
+      }
+      unsaved.current = { tripId: outcome.tripId, conditionsKey, selectionKey };
+      setUnplaced(Object.fromEntries(Object.entries(outcome.reasons).map(([key, reason]) => [key, reason.cause])));
+      // 체류시간 근거가 없어 넣지 못한 장소는 공공 DB 장소라도 머무를 시간을 고르게 한다(#18 PM 결정 4).
+      const needStay = Object.entries(outcome.reasons).filter(([, reason]) => reason.type === STAY_NEEDS_CHECK);
+      if (needStay.length > 0) setStayAsked((prev) => new Set([...prev, ...needStay.map(([key]) => key)]));
+      setSubmitError(
+        Object.keys(outcome.reasons).length > 0
+          ? '일정에 넣지 못한 장소가 있어 아직 저장하지 않았어요. 표시된 장소를 고친 뒤 다시 눌러 주세요.'
+          : '일정을 저장하지 못했어요. 장소나 시간을 바꿔 다시 눌러 주세요.',
+      );
+    } catch (error) {
+      if (error instanceof CourseFailedError) {
+        unsaved.current = { tripId: error.tripId, conditionsKey, selectionKey };
+        setSubmitError(`${error.apiError.message} 다시 누르면 같은 여행으로 이어서 만들어요.`);
       } else {
-        unfinished.current = null;
+        unsaved.current = null;
         setSubmitError(toApiError(error).message);
       }
     } finally {
@@ -292,9 +309,15 @@ export default function TripStartPage() {
                   askStay={stayRequired(place, stayAsked)}
                   dayCount={dayCount}
                   startDate={conditions.dates?.start}
-                  error={planErrors[key]}
-                  onPlan={(plan) => setPlan(key, plan)}
-                  onRemove={() => removePinned(key)}
+                  error={planErrors[key] ?? unplaced[key]}
+                  onPlan={(plan) => {
+                    setPlan(key, plan);
+                    clearUnplaced(key);
+                  }}
+                  onRemove={() => {
+                    removePinned(key);
+                    clearUnplaced(key);
+                  }}
                 />
               );
             })}
@@ -309,20 +332,32 @@ export default function TripStartPage() {
         />
 
         <Link className={styles.moodLink} to={paths.moodSearch()}>
-          <span>원하는 분위기로 찾기</span>
+          <span>{mood ? '고른 분위기 바꾸기' : '원하는 분위기로 찾기'}</span>
           <span aria-hidden="true">›</span>
         </Link>
+        {mood && (
+          <div className={styles.mood} role="group" aria-label="고른 분위기">
+            <p className={styles.moodLabels}>
+              {[...mood.tags.map((tag) => tag.label), ...mood.avoid].join(' · ')}
+            </p>
+            <button type="button" className={styles.moodClear} onClick={() => setMood(null)}>
+              분위기 지우기
+            </button>
+          </div>
+        )}
       </section>
 
       <footer className={styles.footer}>
-        {submitError && <Banner tone="warn">{submitError}</Banner>}
-        {pendingTrip ? (
+        {savedEarlier ? (
           <>
-            <Banner tone="warn" title="여행은 만들었지만 일정 계산을 마치지 못했어요">{pendingTrip.message}</Banner>
-            <Button block onClick={() => goToTimeline(pendingTrip.tripId)}>타임라인에서 확인하기</Button>
+            <Banner tone="warn" title="이전 요청으로 코스가 이미 만들어졌어요">
+              응답을 받지 못했던 요청이 먼저 저장돼, 그 뒤 고친 내용은 반영되지 않았어요. 타임라인에서 고쳐 주세요.
+            </Banner>
+            <Button block onClick={() => goToTimeline(savedEarlier)}>타임라인에서 확인하기</Button>
           </>
         ) : (
           <>
+            {submitError && <Banner tone="warn">{submitError}</Banner>}
             <p className={styles.footerNote}>
               {pinned.length === 0 ? '꼭 갈 곳을 1곳 이상 담으면 코스를 만들 수 있어요' : '사이 구간의 경유지는 코스를 만든 뒤에 찾아요'}
             </p>
@@ -359,9 +394,12 @@ function PinnedItem({ place, plan, askStay, dayCount, startDate, error, onPlan, 
           <select
             className={styles.field}
             aria-label={`${place.name} 방문 일차`}
-            value={plan.dayNo}
-            onChange={(event) => onPlan({ dayNo: Number(event.target.value) })}
+            aria-invalid={Boolean(error)}
+            value={plan.dayNo ?? ''}
+            onChange={(event) => onPlan({ dayNo: event.target.value ? Number(event.target.value) : null })}
           >
+            {/* 일차를 비우면 서버가 여행 기간의 날짜를 차례로 시도한다(API-009 최초 생성). */}
+            <option value="">일차 알아서</option>
             {Array.from({ length: dayCount }, (_, index) => {
               const date = dayDate(startDate, index + 1);
               return <option key={index} value={index + 1}>{index + 1}일차{date ? ` · ${formatDate(date)}` : ''}</option>;

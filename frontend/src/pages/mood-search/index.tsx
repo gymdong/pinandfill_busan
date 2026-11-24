@@ -34,21 +34,34 @@ function toPinned({ place }: MoodPlace): PinnedPlace {
  */
 export default function MoodSearchPage() {
   const navigate = useNavigate();
-  const { conditions, pinned, addPinned, removePinned } = useTripDraft();
+  const { conditions, pinned, mood: savedMood, addPinned, removePinned, setMood } = useTripDraft();
   const date = referenceDate(conditions.dates?.start);
 
+  // 전에 고른 분위기가 있으면 그 칩을 켠 채로 시작한다(UI-01에서 돌아와 고칠 수 있게).
+  const [restored] = useState(savedMood);
   const [text, setText] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState<string | null>(null);
-  const [tags, setTags] = useState<ThemeTag[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [avoid, setAvoid] = useState<string[]>([]);
-  const [avoidOn, setAvoidOn] = useState<string[]>([]);
+  const [tags, setTags] = useState<ThemeTag[]>(restored?.tags ?? []);
+  const [selected, setSelected] = useState<string[]>(restored?.tags.map((tag) => tag.code) ?? []);
+  const [avoid, setAvoid] = useState<string[]>(restored?.avoid ?? []);
+  const [avoidOn, setAvoidOn] = useState<string[]>(restored?.avoid ?? []);
   const [places, setPlaces] = useState<MoodPlace[]>([]);
   const [pickedHere, setPickedHere] = useState<string[]>([]);
   const controller = useRef<AbortController | null>(null);
 
   useEffect(() => () => controller.current?.abort(), []);
+
+  // 되살린 칩으로 추천을 한 번 다시 받는다. 처음 그릴 때만 부른다.
+  useEffect(() => {
+    if (restored) void recommend(restored.tags.map((tag) => tag.code), restored.avoid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 화면을 열 때 한 번만 부른다.
+  }, []);
+
+  /** 켜진 칩을 여행 조건에 저장한다(FR-015: 해석된 태그를 일정·경유지 추천에 함께 쓴다). */
+  function saveMood(allTags: ThemeTag[], codes: string[], avoidList: string[]) {
+    setMood({ tags: allTags.filter((tag) => codes.includes(tag.code)), avoid: avoidList });
+  }
 
   function begin(next: Status): AbortSignal {
     controller.current?.abort();
@@ -98,6 +111,7 @@ export default function MoodSearchPage() {
       setSelected(codes);
       setAvoid(response.avoid);
       setAvoidOn(response.avoid);
+      saveMood(response.tags, codes, response.avoid);
       await recommend(codes, response.avoid);
     } catch (error) {
       if (signal.aborted) return;
@@ -109,12 +123,14 @@ export default function MoodSearchPage() {
   function toggleTag(code: string) {
     const next = selected.includes(code) ? selected.filter((item) => item !== code) : [...selected, code];
     setSelected(next);
+    saveMood(tags, next, avoidOn);
     void recommend(next, avoidOn);
   }
 
   function toggleAvoid(item: string) {
     const next = avoidOn.includes(item) ? avoidOn.filter((value) => value !== item) : [...avoidOn, item];
     setAvoidOn(next);
+    saveMood(tags, selected, next);
     void recommend(selected, next);
   }
 

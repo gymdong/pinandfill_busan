@@ -7,6 +7,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.modules.ai.interpret import InterpretService, build_interpret_service
 from app.modules.ai.settings import AISettings
+from app.modules.ai.waypoint_reason import WaypointReasonService, build_waypoint_reason_service
 from app.modules.recommend.mood import MoodService, build_mood_service
 from app.modules.recommend.mood_data import MoodDataProvider
 
@@ -27,6 +28,11 @@ def no_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
         return build_mood_service(data, AISettings(_env_file=None, api_key=None))
 
     monkeypatch.setattr("app.modules.recommend.mood_router.build_mood_service", mood_rules_only)
+
+    def reasons_rules_only() -> WaypointReasonService:
+        return build_waypoint_reason_service(AISettings(_env_file=None, api_key=None))
+
+    monkeypatch.setattr("app.modules.trips.router.build_waypoint_reason_service", reasons_rules_only)
 
 
 @pytest.fixture(autouse=True)

@@ -74,7 +74,7 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
     </fieldset>
     {loaded.status === 'loading' && <p role="status">경유지를 찾는 중…</p>}
     {loaded.status === 'error' && <div role="alert">
-      <p>경유지를 불러오지 못했어요. {loaded.error.message}</p>
+      <p>경유지를 불러오지 못했어요. {toApiError(loaded.error).message}</p>
       <Button variant="outline" disabled={busy} onClick={loaded.reload}>다시 시도</Button>
     </div>}
     {loaded.status === 'success' && candidates.length === 0 && <div role="status">

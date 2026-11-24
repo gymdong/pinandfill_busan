@@ -1,7 +1,9 @@
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.secrets import blank_key_is_no_key
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
@@ -15,6 +17,7 @@ class TMAPSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TMAP_", env_file=BACKEND_DIR / ".env", extra="ignore")
 
     api_key: SecretStr | None = None
+    _normalize_key = field_validator("api_key", mode="before")(blank_key_is_no_key)
     timeout_seconds: float = Field(default=5.0, gt=0)
     # 프로세스 안 하루 호출 상한. 잠정값이며 발급받은 요금제 한도에 맞춘다.
     daily_call_limit: int = Field(default=1000, ge=0)
@@ -26,6 +29,7 @@ class ODsaySettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ODSAY_", env_file=BACKEND_DIR / ".env", extra="ignore")
 
     api_key: SecretStr | None = None
+    _normalize_key = field_validator("api_key", mode="before")(blank_key_is_no_key)
     timeout_seconds: float = Field(default=5.0, gt=0)
     # 잠정값이며 발급받은 요금제 한도에 맞춘다.
     daily_call_limit: int = Field(default=1000, ge=0)

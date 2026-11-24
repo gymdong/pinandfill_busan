@@ -31,7 +31,7 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 }
 ```
 
-- `selections`는 비어 있지 않아야 하며 `clientId`는 요청 안에서 유일한 비어 있지 않은 문자열이다.
+- `selections`는 1~30개이며(30은 잠정 상한, `MAX_INITIAL_SELECTIONS`) `clientId`는 요청 안에서 유일한 1~64자 문자열이다(공공 `placeId`도 64자 상한, 잠정).
   화면의 선택 항목 식별용으로만 사용한다. 서버 블록 ID는 각 선택에 새 UUID를 발급한다.
 - `place`는 기존 API-006과 같은 PUBLIC ID 또는 KAKAO ID·URL 형식이다. 이름·좌표를 넣지 않는다.
 - `dayNo`는 선택 사항이다. 없으면 여행 기간의 날짜를 순서대로 시도한다. 있으면 해당 날짜에만 배치한다.
@@ -61,7 +61,8 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
   "generation": {
     "saved": false,
     "confirmed": false,
-    "unplaced": [{"clientId": "selection-2", "reason": {"type": "STAY_NEEDS_CHECK", "cause": "체류시간 근거 확인이 필요합니다."}}]
+    "unplaced": [{"clientId": "selection-2", "reason": {"type": "STAY_NEEDS_CHECK", "cause": "체류시간 근거 확인이 필요합니다."}}],
+    "previewClientIds": {}
   }
 }
 ```
@@ -72,6 +73,7 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 | `generation.saved` | 모두 배치되고 고정 시각 수락 검사를 통과해 저장됐는지 여부. |
 | `generation.confirmed` | 정보 부족·경고 없이 엔진이 확정했는지 여부. 저장 여부와 별개다. |
 | `generation.unplaced` | 미배치 선택의 `clientId`와 `reason`(기존 Violation 구조). |
+| `generation.previewClientIds` | `saved=false`일 때만 채운다. 미리보기의 서버 블록 ID(`days[].blocks[].id`, `conflicts[].blockIds`) → 요청 `clientId`. 같은 장소를 여러 번 고른 선택을 구분하는 응답 전용 매핑이며 저장하지 않는다. `saved=true`이면 `{}`. 추가 필드라 무시해도 된다. |
 
 모두 배치되면 `unplaced: []`이다. 경로 또는 운영시간 미확인 때문에 `confirmed=false`여도 저장할 수 있다.
 고정 시각 충돌은 기존 `409 / ERR-009`로 거절하며 저장하지 않는다.
@@ -85,18 +87,42 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 가짜 0분·거리·ESTIMATED 구간을 만들지 않는다. 후속 유연 장소의 시각을 정할 수 없으면 미배치될 수 있다.
 영업시간이 미확인인 PUBLIC/KAKAO 장소는 체류시간 등 배치 근거가 있다면 배치하고 `HOURS_NEEDS_CHECK`를 남긴다.
 
+## 계산 상한(잠정)
+
+| 상한 | 값 | 초과 시 |
+|---|---|---|
+| `selections` 개수 (`MAX_INITIAL_SELECTIONS`, `app/modules/trips/schemas.py`) | 30 | `400 / ERR-001` |
+| 요청 하나의 경로 조회 횟수 (`MAX_ROUTE_LOOKUPS_PER_PLAN`, `app/modules/engine/initial.py`) | 300 | 남은 유연 선택은 더 시도하지 않고 `PLACEMENT_NEEDS_CHECK`로 미배치(`saved=false`) |
+
+경로 조회 횟수는 요청 내 메모에 없는 조회(공급자 호출 시도)만 센다. 실패한 호출도 센다.
+고정 선택만으로 상한에 닿으면 고정 선택을 버릴 수 없으므로 `503 / ERR-017`이다(30개 상한 아래에서는 도달하지 않는다).
+두 값은 PM 잠정 기본값(2026-11-22)이며 실제 공급자 쿼터·지연 측정 후 조정한다.
+
 ## 오류
 
-오류 형식은 기존 `{ "error": { "id": "...", "message": "..." } }`이다. 요청 원문·좌표·공급자 예외는 포함하지 않는다.
+오류 형식은 기존 `{ "error": { "id": "...", "message": "...", "fields"?: { "<키>": "<안내 문구>" } } }`이다.
+요청 원문·좌표·공급자 예외는 포함하지 않는다.
 
 | HTTP / ID | 조건 |
 |---|---|
 | 400 / ERR-001 | 잘못된 입력, 중복 clientId, 범위 밖 날짜, dayNo/fixedWindow 모순, initial/options 동시 사용, 비어 있지 않은 일정 덮어쓰기 |
 | 404 / ERR-016 | 여행 없음 |
-| 409 / ERR-009 | 고정 방문시각 또는 고정 순서 충돌로 저장 불가 |
+| 400 / ERR-001 | `selections` 31개 이상 |
+| 409 / ERR-009 | 고정 방문시각 또는 고정 순서 충돌로 저장 불가. `fields`에 충돌한 선택마다 `"selections.<clientId>": "<안내 문구>"`를 싣는다(요청 순서) |
 | 503 / ERR-017 | 장소 표시 정보 확인 불가, 공급자/저장소 처리 실패 또는 초기 생성 서비스 미주입 |
 
 응답은 `Cache-Control: no-store`다. 에러 메시지 문자열에 의존하지 말고 HTTP 상태와 ID로 처리한다.
+
+409 예시 — 두 번째 고정 선택이 첫 고정 선택 뒤 이동시간 때문에 지정 시각을 지킬 수 없다:
+
+```json
+{"error": {"id": "ERR-009", "message": "고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요.",
+  "fields": {"selections.selection-b": "고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요."}}}
+```
+
+`fields` 값은 기존 ERR-001처럼 문자열이다(프런트 `ApiError.fields: Record<string, string>` 유지).
+`selections.` 접두사를 뗀 나머지가 `clientId`다. 서버 블록 UUID는 오류에 싣지 않는다.
+편집 API(006/007/008)의 409는 `fields` 없이 그대로다.
 
 ## 프런트 연결 인수인계 — 박범찬
 
@@ -108,7 +134,7 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 1. `createCourse`에서 API-002 성공 후 API-006 반복 대신 API-009 `initial`을 한 번 호출한다.
 2. 기존 장소 선택 목록의 안정적인 항목 키를 `clientId`로 보낸다. 방문시각 없는 장소에 `isFixed`를 붙이지 않는다.
 3. 체류시간 근거가 없는 장소는 사용자가 입력하게 한다. 카카오 이름은 화면 메모리에만 두고 요청에서는 제외한다.
-4. 응답 타입은 `Schedule & { generation: { saved: boolean; confirmed: boolean; unplaced: {clientId: string; reason: Violation}[] } }`로 확장한다.
+4. 응답 타입은 `Schedule & { generation: { saved: boolean; confirmed: boolean; unplaced: {clientId: string; reason: Violation}[]; previewClientIds: Record<string, string> } }`로 확장한다.
    일반 재계산은 여전히 Schedule만 반환한다.
 5. `saved=true`일 때 일정 화면으로 진행한다. `confirmed=false`이면 확인 필요 경고를 유지한다.
 6. `saved=false`일 때 생성 완료로 처리하지 않는다. `unplaced[].clientId`로 선택 항목에 사유를 보여주고 수정 후 재요청한다.
@@ -134,7 +160,10 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 DB 단계의 일정·스냅샷·revision 트랜잭션은 PM 결정대로 후속 작업이다.
 
 `sessionCoords`는 계산 컨텍스트에만 전달한다. KAKAO 블록·스냅샷·응답에는 ID·URL만 남는다.
-`clientId`는 요청 내 매핑에만 사용하며 영속 블록 식별자로 쓰지 않는다.
+`clientId`는 요청 내 매핑에만 사용하며 영속 블록 식별자로 쓰지 않는다. 409 `fields`와 `previewClientIds`에만 실린다.
+장소·체류시간 공급자 예외는 `initial_place_lookup` / `initial_stay_lookup` / `initial_tag_stay_lookup` 경고 로그로 남기되
+예외 타입과 공공 장소 ID만 쓴다(NFR-010: 좌표·키·응답 본문·사용자 입력 없음).
+저장 실패 보상 중 복원 읽기·쓰기가 실패하면 `trip_generation restore_failed` 경고(예외 타입만)를 남기고 원래 예외를 그대로 올린다.
 실제 외부 API 호출, 공공 DB, API-011 기본 후보 공급자, UI-03 연결, 날짜 분리 제안은 검증/구현 범위 밖이다.
 
 ## 검증 명령
@@ -155,3 +184,6 @@ uv run --with mypy mypy app
 Ruff 검사 통과, 포맷 113개 파일 통과, mypy Python 3.12 대상으로 app 66개 소스 통과.
 mypy 도구는 기존 별도 환경에서 Python 3.12 인터프리터를 지정해 실행했다.
 Starlette TestClient의 httpx 사용 중단 예정 경고 1건이 있으며 기존 잠금 의존성은 변경하지 않았다.
+
+2026-11-23 리뷰 반영(실패 로그에 장소 ID 대신 종류만, 일정·이력 복원 독립 보호, ID 64자 상한) 검증: 로컬 Python 3.12에서 전체 867 passed,
+Ruff 검사·포맷(120개 파일) 통과, `uv run --with mypy mypy app` 69개 소스 통과.

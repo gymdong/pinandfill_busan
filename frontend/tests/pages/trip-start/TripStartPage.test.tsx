@@ -4,9 +4,10 @@ import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, clearKakaoSession, getKakaoPlace, placesApi, tripsApi } from '@/api';
 import { searchItems } from '@/api/mock/fixtures/places';
-import { schedule } from '@/api/mock/fixtures/schedule';
+import { schedule, trip } from '@/api/mock/fixtures/schedule';
 import TripStartPage from '@/pages/trip-start';
 import { useTripDraft } from '@/store/tripDraft';
+import type { InitialScheduleResponse } from '@/types/api';
 
 function Timeline() {
   return <p>타임라인 {useParams().tripId}</p>;
@@ -42,11 +43,17 @@ async function pinAllSearchResults({ stay = '90' }: { stay?: string | null } = {
   if (stay) await userEvent.selectOptions(screen.getByLabelText(`${searchItems[2]!.name} 머무를 시간`), stay);
 }
 
+function generated(saved: boolean, unplaced: InitialScheduleResponse['generation']['unplaced'] = []): InitialScheduleResponse {
+  return { ...schedule, generation: { saved, confirmed: false, unplaced } };
+}
+
 function mockCourseApis() {
   return {
     create: vi.spyOn(tripsApi, 'create').mockResolvedValue({ tripId: 't9', sessionKey: 'k' }),
-    addBlock: vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] }),
-    generate: vi.spyOn(tripsApi, 'generateSchedule').mockResolvedValue(schedule),
+    initial: vi.spyOn(tripsApi, 'createInitialSchedule').mockResolvedValue(generated(true)),
+    // 다시 시도할 때 이전 요청이 저장됐는지 확인하는 여행 조회(API-026). 기본은 빈 일정이다.
+    get: vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule: { days: [], violations: [], conflicts: [] } }),
+    addBlock: vi.spyOn(tripsApi, 'addBlock'),
   };
 }
 
@@ -130,7 +137,7 @@ describe('UI-01 여행 시작', () => {
       expect(screen.queryByRole('button', { name: '민락회타운 빼기' })).not.toBeInTheDocument();
     });
 
-    it('당일 여행에는 일차 선택을 두지 않고, 여러 날이면 날짜와 함께 고르게 한다', async () => {
+    it("당일 여행에는 일차 선택을 두지 않고, 여러 날이면 '알아서'와 날짜를 고르게 한다", async () => {
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults();
@@ -138,16 +145,19 @@ describe('UI-01 여행 시작', () => {
 
       setDates('2026-10-17', '2026-10-18');
       const select = screen.getByLabelText('민락수변공원 방문 일차');
+      // 기본은 '알아서'다. 서버가 여행 기간의 날짜를 차례로 시도한다.
+      expect(select).toHaveValue('');
       expect(within(select).getAllByRole('option').map((option) => option.textContent)).toEqual([
+        '일차 알아서',
         '1일차 · 10월 17일 (토)',
         '2일차 · 10월 18일 (일)',
       ]);
     });
   });
 
-  describe('코스 만들기', () => {
-    it('조건과 담은 장소를 보내고 타임라인으로 이동하며 임시 상태를 비운다', async () => {
-      const { create, addBlock, generate } = mockCourseApis();
+  describe('코스 만들기 (API-002 → API-009 최초 생성)', () => {
+    it('조건과 담은 장소 전체를 한 번에 보내고, 저장되면 타임라인으로 이동하며 임시 상태를 비운다', async () => {
+      const { create, initial, addBlock } = mockCourseApis();
       renderPage();
       setDates('2026-10-17', '2026-10-18');
       await pinAllSearchResults();
@@ -164,24 +174,28 @@ describe('UI-01 여행 시작', () => {
         dayEnd: '19:00',
         mode: 'TRANSIT',
       });
-      expect(addBlock.mock.calls.map(([, body]) => body)).toEqual([
-        { dayNo: 1, place: { placeId: searchItems[0]!.placeId }, origin: 'USER', isFixed: false },
+      expect(initial).toHaveBeenCalledTimes(1);
+      expect(initial.mock.calls[0]!.slice(0, 2)).toEqual([
+        't9',
         {
-          dayNo: 2,
-          place: { placeId: searchItems[1]!.placeId },
-          origin: 'USER',
-          isFixed: true,
-          fixedWindow: { dayNo: 2, start: '12:00', end: '13:30' },
-        },
-        {
-          dayNo: 1,
-          place: { kakaoPlaceId: searchItems[2]!.kakaoPlaceId, placeUrl: searchItems[2]!.placeUrl },
-          origin: 'USER',
-          stayMin: 90,
-          isFixed: false,
+          policy: 'FIRST_FEASIBLE',
+          selections: [
+            { clientId: `public:${searchItems[0]!.placeId}`, place: { placeId: searchItems[0]!.placeId } },
+            {
+              clientId: `public:${searchItems[1]!.placeId}`,
+              place: { placeId: searchItems[1]!.placeId },
+              dayNo: 2,
+              fixedWindow: { dayNo: 2, start: '12:00', end: '13:30' },
+            },
+            {
+              clientId: `kakao:${searchItems[2]!.kakaoPlaceId}`,
+              place: { kakaoPlaceId: searchItems[2]!.kakaoPlaceId, placeUrl: searchItems[2]!.placeUrl },
+              stayMin: 90,
+            },
+          ],
         },
       ]);
-      expect(generate).toHaveBeenCalledWith('t9');
+      expect(addBlock).not.toHaveBeenCalled();
       expect(useTripDraft.getState().pinned).toEqual([]);
       // 타임라인에서 카카오 장소 이름을 보여 줄 수 있게 접속 메모리는 남긴다.
       expect(getKakaoPlace(searchItems[2]!.kakaoPlaceId)).not.toBeNull();
@@ -219,8 +233,23 @@ describe('UI-01 여행 시작', () => {
       await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     });
 
+    it("여러 날 여행에서 시간을 정한 장소의 일차가 '알아서'면 일차를 고르게 한다", async () => {
+      const { create } = mockCourseApis();
+      renderPage();
+      setDates('2026-10-17', '2026-10-18');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getAllByRole('button', { name: '시간 정하기' })[0]!);
+      fireEvent.change(screen.getByLabelText('민락수변공원 도착 시각'), { target: { value: '10:00' } });
+      fireEvent.change(screen.getByLabelText('민락수변공원 출발 시각'), { target: { value: '11:00' } });
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+
+      expect(screen.getByText('시간을 정한 장소는 일차를 골라 주세요.')).toBeInTheDocument();
+      expect(screen.getByLabelText('민락수변공원 방문 일차')).toHaveAttribute('aria-invalid', 'true');
+      expect(create).not.toHaveBeenCalled();
+    });
+
     it('공공 DB에 없는 카카오 장소는 머무를 시간을 고르지 않으면 요청하지 않는다(#18 PM 결정 4)', async () => {
-      const { create, addBlock } = mockCourseApis();
+      const { create, initial } = mockCourseApis();
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults({ stay: null });
@@ -238,12 +267,12 @@ describe('UI-01 여행 시작', () => {
       await userEvent.selectOptions(stay, '120');
       expect(screen.queryByText('머무를 시간을 골라 주세요.')).not.toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
-      await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-      expect(addBlock.mock.calls.at(-1)![1]).toMatchObject({ stayMin: 120, isFixed: false });
+      await waitFor(() => expect(initial).toHaveBeenCalledTimes(1));
+      expect(initial.mock.calls[0]![1].selections[2]).toMatchObject({ stayMin: 120 });
     });
 
     it('카카오 장소의 시간을 정하면 머무를 시간 칸 없이 그 시간을 체류시간으로 보낸다', async () => {
-      const { addBlock } = mockCourseApis();
+      const { initial } = mockCourseApis();
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults({ stay: null });
@@ -254,12 +283,16 @@ describe('UI-01 여행 시작', () => {
       fireEvent.change(screen.getByLabelText(`${name} 출발 시각`), { target: { value: '16:30' } });
 
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
-      await waitFor(() => expect(addBlock).toHaveBeenCalledTimes(3));
-      expect(addBlock.mock.calls[2]![1]).toMatchObject({ stayMin: 90, isFixed: true });
+      await waitFor(() => expect(initial).toHaveBeenCalledTimes(1));
+      // 당일 여행이라 일차는 1일차로 정해진다.
+      expect(initial.mock.calls[0]![1].selections[2]).toMatchObject({
+        stayMin: 90,
+        fixedWindow: { dayNo: 1, start: '15:00', end: '16:30' },
+      });
     });
 
     it('여행 기간을 줄이면 사라진 일차의 장소는 마지막 날로 보낸다', async () => {
-      const { addBlock } = mockCourseApis();
+      const { initial } = mockCourseApis();
       renderPage();
       setDates('2026-10-17', '2026-10-19');
       await pinAllSearchResults();
@@ -269,7 +302,7 @@ describe('UI-01 여행 시작', () => {
 
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
       await screen.findByText('타임라인 t9');
-      expect(addBlock.mock.calls[0]![1]).toMatchObject({ dayNo: 2 });
+      expect(initial.mock.calls[0]![1].selections[0]).toMatchObject({ dayNo: 2 });
     });
 
     it('여행 생성이 실패하면 오류를 보여 주고 입력을 그대로 둔다', async () => {
@@ -285,37 +318,15 @@ describe('UI-01 여행 시작', () => {
       expect(screen.getByRole('button', { name: '코스 만들기' })).toBeEnabled();
     });
 
-    it('장소 추가가 중간에 실패한 뒤 다시 누르면 같은 여행에 남은 장소만 이어서 담는다', async () => {
-      const { create, addBlock } = mockCourseApis();
-      addBlock
-        .mockResolvedValueOnce({ schedule, violations: [] })
-        .mockRejectedValueOnce(new ApiError({ id: 'NETWORK' }))
-        .mockResolvedValue({ schedule, violations: [] });
-      renderPage();
-      setDates('2026-10-17', '2026-10-17');
-      await pinAllSearchResults();
-      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
-      expect(await screen.findByRole('alert')).toHaveTextContent('다시 누르면 남은 장소부터 이어서 담아요');
-
-      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
-      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
-      expect(create).toHaveBeenCalledTimes(1);
-      // 첫 장소는 한 번만, 실패한 둘째 장소는 다시, 셋째 장소는 처음 보낸다.
-      expect(addBlock.mock.calls.map(([tripId, body]) => [tripId, body.place])).toEqual([
-        ['t9', { placeId: searchItems[0]!.placeId }],
-        ['t9', { placeId: searchItems[1]!.placeId }],
-        ['t9', { placeId: searchItems[1]!.placeId }],
-        ['t9', { kakaoPlaceId: searchItems[2]!.kakaoPlaceId, placeUrl: searchItems[2]!.placeUrl }],
-      ]);
-    });
-
-    it('서버가 공공 DB 장소의 체류시간을 요구하면(fields.stayMin) 그 장소에 머무를 시간을 고르게 하고 이어서 담는다', async () => {
-      const { create, addBlock } = mockCourseApis();
-      const message = '체류시간을 정할 수 없는 장소예요. 머무를 시간을 골라 주세요.';
-      addBlock
-        .mockResolvedValueOnce({ schedule, violations: [] })
-        .mockRejectedValueOnce(new ApiError({ id: 'ERR-001', status: 400, message, fields: { stayMin: message } }))
-        .mockResolvedValue({ schedule, violations: [] });
+    it('넣지 못한 장소가 있으면 저장하지 않고 그 장소에 이유를 보여 주며, 고친 뒤 같은 여행에 다시 보낸다', async () => {
+      const { create, initial } = mockCourseApis();
+      const reason = { type: 'STAY_NEEDS_CHECK', cause: '체류시간 근거 확인이 필요합니다.' };
+      const publicKey = `public:${searchItems[1]!.placeId}`;
+      const other = { type: 'DAY_FULL', cause: '하루 일정 안에 넣을 수 없습니다.' };
+      initial.mockResolvedValueOnce(generated(false, [
+        { clientId: `public:${searchItems[0]!.placeId}`, reason: other },
+        { clientId: publicKey, reason },
+      ]));
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults();
@@ -324,31 +335,46 @@ describe('UI-01 여행 시작', () => {
       expect(screen.queryByLabelText(`${name} 머무를 시간`)).not.toBeInTheDocument();
 
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
-      expect(await screen.findByText(new RegExp(message))).toBeInTheDocument();
-      const stay = screen.getByLabelText(`${name} 머무를 시간`);
-      expect(stay).toHaveValue('');
-      expect(screen.getByText('머무를 시간을 골라 주세요.')).toBeInTheDocument();
-
-      // 고르지 않고 다시 누르면 요청하지 않는다.
-      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
-      expect(addBlock).toHaveBeenCalledTimes(2);
+      expect(await screen.findByText(/일정에 넣지 못한 장소가 있어 아직 저장하지 않았어요/)).toBeInTheDocument();
+      // 넣지 못한 장소에는 서버가 준 이유를 보여 준다.
+      const first = screen.getByRole('button', { name: `${searchItems[0]!.name} 빼기` }).closest('li')!;
+      expect(within(first).getByText(other.cause)).toBeInTheDocument();
+      // 체류시간 근거가 없다고 한 장소에는 머무를 시간 칸과 할 일을 보여 준다(#18 PM 결정 4).
+      const item = screen.getByRole('button', { name: `${name} 빼기` }).closest('li')!;
+      expect(within(item).getByText('머무를 시간을 골라 주세요.')).toBeInTheDocument();
+      const stay = within(item).getByLabelText(`${name} 머무를 시간`);
+      expect(screen.queryByText('타임라인 t9')).not.toBeInTheDocument();
 
       await userEvent.selectOptions(stay, '60');
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
       expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
-      // 체류시간만 바꿨으므로 새 여행을 만들지 않고 실패한 장소부터 이어 간다.
+      // 저장되지 않은 빈 여행을 다시 쓰고, 선택 전체를 다시 보낸다.
       expect(create).toHaveBeenCalledTimes(1);
-      expect(addBlock.mock.calls.map(([, body]) => [body.place, body.stayMin])).toEqual([
-        [{ placeId: searchItems[0]!.placeId }, undefined],
-        [{ placeId: searchItems[1]!.placeId }, undefined],
-        [{ placeId: searchItems[1]!.placeId }, 60],
-        [{ kakaoPlaceId: searchItems[2]!.kakaoPlaceId, placeUrl: searchItems[2]!.placeUrl }, 90],
-      ]);
+      expect(initial).toHaveBeenCalledTimes(2);
+      expect(initial.mock.calls[1]![0]).toBe('t9');
+      expect(initial.mock.calls[1]![1].selections.find((item) => item.clientId === publicKey)).toMatchObject({ stayMin: 60 });
     });
 
-    it('장소 추가 실패 뒤 입력을 바꾸면 이어 쓰지 않고 새 여행을 만든다', async () => {
-      const { create, addBlock } = mockCourseApis();
-      addBlock.mockRejectedValueOnce(new ApiError({ id: 'NETWORK' })).mockResolvedValue({ schedule, violations: [] });
+    it('고정 시각 충돌(ERR-009)이면 이유를 보여 주고, 여행 조건이 같으면 같은 여행으로 다시 만든다', async () => {
+      const { create, initial } = mockCourseApis();
+      initial.mockRejectedValueOnce(new ApiError({ id: 'ERR-009', status: 409 }));
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('시간 안에 모두 넣을 수 없어요');
+      expect(alert).toHaveTextContent('다시 누르면 같은 여행으로 이어서 만들어요');
+
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('실패 뒤 여행 조건을 바꾸면 이전 여행을 쓰지 않고 새 여행을 만든다', async () => {
+      const { create, initial } = mockCourseApis();
+      initial.mockRejectedValueOnce(new ApiError({ id: 'ERR-009', status: 409 }));
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults();
@@ -362,36 +388,106 @@ describe('UI-01 여행 시작', () => {
       expect(create.mock.calls[1]![0]).toMatchObject({ mode: 'CAR' });
     });
 
-    it('일정 계산만 실패하면(ERR-009) 만든 여행의 타임라인으로 갈 수 있게 한다', async () => {
-      const { create, generate } = mockCourseApis();
-      generate.mockRejectedValue(new ApiError({ id: 'ERR-009', status: 409 }));
+    it('응답을 못 받은 이전 요청이 저장됐는데 그 뒤 고친 내용이 있으면, 조용히 이동하지 않고 알린다', async () => {
+      const { initial, get } = mockCourseApis();
+      initial.mockRejectedValueOnce(new ApiError({ id: 'TIMEOUT' }));
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults();
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText(/다시 누르면 같은 여행으로 이어서 만들어요/)).toBeInTheDocument();
 
-      const alert = await screen.findByRole('alert');
-      expect(alert).toHaveTextContent('여행은 만들었지만 일정 계산을 마치지 못했어요');
-      expect(alert).toHaveTextContent('시간 안에 모두 넣을 수 없어요');
-      // 같은 입력으로 여행을 또 만들지 않게 만들기 버튼 대신 이동 버튼을 둔다.
-      expect(screen.queryByRole('button', { name: '코스 만들기' })).not.toBeInTheDocument();
+      // 그 사이 첫 요청이 저장을 마쳤다. 사용자는 체류시간을 바꿔 다시 누른다.
+      get.mockResolvedValue({ trip, schedule });
+      await userEvent.selectOptions(screen.getByLabelText(`${searchItems[2]!.name} 머무를 시간`), '120');
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
 
+      expect(await screen.findByText('이전 요청으로 코스가 이미 만들어졌어요')).toBeInTheDocument();
+      // 고친 선택은 보내지 않았고, 확인한 뒤 타임라인으로 간다.
+      expect(initial).toHaveBeenCalledTimes(1);
       await userEvent.click(screen.getByRole('button', { name: '타임라인에서 확인하기' }));
       expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
-      expect(create).toHaveBeenCalledTimes(1);
     });
 
-    it('일정 계산 실패 뒤 입력을 바꾸면 다시 코스를 만들 수 있다', async () => {
-      const { generate } = mockCourseApis();
-      generate.mockRejectedValue(new ApiError({ id: 'ERR-009', status: 409 }));
+    it('이전 요청이 저장됐고 고친 내용이 없으면 바로 타임라인으로 간다', async () => {
+      const { initial, get } = mockCourseApis();
+      initial.mockRejectedValueOnce(new ApiError({ id: 'TIMEOUT' }));
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults();
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
-      await screen.findByRole('button', { name: '타임라인에서 확인하기' });
+      await screen.findByText(/다시 누르면 같은 여행으로 이어서 만들어요/);
 
+      get.mockResolvedValue({ trip, schedule });
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+    });
+
+    it('장소의 계획을 고치면 그 장소의 미배치 이유를 지운다', async () => {
+      const { initial } = mockCourseApis();
+      const other = { type: 'DAY_FULL', cause: '하루 일정 안에 넣을 수 없습니다.' };
+      initial.mockResolvedValueOnce(generated(false, [{ clientId: `public:${searchItems[0]!.placeId}`, reason: other }]));
+      renderPage();
       setDates('2026-10-17', '2026-10-18');
-      expect(screen.getByRole('button', { name: '코스 만들기' })).toBeEnabled();
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText(other.cause)).toBeInTheDocument();
+
+      await userEvent.selectOptions(screen.getByLabelText(`${searchItems[0]!.name} 방문 일차`), '2');
+      expect(screen.queryByText(other.cause)).not.toBeInTheDocument();
+    });
+
+    it('저장되지 않았는데 표시할 장소가 없으면 일반 안내를 보여 준다', async () => {
+      const { initial } = mockCourseApis();
+      initial.mockResolvedValueOnce(generated(false, []));
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('일정을 저장하지 못했어요. 장소나 시간을 바꿔 다시 눌러 주세요.')).toBeInTheDocument();
+    });
+
+    it('응답을 못 받았지만 서버에 저장됐으면 여행 조회로 확인하고 타임라인으로 간다', async () => {
+      const { initial, get } = mockCourseApis();
+      initial.mockRejectedValueOnce(new ApiError({ id: 'TIMEOUT' }));
+      get.mockResolvedValue({ trip, schedule });
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+      expect(get).toHaveBeenCalledWith('t9');
+    });
+  });
+
+  describe('고른 분위기 (FR-015)', () => {
+    const sea = { code: 'SEA_VIEW', label: '바다 전망' };
+
+    it('UI-08에서 고른 분위기를 보여 주고 지울 수 있다', async () => {
+      useTripDraft.getState().setMood({ tags: [sea], avoid: ['실내 제외'] });
+      renderPage();
+      const mood = screen.getByRole('group', { name: '고른 분위기' });
+      expect(within(mood).getByText('바다 전망 · 실내 제외')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /고른 분위기 바꾸기/ })).toBeInTheDocument();
+
+      await userEvent.click(within(mood).getByRole('button', { name: '분위기 지우기' }));
+      expect(screen.queryByRole('group', { name: '고른 분위기' })).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /원하는 분위기로 찾기/ })).toBeInTheDocument();
+      expect(useTripDraft.getState().conditions.prefs).toBeUndefined();
+    });
+
+    it('코스를 만들 때 고른 태그와 피할 조건을 여행 조건(API-002 prefs)으로 보낸다', async () => {
+      const { create } = mockCourseApis();
+      useTripDraft.getState().setMood({ tags: [sea], avoid: ['실내 제외'] });
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+      expect(create.mock.calls[0]![0]).toMatchObject({ prefs: { tags: ['SEA_VIEW'], avoid: ['실내 제외'] } });
+      // 여행을 만들고 나면 초안과 함께 분위기도 비운다.
+      expect(useTripDraft.getState().mood).toBeNull();
     });
   });
 

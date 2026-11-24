@@ -62,6 +62,12 @@ export function PlaceSearch({ pickedKeys, onPick, onUnpick, fallbackHint }: Plac
     );
   }
 
+  /** 결과·안내를 닫고 처음 상태로 돌아간다. 진행 중인 검색도 멈춘다. */
+  function close() {
+    controller.current?.abort();
+    setState({ status: 'idle' });
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
     const query = text.trim();
@@ -77,13 +83,31 @@ export function PlaceSearch({ pickedKeys, onPick, onUnpick, fallbackHint }: Plac
           className={styles.input}
           type="search"
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setText(event.target.value);
+            // 검색어를 모두 지우면(입력창의 지우기 버튼 포함) 결과도 닫는다.
+            if (!event.target.value.trim()) close();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && state.status !== 'idle') close();
+          }}
           placeholder="장소 이름으로 찾기"
           autoComplete="off"
           enterKeyHint="search"
         />
         <Button type="submit" variant="outline" disabled={!text.trim()} loading={state.status === 'loading'}>검색</Button>
       </form>
+
+      {state.status !== 'idle' && (
+        <div className={styles.resultsBar}>
+          <span className={styles.meta}>
+            {state.status === 'success' ? `‘${state.query}’ 검색 결과 ${state.places.length}곳` : `‘${state.query}’ 검색`}
+          </span>
+          <button type="button" className={styles.close} onClick={close}>
+            결과 닫기
+          </button>
+        </div>
+      )}
 
       {state.status === 'loading' && <LoadingState message="장소를 찾는 중이에요" />}
 

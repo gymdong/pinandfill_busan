@@ -114,3 +114,25 @@
   color: var(--color-ink-muted);
   font-size: var(--text-s);
 }
+
+/* 검색 결과 위 줄: 무엇을 찾았는지와 결과 닫기 */
+.resultsBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: calc(var(--space-1) * -1);
+}
+
+.close {
+  min-height: var(--tap-min);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: var(--text-s);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
