@@ -535,3 +535,79 @@ def test_detour_cost_reduces_score_without_adding_stay_to_detour():
     assert [c["place"]["id"] for c in candidates] == ["short", "long"]
     assert [c["detourMin"] for c in candidates] == [0, 10]
     assert [c["stayMin"] for c in candidates] == [40, 20]
+
+
+class FakeReasonLlm:
+    """API-011 이유 문구용 가짜 LLM. 받은 사실을 기록하고 정해진 답을 돌려준다."""
+
+    def __init__(self, outcome: object) -> None:
+        self.outcome = outcome
+        self.users: list[str] = []
+
+    async def generate_json(self, *, system: str, user: str, schema: dict[str, object]) -> object:
+        self.users.append(user)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+def _with_reason_llm(client: TestClient, llm: FakeReasonLlm) -> None:
+    from app.modules.ai.settings import AISettings
+    from app.modules.ai.waypoint_reason import WaypointReasonService
+
+    client.app.state.waypoint_reason_service = WaypointReasonService(AISettings(_env_file=None, api_key=None), llm)
+
+
+def test_llm_rewrites_only_the_reason_text() -> None:
+    llm = FakeReasonLlm({"reasons": [{"placeId": "x", "text": "체류 30분이면 들르기 좋은 곳"}]})
+    client, repository, _, _, _ = _setup((_candidate("x"),), {("a", "b"): 20, ("a", "x"): 10, ("x", "b"): 15})
+    before = repository.get("trip")
+    _with_reason_llm(client, llm)
+
+    response = client.post("/api/trips/trip/waypoints/suggest", json=_request())
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    [candidate] = response.json()["candidates"]
+    assert (candidate["detourMin"], candidate["stayMin"]) == (5, 30)
+    assert candidate["reason"].startswith("체류 30분이면 들르기 좋은 곳")
+    assert "우회 5분" not in candidate["reason"]
+    # LLM 에는 엔진 값과 공공 장소 정보만 간다.
+    assert '"detourMin": 5' in llm.users[0] and "lat" not in llm.users[0]
+    assert repository.get("trip") == before
+
+
+def test_llm_failure_keeps_rule_reasons_with_200() -> None:
+    from app.modules.ai.providers.base import LlmError
+
+    llm = FakeReasonLlm(LlmError("timeout"))
+    client, _, _, _, _ = _setup((_candidate("x"),), {("a", "b"): 20, ("a", "x"): 10, ("x", "b"): 15})
+    _with_reason_llm(client, llm)
+
+    response = client.post("/api/trips/trip/waypoints/suggest", json=_request())
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["reason"].startswith("우회 5분·체류 30분")
+    assert len(llm.users) == 2
+
+
+def test_no_candidates_skip_the_llm() -> None:
+    llm = FakeReasonLlm({"reasons": []})
+    client, _, _, _, _ = _setup((), {("a", "b"): 20})
+    _with_reason_llm(client, llm)
+    assert client.post("/api/trips/trip/waypoints/suggest", json=_request()).json() == {"candidates": []}
+    assert llm.users == []
+
+
+def test_invalid_ai_settings_do_not_break_api_011(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#46 리뷰: GEMINI_* 설정 오류로 API-011 이 500 이 되면 안 된다. 기본 생성 경로를 그대로 쓴다."""
+    from app.modules.ai.waypoint_reason import build_waypoint_reason_service
+
+    monkeypatch.setattr("app.modules.trips.router.build_waypoint_reason_service", build_waypoint_reason_service)
+    monkeypatch.setenv("GEMINI_EXPLAIN_BUDGET_SECONDS", "abc")
+    client, _, _, _, _ = _setup((_candidate("x"),), {("a", "b"): 20, ("a", "x"): 10, ("x", "b"): 15})
+
+    response = client.post("/api/trips/trip/waypoints/suggest", json=_request())
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["reason"].startswith("우회 5분·체류 30분")
