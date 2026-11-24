@@ -3,7 +3,8 @@
 - `memory`·`sqlite` 는 항상 돈다. SQLite 는 alembic 마이그레이션으로 만든 메모리 DB 다.
 - `postgres` 는 `TEST_DATABASE_URL`(예: postgresql://pinandfill:pinandfill@localhost:5432/pinandfill_test)이
   있을 때만 돈다. 그 DB 의 스키마는 시험마다 지우고 다시 만든다. 잘못 가리켜 데이터를 지우지 않도록
-  DB 이름이 `_test` 로 끝나지 않으면 지우기 전에 시험을 멈춘다.
+  지울 바로 그 연결에서 실제 DB 이름(`current_database()`)을 읽어 `_test` 로 끝나지 않으면 멈춘다.
+  URL 경로만 보면 `?dbname=` 쿼리가 경로를 덮어써 다른 DB 를 지울 수 있다.
 """
 
 import os
@@ -20,7 +21,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
-from sqlalchemy import StaticPool, inspect, make_url, select, text
+from sqlalchemy import Connection, StaticPool, inspect, make_url, select, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
@@ -79,21 +80,29 @@ def downgrade(database: Database, revision: str = "base") -> None:
         command.downgrade(config, revision)
 
 
-def require_test_database(url: str) -> None:
-    """Refuse to wipe a database whose name does not mark it as a test database."""
-    name = make_url(url).database or ""
-    if not name.endswith("_test"):
-        pytest.fail("TEST_DATABASE_URL must name a database ending in _test; refusing to drop its schema")
+def require_test_database(connection: Connection) -> None:
+    """Refuse to wipe a database whose name does not mark it as a test database.
+
+    Reads the name from the connection that will run the DROP, not from the URL text:
+    a `?dbname=` query overrides the URL path, so the path alone can name the wrong database.
+    """
+    name = connection.execute(text("SELECT current_database()")).scalar_one()
+    if not str(name or "").endswith("_test"):
+        pytest.fail("TEST_DATABASE_URL must connect to a database ending in _test; refusing to drop its schema")
 
 
-def open_database(kind: str) -> Database:
+def open_database(kind: str, url: str = POSTGRES_URL) -> Database:
     if kind == "sqlite":
         return Database("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
-    require_test_database(POSTGRES_URL)
-    database = Database(POSTGRES_URL)
-    with database.engine.begin() as connection:
-        connection.execute(text("DROP SCHEMA public CASCADE"))
-        connection.execute(text("CREATE SCHEMA public"))
+    database = Database(url)
+    try:
+        with database.engine.begin() as connection:
+            require_test_database(connection)
+            connection.execute(text("DROP SCHEMA public CASCADE"))
+            connection.execute(text("CREATE SCHEMA public"))
+    except BaseException:
+        database.dispose()
+        raise
     return database
 
 
@@ -358,18 +367,49 @@ def test_default_app_uses_database_when_url_is_set(tmp_path: Path, monkeypatch: 
         assert client.get("/api/trips/not-a-uuid").status_code == 404
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "postgresql://u:p@localhost:5432/pinandfill",
-        "postgresql://u:p@localhost:5432/test_pinandfill",
-        "postgresql://u:p@localhost:5432/",
-    ],
-)
-def test_non_test_database_is_never_wiped(url: str):
+class _NamedConnection:
+    """`SELECT current_database()` 에 정해 둔 이름을 돌려주는 가짜 연결."""
+
+    def __init__(self, name: str | None) -> None:
+        self.name = name
+        self.statements: list[str] = []
+
+    def execute(self, statement: Any) -> Any:
+        self.statements.append(str(statement))
+        return type("Result", (), {"scalar_one": lambda _: self.name})()
+
+
+@pytest.mark.parametrize("name", ["pinandfill", "test_pinandfill", "pinandfill_test_backup", "", None])
+def test_non_test_database_is_never_wiped(name: str | None):
+    connection = _NamedConnection(name)
     with pytest.raises(pytest.fail.Exception, match="_test"):
-        require_test_database(url)
+        require_test_database(connection)  # type: ignore[arg-type]
+    assert connection.statements == ["SELECT current_database()"]
 
 
 def test_test_database_name_is_accepted():
-    require_test_database("postgresql://u:p@localhost:5432/pinandfill_test")
+    require_test_database(_NamedConnection("pinandfill_test"))  # type: ignore[arg-type]
+
+
+@needs_postgres
+def test_query_dbname_cannot_redirect_the_wipe_to_another_database():
+    # 경로는 _test 지만 ?dbname= 쿼리가 실제 연결 DB 를 바꾼다. 실제 DB 이름으로 막아야 한다.
+    url = make_url(POSTGRES_URL).update_query_dict({"dbname": "postgres"}).render_as_string(hide_password=False)
+    marker = f"guard_marker_{uuid.uuid4().hex}"
+    other = Database(url)
+    try:
+        with other.engine.begin() as connection:
+            assert connection.execute(text("SELECT current_database()")).scalar_one() == "postgres"
+            connection.execute(text(f"CREATE TABLE {marker} (id int)"))
+        with pytest.raises(pytest.fail.Exception, match="_test"):
+            open_database("postgres", url)
+        assert marker in inspect(other.engine).get_table_names()
+    finally:
+        with other.engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE IF EXISTS {marker}"))
+        other.dispose()
+
+
+def test_alembic_ini_is_ascii_so_any_locale_can_read_it():
+    # alembic 은 alembic.ini 를 로캘 인코딩으로 읽는다. 한국어 Windows(cp949)에서 UTF-8 한글 주석은 깨진다.
+    (BACKEND_DIR / "alembic.ini").read_bytes().decode("ascii")

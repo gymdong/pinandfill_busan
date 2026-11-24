@@ -36,7 +36,8 @@ uv run alembic check                  # 모델과 DB 스키마가 같은지 확�
 
 - 마이그레이션 파일은 `alembic/versions/` 에 두고, 병합 순서는 마이그레이션 담당(홍민지)이 정한다.
 - DB 저장소 테스트는 SQLite(메모리)로 항상 돌고, `TEST_DATABASE_URL` 이 있으면 PostgreSQL 에서도 돈다.
-  그 DB 의 public 스키마는 테스트마다 지우고 다시 만드므로 개발 DB 와 다른 DB 를 쓴다. CI 는 PostgreSQL 서비스로 돈다.
+  그 DB 의 public 스키마는 테스트마다 지우고 다시 만드므로 개발 DB 와 다른 DB 를 쓴다. 실제로 연결된 DB 이름이
+  `_test` 로 끝나지 않으면(`?dbname=` 쿼리로 바뀐 경우 포함) 지우기 전에 멈춘다. CI 는 PostgreSQL 서비스로 돈다.
 
 ```bash
 docker run -d --rm --name pinandfill-test-db -p 55432:5432 \
