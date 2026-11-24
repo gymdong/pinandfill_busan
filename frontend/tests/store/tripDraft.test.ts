@@ -84,3 +84,50 @@ describe('useTripDraft', () => {
     expect(useTripDraft.getState().conditions).toEqual({ mode: 'TRANSIT', dayStart: '10:00' });
   });
 });
+
+describe('분위기 선택(FR-015)', () => {
+  const sea = { code: 'SEA_VIEW', label: '바다 전망' };
+  const alley = { code: 'ALLEY_WALK', label: '골목·산책' };
+
+  beforeEach(() => useTripDraft.getState().reset());
+
+  it('고른 태그 코드와 피할 조건을 여행 조건의 prefs 로 담는다', () => {
+    useTripDraft.getState().setMood({ tags: [sea, alley], avoid: ['실내 제외'] });
+    const state = useTripDraft.getState();
+    expect(state.mood).toEqual({ tags: [sea, alley], avoid: ['실내 제외'] });
+    expect(state.conditions.prefs).toEqual({ tags: ['SEA_VIEW', 'ALLEY_WALK'], avoid: ['실내 제외'] });
+  });
+
+  it('다시 고르면 분위기 항목만 바꾸고 다른 취향 값은 남긴다', () => {
+    const { setConditions, setMood } = useTripDraft.getState();
+    setConditions({ mode: 'CAR', prefs: { note: '천천히', tags: ['OLD'] } });
+    setMood({ tags: [sea], avoid: [] });
+    expect(useTripDraft.getState().conditions).toEqual({ mode: 'CAR', prefs: { note: '천천히', tags: ['SEA_VIEW'] } });
+    setMood(null);
+    expect(useTripDraft.getState().conditions).toEqual({ mode: 'CAR', prefs: { note: '천천히' } });
+  });
+
+  it('prefs 를 통째로 바꿔도 분위기 항목은 고른 분위기를 따른다', () => {
+    const { setConditions, setMood } = useTripDraft.getState();
+    setMood({ tags: [sea], avoid: ['실내 제외'] });
+    setConditions({ prefs: { note: '천천히', tags: ['OTHER'] } });
+    expect(useTripDraft.getState().conditions.prefs).toEqual({ note: '천천히', tags: ['SEA_VIEW'], avoid: ['실내 제외'] });
+    setConditions({ prefs: undefined });
+    expect(useTripDraft.getState().conditions.prefs).toEqual({ tags: ['SEA_VIEW'], avoid: ['실내 제외'] });
+  });
+
+  it('태그와 피할 조건이 모두 비면 분위기를 지우고 prefs 도 뺀다', () => {
+    const { setMood } = useTripDraft.getState();
+    setMood({ tags: [sea], avoid: [] });
+    setMood({ tags: [], avoid: [] });
+    expect(useTripDraft.getState().mood).toBeNull();
+    expect(useTripDraft.getState().conditions).toEqual({});
+  });
+
+  it('초기화하면 분위기도 지운다', () => {
+    useTripDraft.getState().setMood({ tags: [sea], avoid: [] });
+    useTripDraft.getState().reset();
+    expect(useTripDraft.getState().mood).toBeNull();
+    expect(useTripDraft.getState().conditions).toEqual({});
+  });
+});

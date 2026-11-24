@@ -31,7 +31,8 @@ const MAP_HINT = '찾는 곳이 없으면 코스를 만든 뒤 지도 보기에�
 /** UI-01 여행 시작: 여행 조건 입력(FR-002)과 꼭 갈 곳 담기(FR-001) */
 export default function TripStartPage() {
   const navigate = useNavigate();
-  const { conditions: draft, pinned, plans, setConditions, addPinned, removePinned, setPlan, reset } = useTripDraft();
+  const { conditions: draft, pinned, plans, mood, setConditions, setMood, addPinned, removePinned, setPlan, reset } =
+    useTripDraft();
   const conditions = { ...DEFAULT_CONDITIONS, ...draft };
   const days = tripDays(conditions.dates);
   const dayCount = days ?? 1;
@@ -331,9 +332,19 @@ export default function TripStartPage() {
         />
 
         <Link className={styles.moodLink} to={paths.moodSearch()}>
-          <span>원하는 분위기로 찾기</span>
+          <span>{mood ? '고른 분위기 바꾸기' : '원하는 분위기로 찾기'}</span>
           <span aria-hidden="true">›</span>
         </Link>
+        {mood && (
+          <div className={styles.mood} role="group" aria-label="고른 분위기">
+            <p className={styles.moodLabels}>
+              {[...mood.tags.map((tag) => tag.label), ...mood.avoid].join(' · ')}
+            </p>
+            <button type="button" className={styles.moodClear} onClick={() => setMood(null)}>
+              분위기 지우기
+            </button>
+          </div>
+        )}
       </section>
 
       <footer className={styles.footer}>

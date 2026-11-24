@@ -460,6 +460,37 @@ describe('UI-01 여행 시작', () => {
     });
   });
 
+  describe('고른 분위기 (FR-015)', () => {
+    const sea = { code: 'SEA_VIEW', label: '바다 전망' };
+
+    it('UI-08에서 고른 분위기를 보여 주고 지울 수 있다', async () => {
+      useTripDraft.getState().setMood({ tags: [sea], avoid: ['실내 제외'] });
+      renderPage();
+      const mood = screen.getByRole('group', { name: '고른 분위기' });
+      expect(within(mood).getByText('바다 전망 · 실내 제외')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /고른 분위기 바꾸기/ })).toBeInTheDocument();
+
+      await userEvent.click(within(mood).getByRole('button', { name: '분위기 지우기' }));
+      expect(screen.queryByRole('group', { name: '고른 분위기' })).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /원하는 분위기로 찾기/ })).toBeInTheDocument();
+      expect(useTripDraft.getState().conditions.prefs).toBeUndefined();
+    });
+
+    it('코스를 만들 때 고른 태그와 피할 조건을 여행 조건(API-002 prefs)으로 보낸다', async () => {
+      const { create } = mockCourseApis();
+      useTripDraft.getState().setMood({ tags: [sea], avoid: ['실내 제외'] });
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+
+      expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
+      expect(create.mock.calls[0]![0]).toMatchObject({ prefs: { tags: ['SEA_VIEW'], avoid: ['실내 제외'] } });
+      // 여행을 만들고 나면 초안과 함께 분위기도 비운다.
+      expect(useTripDraft.getState().mood).toBeNull();
+    });
+  });
+
   it('분위기로 찾기 화면으로 이동해도 담은 장소가 유지된다', async () => {
     renderPage();
     await pinAllSearchResults();
