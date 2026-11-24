@@ -95,7 +95,7 @@ class SourceInfo(ContractModel):
 class PlaceDetailResponse(ContractModel):
     place: PlaceDetailPlace
     hours: tuple[PlaceDetailHours, ...] = ()
-    # place_photos 데이터가 들어오기 전에는 비어 있다. 다른 출처 사진으로 채우지 않는다(FR-014).
+    # 대표 사진이 앞이다. 사진이 없으면 비어 있고 다른 출처 사진으로 채우지 않는다(FR-014).
     photos: tuple[PlaceDetailPhoto, ...] = ()
     # 날씨는 P1(FR-013)이라 null 이다.
     weather: None = None

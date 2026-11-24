@@ -12,7 +12,7 @@ from pydantic import Field, model_validator
 
 from app.modules.ai.sanitizer import InvalidInputError
 from app.modules.engine.schemas import ContractModel
-from app.modules.places.api_schemas import SourceInfo
+from app.modules.places.api_schemas import PlaceDetailPhoto, SourceInfo
 from app.modules.places.router import PlaceAPIError
 from app.modules.places.samples import load_sample_places
 
@@ -66,8 +66,9 @@ class MoodEvidence(ContractModel):
 
 class MoodPlace(ContractModel):
     place: MoodPlaceSummary
-    # place_photos·혼잡 데이터가 들어오기 전에는 null('사진 없음', '정보 부족')이다.
-    photo: None = None
+    # 대표 사진(FR-014). 없으면 null('사진 없음')이다.
+    photo: PlaceDetailPhoto | None = None
+    # 혼잡 데이터가 들어오기 전에는 null('정보 부족')이다.
     evidence: MoodEvidence
     crowd: None = None
 
@@ -126,6 +127,7 @@ async def recommend_mood(body: MoodRequest, response: Response, service: Service
                     category=item.candidate.category,
                     ref_date=item.candidate.ref_date,
                 ),
+                photo=item.candidate.photo,
                 evidence=MoodEvidence(
                     matched_tags=item.matched_tags,
                     excerpt=item.excerpt,

@@ -259,10 +259,20 @@ def test_mood_data_joins_sample_places_and_drops_unknown_codes(tmp_path: Path):
     place_tags = tmp_path / "place_tags.csv"
     place_tags.write_text("tourapi_contentid,tag_code\n100,SEA_VIEW\n100,NIGHT_VIEW\n999,SEA_VIEW\n", encoding="utf-8")
 
-    data = load_mood_data(load_sample_places(samples), theme_tags=tags_file, place_tags=place_tags)
+    photos = tmp_path / "place_photos.csv"
+    photos.write_text(
+        "tourapi_contentid,url,source_org,license_type,is_primary\n"
+        "100,https://img.example.com/a.jpg,예시 기관,공공누리 제1유형,FALSE\n"
+        "100,https://img.example.com/b.jpg,예시 기관,공공누리 제1유형,TRUE\n",
+        encoding="utf-8",
+    )
+
+    data = load_mood_data(load_sample_places(samples), theme_tags=tags_file, place_tags=place_tags, place_photos=photos)
     [only] = data.candidates()
     assert (only.place_id, only.tag_codes, only.indoor_outdoor) == ("100", frozenset({"SEA_VIEW"}), "야외")
     assert only.description == "골목에서 바다가 보인다."
+    # 추천 카드에는 대표 사진 한 장을 붙인다(FR-014).
+    assert only.photo is not None and only.photo.url.endswith("b.jpg")
 
 
 def test_missing_files_give_empty_data(tmp_path: Path):

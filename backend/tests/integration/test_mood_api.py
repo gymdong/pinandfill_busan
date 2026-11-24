@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.modules.ai.providers.base import LlmError
 from app.modules.ai.settings import AISettings
+from app.modules.places.api_schemas import PlaceDetailPhoto
 from app.modules.recommend.mood import MoodService
 from app.modules.recommend.mood_data import MoodCandidate, StaticMoodData, ThemeTag, load_mood_data
 
@@ -109,6 +110,32 @@ def test_blocked_text_is_err_001_without_echoing_it(client):
     assert response.status_code == 400
     assert response.json()["error"]["message"].startswith("입력할 수 없는 내용이에요")
     assert "프롬프트" not in response.text
+
+
+def test_place_has_the_primary_photo_with_source_and_license(client):
+    # FR-014: 추천 카드의 대표 사진에 출처 기관과 저작권 유형이 붙는다. 없으면 null('사진 없음')이다.
+    photo = PlaceDetailPhoto(
+        id="photo-1",
+        url="https://img.example.com/village.jpg",
+        source_org="예시 기관",
+        license_type="공공누리 제1유형",
+        is_primary=True,
+    )
+    with_photo = MoodCandidate(**{**VILLAGE.__dict__, "photo": photo})
+    no_photo = MoodCandidate(**{**VILLAGE.__dict__, "place_id": "200"})
+    settings = AISettings(_env_file=None, api_key=None)
+    client.app.state.mood_service = MoodService(settings, StaticMoodData((SEA,), (with_photo, no_photo)))
+    places = client.post("/api/recommend/mood", json={"tags": ["SEA_VIEW"], "date": "2026-11-20"}).json()["places"]
+    assert [item["photo"] for item in places] == [
+        {
+            "id": "photo-1",
+            "url": "https://img.example.com/village.jpg",
+            "sourceOrg": "예시 기관",
+            "licenseType": "공공누리 제1유형",
+            "isPrimary": True,
+        },
+        None,
+    ]
 
 
 def test_evidence_source_is_null_without_excerpt_or_org(client):

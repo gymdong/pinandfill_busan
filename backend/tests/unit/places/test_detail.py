@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.modules.places.detail import PlaceDetailService, PlaceNotFoundError, SamplePlaceDetails
+from app.modules.places.photos import load_place_photos
 from app.modules.places.samples import load_sample_places
 
 PLACES = (
@@ -51,6 +52,23 @@ def test_detail_has_place_hours_and_source(tmp_path):
         "isClosed": False,
     }
     assert [(s.org, s.ref_date) for s in detail.sources] == [("한국관광공사 TourAPI, 예시 홈페이지", date(2026, 11, 1))]
+
+
+def test_detail_has_photos_with_primary_first(tmp_path):
+    (tmp_path / "place_photos.csv").write_text(
+        "tourapi_contentid,url,source_org,license_type,is_primary\n"
+        "100,https://img.example.com/a.jpg,예시 기관,공공누리 제1유형,FALSE\n"
+        "100,https://img.example.com/b.jpg,예시 기관,공공누리 제1유형,TRUE\n",
+        encoding="utf-8",
+    )
+    details(tmp_path)  # 표본 장소 파일을 쓴다
+    with_photos = SamplePlaceDetails(load_sample_places(tmp_path), load_place_photos(tmp_path / "place_photos.csv"))
+    detail = with_photos.place_detail("100")
+    assert detail is not None
+    assert [(p.url.rsplit("/", 1)[1], p.is_primary) for p in detail.photos] == [("b.jpg", True), ("a.jpg", False)]
+    # 사진이 없는 장소는 비어 있다(화면은 '사진 없음').
+    other = with_photos.place_detail("200")
+    assert other is not None and other.photos == ()
 
 
 def test_missing_values_are_not_invented(tmp_path):
