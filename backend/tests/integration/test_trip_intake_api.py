@@ -1,5 +1,6 @@
 """API-001 한 줄 해석, API-002 여행 생성 통합 테스트. LLM 은 가짜 공급자로 대신한다."""
 
+import logging
 from datetime import date, time
 
 import pytest
@@ -266,3 +267,24 @@ def test_openapi_lists_both_endpoints(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert "post" in paths["/api/trips"]
     assert "post" in paths["/api/trips/interpret"]
+
+
+def test_invalid_gemini_settings_do_not_break_api_001(monkeypatch, caplog):
+    """#46 리뷰 후속: GEMINI_* 설정이 잘못돼도 500 이 아니라 규칙 해석으로 200 이다. 기본 생성 경로를 그대로 쓴다."""
+    from app.modules.ai.interpret import build_interpret_service
+
+    # conftest 의 no_real_llm 이 이 이름을 '키 없는 규칙 해석' 생성기로 바꿔 둔다. 실제 생성 함수로 되돌려
+    # 운영과 같은 경로(환경 설정 읽기 → load_ai_settings)를 거치게 한다. .env 는 읽지 않는다.
+    monkeypatch.setattr("app.modules.trips.intake.build_interpret_service", build_interpret_service)
+    monkeypatch.setitem(AISettings.model_config, "env_file", None)
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-gemini-key-value")
+    monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "abc")
+
+    with caplog.at_level(logging.WARNING), TestClient(create_app(Settings(app_name="Backend test"))) as client:
+        response = interpret(client, "11/20~22 대중교통")
+
+    assert response.status_code == 200
+    assert response.json()["conditions"]["mode"] == "TRANSIT"
+    assert "ai_settings invalid component=ai_interpret fields=timeout_seconds llm=disabled" in caplog.messages
+    assert client.app.state.interpret_service._llm is None
+    assert "synthetic-gemini-key-value" not in caplog.text
