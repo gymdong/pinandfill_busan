@@ -3,7 +3,7 @@ import type { ApiRequest } from '@/api';
 import { INTERPRETABLE_TEXT, STAY_REQUIRED_MESSAGE, mockRequest, resetMockSchedule } from '@/api/mock';
 import { PLACE_IDS, mockKakaoKey } from '@/api/mock/fixtures/places';
 import { schedule as fixtureSchedule } from '@/api/mock/fixtures/schedule';
-import type { CreateTripResponse, MoodResponse, PlaceDetailResponse, PlaceSearchResponse, PlacesAtResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, TripDetailResponse, UndoResponse } from '@/types/api';
+import type { CreateTripResponse, InitialScheduleResponse, MoodResponse, PlaceDetailResponse, PlaceSearchResponse, PlacesAtResponse, Schedule, ScheduleMutationResponse, SuggestWaypointsResponse, TripDetailResponse, UndoResponse } from '@/types/api';
 
 const TRIP = '/trips/t1';
 const BLOCK_ID = '00000000-0000-4000-8000-000000000302';
@@ -242,6 +242,75 @@ describe('mockRequest', () => {
     // 다른 여행 ID는 예시 일정을 그대로 본다.
     const other = await mockRequest<TripDetailResponse>({ method: 'GET', path: '/trips/t2' });
     expect(other.schedule?.days[0]!.blocks).toHaveLength(fixtureSchedule.days[0]!.blocks.length);
+  });
+
+  describe('API-009 최초 생성(initial, PR #35 계약)', () => {
+    const conditions = { dates: { start: '2026-11-20', end: '2026-11-21' }, dayStart: '09:00', dayEnd: '18:00', mode: 'CAR' };
+    const park = { clientId: 'public:park', place: { placeId: PLACE_IDS.jagalchi }, dayNo: 2 };
+    const fixedCafe = {
+      clientId: 'kakao:1',
+      place: mockKakaoKey(1),
+      fixedWindow: { dayNo: 1, start: '10:00', end: '11:30' },
+    };
+    const initial = (selections: unknown[]) => ({ initial: { policy: 'FIRST_FEASIBLE', selections } });
+
+    async function newTrip() {
+      return (await mockRequest<CreateTripResponse>({ method: 'POST', path: '/trips', body: conditions })).tripId;
+    }
+
+    it('모두 넣으면 저장하고, 되돌리기 지점은 만들지 않는다', async () => {
+      const tripId = await newTrip();
+      const result = await mockRequest<InitialScheduleResponse>({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([park, fixedCafe]) });
+      expect(result.generation).toEqual({ saved: true, confirmed: false, unplaced: [] });
+      const saved = await mockRequest<TripDetailResponse>({ method: 'GET', path: `/trips/${tripId}` });
+      expect(saved.schedule!.days.map((day) => [day.dayNo, day.blocks.map((block) => [block.isFixed, block.stayMin, block.arriveAt])]))
+        .toEqual([[1, [[true, 90, '10:00']]], [2, [[false, 40, null]]]]);
+      await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/undo` })).rejects.toMatchObject({ id: 'ERR-001' });
+      // 이미 저장된 여행에 다시 보내면 덮어쓰지 않고 거절한다.
+      await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([park]) })).rejects.toMatchObject({ id: 'ERR-001' });
+    });
+
+    it('체류시간 근거가 없는 카카오 장소는 미배치하고 저장하지 않는다', async () => {
+      const tripId = await newTrip();
+      const cafe = { clientId: 'kakao:2', place: mockKakaoKey(2) };
+      const result = await mockRequest<InitialScheduleResponse>({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([park, cafe]) });
+      expect(result.generation).toEqual({
+        saved: false,
+        confirmed: false,
+        unplaced: [{ clientId: 'kakao:2', reason: { type: 'STAY_NEEDS_CHECK', cause: '체류시간 근거 확인이 필요합니다.' } }],
+      });
+      const unchanged = await mockRequest<TripDetailResponse>({ method: 'GET', path: `/trips/${tripId}` });
+      expect(unchanged.schedule!.days).toEqual([]);
+      // 저장되지 않았으니 같은 여행에 다시 보낼 수 있다.
+      const retried = await mockRequest<InitialScheduleResponse>({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([park, { ...cafe, stayMin: 60 }]) });
+      expect(retried.generation.saved).toBe(true);
+    });
+
+    it('고정 선택이 날짜·시각순이 아니면 겹치지 않아도 ERR-009 이다', async () => {
+      const lateDay1 = { ...fixedCafe, clientId: 'kakao:3', place: mockKakaoKey(3), fixedWindow: { dayNo: 1, start: '14:00', end: '15:00' } };
+      const day2 = { ...fixedCafe, clientId: 'kakao:4', place: mockKakaoKey(4), fixedWindow: { dayNo: 2, start: '10:00', end: '11:00' } };
+      for (const selections of [[lateDay1, fixedCafe], [day2, park, fixedCafe]]) {
+        const tripId = await newTrip();
+        await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial(selections) }))
+          .rejects.toMatchObject({ id: 'ERR-009', status: 409 });
+      }
+      const tripId = await newTrip();
+      const ordered = await mockRequest<InitialScheduleResponse>({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([fixedCafe, park, lateDay1, day2]) });
+      expect(ordered.generation.saved).toBe(true);
+    });
+
+    it.each([
+      ['options 와 함께 보냄', { ...initial([park]), options: {} }],
+      ['빈 선택', initial([])],
+      ['중복 clientId', initial([park, { ...park, dayNo: 1 }])],
+      ['dayNo 와 시간창 일차가 다름', initial([{ ...fixedCafe, dayNo: 2 }])],
+      ['체류시간이 시간창 길이와 다름', initial([{ ...fixedCafe, stayMin: 60 }])],
+      ['기간 밖 일차', initial([{ ...park, dayNo: 3 }])],
+      ['시간창 길이가 0', initial([{ ...fixedCafe, fixedWindow: { dayNo: 1, start: '10:00', end: '10:00' } }])],
+    ])('%s 이면 ERR-001 이다', async (_name, body) => {
+      const tripId = await newTrip();
+      await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/schedule`, body })).rejects.toMatchObject({ id: 'ERR-001' });
+    });
   });
 
   it('한 줄 해석 실패 시 폼 전환을 알린다', async () => {

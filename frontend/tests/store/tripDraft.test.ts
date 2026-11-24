@@ -57,7 +57,7 @@ describe('useTripDraft', () => {
     expect(toBlockPlaceInput(cafe)).toEqual({ kakaoPlaceId: 'k1', placeUrl: 'https://example.com/k1' });
   });
 
-  it('장소별 일차와 방문 시간을 따로 정하고, 정하지 않은 장소는 1일차·시간 미정이다', () => {
+  it("장소별 일차와 방문 시간을 따로 정하고, 정하지 않은 장소는 일차 '알아서'·시간 미정이다", () => {
     const { addPinned, setPlan } = useTripDraft.getState();
     addPinned(taejongdae);
     addPinned(cafe);
@@ -65,7 +65,7 @@ describe('useTripDraft', () => {
     setPlan(pinnedKey(cafe), { fixed: { start: '12:00', end: '13:00' } });
     const { plans } = useTripDraft.getState();
     expect(planOf(plans, pinnedKey(cafe))).toEqual({ dayNo: 2, fixed: { start: '12:00', end: '13:00' } });
-    expect(planOf(plans, pinnedKey(taejongdae))).toEqual({ dayNo: 1, fixed: null });
+    expect(planOf(plans, pinnedKey(taejongdae))).toEqual({ dayNo: null, fixed: null });
   });
 
   it('장소를 빼면 그 장소의 계획도 지운다', () => {
@@ -74,7 +74,7 @@ describe('useTripDraft', () => {
     setPlan(pinnedKey(cafe), { dayNo: 2 });
     removePinned(pinnedKey(cafe));
     addPinned(cafe);
-    expect(planOf(useTripDraft.getState().plans, pinnedKey(cafe))).toEqual({ dayNo: 1, fixed: null });
+    expect(planOf(useTripDraft.getState().plans, pinnedKey(cafe))).toEqual({ dayNo: null, fixed: null });
   });
 
   it('조건은 항목별로 합친다', () => {
