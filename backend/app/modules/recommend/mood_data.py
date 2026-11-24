@@ -16,7 +16,9 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
+from app.modules.places.api_schemas import PlaceDetailPhoto
 from app.modules.places.detail import INDOOR_OUTDOOR
+from app.modules.places.photos import PLACE_PHOTOS_FILE, load_place_photos
 from app.modules.places.samples import SAMPLE_DIR, SamplePlaceData
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,8 @@ class MoodCandidate:
     indoor_outdoor: str | None = None
     # 장소 설명의 출처 기관(공공 데이터 표기 그대로). 근거 문장과 함께 보여 준다(NFR-007).
     source_org: str | None = None
+    # 추천 카드의 대표 사진(FR-014). 없으면 '사진 없음'이다.
+    photo: PlaceDetailPhoto | None = None
 
 
 class MoodDataProvider(Protocol):
@@ -101,10 +105,15 @@ def load_place_tags(path: Path = PLACE_TAGS_FILE) -> Mapping[str, frozenset[str]
 
 
 def load_mood_data(
-    places: SamplePlaceData, *, theme_tags: Path = THEME_TAGS_FILE, place_tags: Path = PLACE_TAGS_FILE
+    places: SamplePlaceData,
+    *,
+    theme_tags: Path = THEME_TAGS_FILE,
+    place_tags: Path = PLACE_TAGS_FILE,
+    place_photos: Path = PLACE_PHOTOS_FILE,
 ) -> StaticMoodData:
-    """표본 장소에 태그를 붙여 후보를 만든다. 사전에 없는 태그 코드는 버린다."""
+    """표본 장소에 태그와 대표 사진을 붙여 후보를 만든다. 사전에 없는 태그 코드는 버린다."""
     tags = load_theme_tags(theme_tags)
+    photos = load_place_photos(place_photos)
     known = {tag.code for tag in tags}
     candidates = []
     for place_id, codes in load_place_tags(place_tags).items():
@@ -124,6 +133,7 @@ def load_mood_data(
                 description=item.description,
                 indoor_outdoor=INDOOR_OUTDOOR.get(item.indoor_outdoor or ""),
                 source_org=item.source_org,
+                photo=photos.primary(item.place.id),
             )
         )
     logger.info("mood_data tags=%d candidates=%d", len(tags), len(candidates))

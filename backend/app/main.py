@@ -18,6 +18,7 @@ from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
 from app.modules.places.matcher import PlaceMatcher
+from app.modules.places.photos import load_place_photos
 from app.modules.places.router import PlaceAPIError
 from app.modules.places.samples import SamplePlaceData, load_sample_places
 from app.modules.places.service import PlaceSearchService
@@ -85,7 +86,7 @@ def create_app(
         trip_service = default_trip_service(places)
     # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
     if place_detail_service is None and places is not None:
-        place_detail_service = PlaceDetailService(SamplePlaceDetails(places))
+        place_detail_service = PlaceDetailService(SamplePlaceDetails(places, load_place_photos()))
     kakao = kakao_settings() if place_search_service is None else None
 
     @asynccontextmanager

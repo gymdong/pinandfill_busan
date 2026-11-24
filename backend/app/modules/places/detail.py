@@ -7,6 +7,7 @@ places·place_hours·place_photos 테이블이 생기기 전에는 data/samples 
 from typing import Protocol
 
 from .api_schemas import DayType, IndoorOutdoor, PlaceDetailHours, PlaceDetailPlace, PlaceDetailResponse, SourceInfo
+from .photos import PlacePhotos
 from .samples import SamplePlaceData
 
 # 표본 영업시간은 요일(MON~SUN)만 있다. 공휴일(HOLIDAY) 행은 아직 읽지 않는다.
@@ -24,10 +25,11 @@ class PlaceDetailProvider(Protocol):
 
 
 class SamplePlaceDetails:
-    """data/samples 표본의 장소 상세. 사진·혼잡 데이터는 아직 없어 비워 둔다."""
+    """data/samples 표본의 장소 상세. 사진은 표본 사진(place_photos.csv)을 붙이고, 혼잡은 아직 비워 둔다."""
 
-    def __init__(self, places: SamplePlaceData) -> None:
+    def __init__(self, places: SamplePlaceData, photos: PlacePhotos | None = None) -> None:
         self._places = places
+        self._photos = photos or PlacePhotos()
 
     def place_detail(self, place_id: str) -> PlaceDetailResponse | None:
         item = self._places.place(place_id)
@@ -62,6 +64,7 @@ class SamplePlaceDetails:
                 ref_date=item.ref_date,
             ),
             hours=hours,
+            photos=self._photos.photos(place.id),
             sources=sources,
         )
 
