@@ -107,6 +107,15 @@ describe('분위기 선택(FR-015)', () => {
     expect(useTripDraft.getState().conditions).toEqual({ mode: 'CAR', prefs: { note: '천천히' } });
   });
 
+  it('prefs 를 통째로 바꿔도 분위기 항목은 고른 분위기를 따른다', () => {
+    const { setConditions, setMood } = useTripDraft.getState();
+    setMood({ tags: [sea], avoid: ['실내 제외'] });
+    setConditions({ prefs: { note: '천천히', tags: ['OTHER'] } });
+    expect(useTripDraft.getState().conditions.prefs).toEqual({ note: '천천히', tags: ['SEA_VIEW'], avoid: ['실내 제외'] });
+    setConditions({ prefs: undefined });
+    expect(useTripDraft.getState().conditions.prefs).toEqual({ tags: ['SEA_VIEW'], avoid: ['실내 제외'] });
+  });
+
   it('태그와 피할 조건이 모두 비면 분위기를 지우고 prefs 도 뺀다', () => {
     const { setMood } = useTripDraft.getState();
     setMood({ tags: [sea], avoid: [] });

@@ -235,7 +235,7 @@ describe('UI-08 분위기로 찾기', () => {
 
   describe('고른 분위기를 여행 조건에 담는다(FR-015)', () => {
     it('해석된 칩을 담고, 칩을 끄고 켜면 바로 고친다', async () => {
-      mockMood();
+      const mood = mockMood();
       renderPage();
       await search();
       await screen.findByRole('list', { name: '추천 장소' });
@@ -247,6 +247,14 @@ describe('UI-08 분위기로 찾기', () => {
       await userEvent.click(within(chips).getByRole('button', { name: /실내 제외/ }));
       expect(useTripDraft.getState().conditions.prefs).toEqual({ tags: ['SEA_VIEW'] });
 
+      // 끈 칩을 다시 켜면 그 태그가 다시 담기고, 그 태그로 추천을 다시 받는다.
+      await userEvent.click(within(chips).getByRole('button', { name: /골목·산책/ }));
+      expect(useTripDraft.getState().conditions.prefs).toEqual({ tags: ['SEA_VIEW', 'ALLEY_WALK'] });
+      await waitFor(() =>
+        expect(mood.mock.calls.at(-1)![0]).toEqual({ tags: ['SEA_VIEW', 'ALLEY_WALK'], avoid: [], date: '2026-10-17' }),
+      );
+
+      await userEvent.click(within(chips).getByRole('button', { name: /골목·산책/ }));
       await userEvent.click(within(chips).getByRole('button', { name: /바다 전망/ }));
       expect(useTripDraft.getState().mood).toBeNull();
       expect(useTripDraft.getState().conditions.prefs).toBeUndefined();

@@ -93,7 +93,17 @@ export const useTripDraft = create<TripDraftState>((set) => ({
   pinned: [],
   plans: {},
   mood: null,
-  setConditions: (conditions) => set((state) => ({ conditions: { ...state.conditions, ...conditions } })),
+  setConditions: (conditions) =>
+    set((state) => {
+      const next = { ...state.conditions, ...conditions };
+      // prefs 를 통째로 바꿔도 분위기 항목은 고른 분위기(mood)를 따른다. 화면과 보내는 값이 어긋나지 않게 한다.
+      if ('prefs' in conditions) {
+        const prefs = withMood(conditions.prefs, state.mood);
+        if (prefs) next.prefs = prefs;
+        else delete next.prefs;
+      }
+      return { conditions: next };
+    }),
   setMood: (mood) =>
     set((state) => {
       const kept = mood && (mood.tags.length > 0 || mood.avoid.length > 0) ? mood : null;
