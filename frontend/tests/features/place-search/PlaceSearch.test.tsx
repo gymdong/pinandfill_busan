@@ -81,4 +81,39 @@ describe('장소 검색', () => {
     expect(await screen.findByRole('button', { name: /민락수변공원/ })).toBeInTheDocument();
     expect(search).toHaveBeenCalledTimes(2);
   });
+
+  it('결과 닫기를 누르면 결과가 사라지고 검색어는 남는다', async () => {
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [park, cafe] });
+    render(<PlaceSearch pickedKeys={new Set()} onPick={() => {}} />);
+    await searchFor('민락');
+    expect(await screen.findByText('‘민락’ 검색 결과 2곳')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '결과 닫기' }));
+    expect(screen.queryByRole('list', { name: '검색 결과' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '결과 닫기' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('장소 검색')).toHaveValue('민락');
+  });
+
+  it('Esc 를 누르거나 검색어를 모두 지우면 결과를 닫는다', async () => {
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [park] });
+    render(<PlaceSearch pickedKeys={new Set()} onPick={() => {}} />);
+    await searchFor('민락');
+    await screen.findByRole('list', { name: '검색 결과' });
+    await userEvent.type(screen.getByLabelText('장소 검색'), '{Escape}');
+    expect(screen.queryByRole('list', { name: '검색 결과' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '검색' }));
+    await screen.findByRole('list', { name: '검색 결과' });
+    await userEvent.clear(screen.getByLabelText('장소 검색'));
+    expect(screen.queryByRole('list', { name: '검색 결과' })).not.toBeInTheDocument();
+  });
+
+  it('결과가 없을 때와 오류일 때도 닫을 수 있다', async () => {
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [] });
+    render(<PlaceSearch pickedKeys={new Set()} onPick={() => {}} />);
+    await searchFor('없는곳');
+    await screen.findByText('‘없는곳’ 검색 결과가 없어요.');
+    await userEvent.click(screen.getByRole('button', { name: '결과 닫기' }));
+    expect(screen.queryByText('‘없는곳’ 검색 결과가 없어요.')).not.toBeInTheDocument();
+  });
 });

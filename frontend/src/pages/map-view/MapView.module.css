@@ -8,6 +8,9 @@
 .map {
   position: absolute;
   inset: 0;
+  /* 카카오 지도는 안쪽 타일·레이어에 z-index 를 준다. 지도를 자기 쌓임 맥락에 가둬야 위의 이동·시트가 가려지지 않는다. */
+  z-index: 0;
+  isolation: isolate;
 }
 
 /* ---------- 지도 위 ---------- */
@@ -18,6 +21,7 @@
   left: 0;
   display: grid;
   gap: var(--space-2);
+  z-index: 1;
   padding: var(--space-3) var(--space-3) 0;
   pointer-events: none;
 }
@@ -91,6 +95,7 @@
   right: 0;
   bottom: 0;
   left: 0;
+  z-index: 1;
   display: grid;
   gap: var(--space-3);
   max-height: 52dvh;
