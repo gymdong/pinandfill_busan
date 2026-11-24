@@ -266,3 +266,20 @@ def test_openapi_lists_both_endpoints(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert "post" in paths["/api/trips"]
     assert "post" in paths["/api/trips/interpret"]
+
+
+def test_invalid_gemini_settings_do_not_break_api_001(monkeypatch, caplog):
+    """#46 리뷰 후속: GEMINI_* 설정이 잘못돼도 500 이 아니라 규칙 해석으로 200 이다. 기본 생성 경로를 그대로 쓴다."""
+    from app.modules.ai.interpret import build_interpret_service
+
+    monkeypatch.setattr("app.modules.trips.intake.build_interpret_service", build_interpret_service)
+    monkeypatch.setitem(AISettings.model_config, "env_file", None)
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-gemini-key-value")
+    monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "abc")
+
+    with TestClient(create_app(Settings(app_name="Backend test"))) as client:
+        response = interpret(client, "11/20~22 대중교통")
+
+    assert response.status_code == 200
+    assert response.json()["conditions"]["mode"] == "TRANSIT"
+    assert "synthetic-gemini-key-value" not in caplog.text

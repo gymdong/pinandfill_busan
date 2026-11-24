@@ -131,3 +131,17 @@ def test_default_app_builds_the_mood_service_from_data_files(monkeypatch: pytest
         assert isinstance(client.app.state.mood_service, MoodService)
     assert response.status_code == 200
     assert response.json() == {"tags": [], "avoid": [], "places": []}
+
+
+def test_invalid_gemini_settings_do_not_break_api_013(monkeypatch):
+    """#46 리뷰 후속: GEMINI_* 설정이 잘못돼도 500 이 아니라 사전 키워드 규칙으로 200 이다."""
+    from app.modules.recommend.mood import build_mood_service
+
+    monkeypatch.setattr("app.modules.recommend.mood_router.build_mood_service", build_mood_service)
+    monkeypatch.setitem(AISettings.model_config, "env_file", None)
+    monkeypatch.setenv("GEMINI_MAX_ATTEMPTS", "abc")
+
+    with TestClient(create_app(Settings(app_name="Backend test"))) as client:
+        response = client.post("/api/recommend/mood", json={"text": "조용한 바다", "date": "2026-12-05"})
+
+    assert response.status_code == 200

@@ -1,11 +1,14 @@
+import logging
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.secrets import blank_key_is_no_key
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
+
+logger = logging.getLogger(__name__)
 
 
 class AISettings(BaseSettings):
@@ -32,3 +35,22 @@ class AISettings(BaseSettings):
 
     # `.env` 의 `GEMINI_API_KEY=`(빈 값)은 키가 없는 것으로 본다. 빈 키로 LLM 을 부르지 않는다.
     _normalize_key = field_validator("api_key", mode="before")(blank_key_is_no_key)
+
+
+def load_ai_settings(component: str) -> AISettings | None:
+    """환경 설정(GEMINI_*·backend/.env)을 읽는다. 값이 잘못됐으면 예외 대신 None 이다.
+
+    LLM 은 부가 기능이라(AI-REQ-05) 설정 오류가 API 응답을 500 으로 만들면 안 된다. 호출한 쪽은 None 이면
+    LLM 없이(규칙 기반으로) 동작한다. 로그에는 잘못된 설정 이름만 남기고 값은 남기지 않는다(키가 섞일 수 있다).
+    """
+    try:
+        return AISettings()
+    except ValidationError as error:
+        names = ",".join(sorted({str(item["loc"][0]) for item in error.errors() if item["loc"]}))
+        logger.warning("ai_settings invalid component=%s fields=%s llm=disabled", component, names)
+        return None
+
+
+def default_ai_settings() -> AISettings:
+    """검증 없이 기본값만 담은 설정. 설정이 잘못돼 LLM 을 끈 서비스의 입력 제한 등에 쓴다(키 없음)."""
+    return AISettings.model_construct()

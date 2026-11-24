@@ -16,7 +16,7 @@ from typing import Literal
 
 from app.modules.ai.providers.base import LlmError, LlmProvider
 from app.modules.ai.sanitizer import sanitize
-from app.modules.ai.settings import AISettings
+from app.modules.ai.settings import AISettings, default_ai_settings, load_ai_settings
 
 from .mood_data import MoodCandidate, MoodDataProvider, ThemeTag
 
@@ -227,9 +227,11 @@ class MoodService:
 
 
 def build_mood_service(data: MoodDataProvider, settings: AISettings | None = None) -> MoodService:
-    """환경 설정으로 서비스를 만든다. 키가 없으면 사전 키워드 규칙만 쓴다."""
+    """환경 설정으로 서비스를 만든다. 키가 없거나 GEMINI_* 설정이 잘못됐으면 사전 키워드 규칙만 쓴다."""
     from app.modules.ai.providers.gemini import GeminiProvider
 
-    config = settings if settings is not None else AISettings()
+    config = settings if settings is not None else load_ai_settings("ai_mood")
+    if config is None:
+        return MoodService(default_ai_settings(), data, None)
     llm = GeminiProvider(config) if config.api_key is not None else None
     return MoodService(config, data, llm)

@@ -14,7 +14,7 @@ from typing import Literal, cast, get_args
 
 from .providers.base import LlmError, LlmProvider
 from .sanitizer import sanitize
-from .settings import AISettings
+from .settings import AISettings, default_ai_settings, load_ai_settings
 
 logger = logging.getLogger(__name__)
 
@@ -420,9 +420,11 @@ class InterpretService:
 
 
 def build_interpret_service(settings: AISettings | None = None) -> InterpretService:
-    """환경 설정으로 서비스를 만든다. 키가 없으면 규칙 기반 해석만 한다."""
+    """환경 설정으로 서비스를 만든다. 키가 없거나 GEMINI_* 설정이 잘못됐으면 규칙 기반 해석만 한다."""
     from .providers.gemini import GeminiProvider
 
-    config = settings if settings is not None else AISettings()
+    config = settings if settings is not None else load_ai_settings("ai_interpret")
+    if config is None:
+        return InterpretService(default_ai_settings(), None)
     llm = GeminiProvider(config) if config.api_key is not None else None
     return InterpretService(config, llm)
