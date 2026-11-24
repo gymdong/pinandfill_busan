@@ -45,9 +45,9 @@ def test_invalid_settings_return_none_and_log_only_the_field_name(monkeypatch, c
     with caplog.at_level(logging.WARNING):
         assert load_ai_settings("ai_interpret") is None
     field = name.removeprefix("GEMINI_").lower()
+    # 메시지 전체가 정해진 형식과 같으므로 잘못된 값은 들어 있지 않다. 키도 남지 않는다.
     assert caplog.messages == [f"ai_settings invalid component=ai_interpret fields={field} llm=disabled"]
-    # 값(키 포함)은 남기지 않는다.
-    assert SECRET not in caplog.text and value not in caplog.messages[0].split("fields=")[0]
+    assert SECRET not in caplog.text
 
 
 def test_default_settings_have_no_key_and_the_declared_defaults():
