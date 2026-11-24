@@ -34,11 +34,14 @@ class PlacePhotos:
         by_place: dict[str, list[PlaceDetailPhoto]] = {}
         for place_id, photo in photos:
             by_place.setdefault(place_id, []).append(photo)
-        # 대표 사진을 앞으로 옮기고, 나머지는 파일 순서를 지킨다.
-        self._by_place = {
-            place_id: tuple(sorted(items, key=lambda photo: not photo.is_primary))
-            for place_id, items in by_place.items()
-        }
+        # 대표 사진을 앞으로 옮기고, 나머지는 파일 순서를 지킨다. 대표가 여러 장이면 첫 장만 대표로 둔다.
+        self._by_place: dict[str, tuple[PlaceDetailPhoto, ...]] = {}
+        for place_id, items in by_place.items():
+            ordered = sorted(items, key=lambda photo: not photo.is_primary)
+            self._by_place[place_id] = tuple(
+                photo if index == 0 or not photo.is_primary else photo.model_copy(update={"is_primary": False})
+                for index, photo in enumerate(ordered)
+            )
 
     def photos(self, place_id: str) -> tuple[PlaceDetailPhoto, ...]:
         return self._by_place.get(place_id, ())
@@ -50,8 +53,11 @@ class PlacePhotos:
 
 
 def _is_web_url(value: str) -> bool:
+    # 공백·제어문자가 섞인 URL 은 화면에서 깨지므로 쓰지 않는다.
+    if len(value) > _MAX_URL or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value):
+        return False
     parsed = urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and len(value) <= _MAX_URL
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def load_place_photos(path: Path = PLACE_PHOTOS_FILE) -> PlacePhotos:
@@ -61,7 +67,8 @@ def load_place_photos(path: Path = PLACE_PHOTOS_FILE) -> PlacePhotos:
     try:
         with path.open(encoding="utf-8-sig", newline="") as file:
             rows = [{key: (value or "").strip() for key, value in row.items() if key} for row in csv.DictReader(file)]
-    except (UnicodeDecodeError, csv.Error):
+    except (OSError, UnicodeDecodeError, csv.Error):
+        # 권한 문제 등으로 못 읽어도 앱 시작을 막지 않는다.
         logger.warning("place_photos unreadable file=%s", path.name)
         return PlacePhotos()
 

@@ -63,6 +63,7 @@ def test_photos_without_license_or_source_are_not_shown(tmp_path, caplog):
         "100,https://img.example.com/no-org.jpg,,공공누리 제1유형,TRUE\n"
         "100,javascript:alert(1),예시 기관,공공누리 제1유형,TRUE\n"
         "100,/relative.jpg,예시 기관,공공누리 제1유형,TRUE\n"
+        "100,https://img.example.com/with space.jpg,예시 기관,공공누리 제1유형,TRUE\n"
         ",https://img.example.com/no-place.jpg,예시 기관,공공누리 제1유형,TRUE\n",
     )
     with caplog.at_level(logging.INFO):
@@ -70,8 +71,25 @@ def test_photos_without_license_or_source_are_not_shown(tmp_path, caplog):
     assert photos.photos("100") == ()
     assert photos.primary("100") is None
     # 건수만 남기고 URL 은 남기지 않는다.
-    assert caplog.messages == ["place_photos loaded=0 missing_license=1 invalid=4"]
+    assert caplog.messages == ["place_photos loaded=0 missing_license=1 invalid=5"]
     assert "img.example.com" not in caplog.text
+
+
+def test_only_the_first_of_several_primary_photos_stays_primary(tmp_path):
+    path = write(
+        tmp_path,
+        "100,https://img.example.com/a.jpg,예시 기관,공공누리 제1유형,FALSE\n"
+        "100,https://img.example.com/b.jpg,예시 기관,공공누리 제1유형,TRUE\n"
+        "100,https://img.example.com/c.jpg,예시 기관,공공누리 제1유형,TRUE\n",
+    )
+    photos = load_place_photos(path)
+    assert [(p.url.rsplit("/", 1)[1], p.is_primary) for p in photos.photos("100")] == [
+        ("b.jpg", True),
+        ("c.jpg", False),
+        ("a.jpg", False),
+    ]
+    primary = photos.primary("100")
+    assert primary is not None and primary.url.endswith("b.jpg")
 
 
 def test_missing_or_broken_file_means_no_photos(tmp_path):
@@ -79,3 +97,15 @@ def test_missing_or_broken_file_means_no_photos(tmp_path):
     broken = tmp_path / "place_photos.csv"
     broken.write_bytes(b"\xff\xfe\x00broken")
     assert load_place_photos(broken).photos("100") == ()
+
+
+def test_unreadable_file_does_not_stop_the_app(tmp_path, monkeypatch, caplog):
+    path = write(tmp_path, "100,https://img.example.com/a.jpg,예시 기관,공공누리 제1유형,TRUE\n")
+
+    def denied(*args: object, **kwargs: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "open", denied)
+    with caplog.at_level(logging.WARNING):
+        assert load_place_photos(path).photos("100") == ()
+    assert caplog.messages == ["place_photos unreadable file=place_photos.csv"]
