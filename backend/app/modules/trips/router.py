@@ -73,7 +73,10 @@ def translate_error(exc: Exception) -> TripAPIError:
     if isinstance(exc, TripNotFoundError):
         return TripAPIError(404, "ERR-016", "여행을 찾을 수 없습니다.")
     if isinstance(exc, FixedScheduleConflictError):
-        return TripAPIError(409, "ERR-009", "고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요.")
+        message = "고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요."
+        # 최초 생성만 충돌한 선택을 `selections.<clientId>` 키로 싣는다(ERR-001 fields 와 같은 키 → 문구 형식).
+        fields = {f"selections.{client_id}": message for client_id in exc.client_ids} or None
+        return TripAPIError(409, "ERR-009", message, fields=fields)
     if isinstance(exc, NothingToUndoError):
         # SDD 8장에 '되돌릴 편집 없음' 전용 ID 가 없어 ERR-001 을 쓴다. 프런트 ERROR_CATALOG·mock 과 같게 400 이다.
         return TripAPIError(400, "ERR-001", "되돌릴 직전 편집이 없습니다.")
