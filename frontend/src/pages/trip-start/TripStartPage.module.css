@@ -256,6 +256,37 @@
   text-decoration: none;
 }
 
+/* UI-08에서 고른 분위기(FR-015). 여행 조건에 함께 담긴다. */
+.mood {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: calc(var(--space-2) * -1);
+  padding-left: var(--space-4);
+}
+
+.moodLabels {
+  min-width: 0;
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+  overflow-wrap: anywhere;
+}
+
+.moodClear {
+  flex-shrink: 0;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: var(--text-s);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
 /* ---------- 하단 고정 ---------- */
 .footer {
   position: sticky;

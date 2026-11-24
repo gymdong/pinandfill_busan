@@ -233,6 +233,49 @@ describe('UI-08 분위기로 찾기', () => {
     }
   });
 
+  describe('고른 분위기를 여행 조건에 담는다(FR-015)', () => {
+    it('해석된 칩을 담고, 칩을 끄고 켜면 바로 고친다', async () => {
+      mockMood();
+      renderPage();
+      await search();
+      await screen.findByRole('list', { name: '추천 장소' });
+      expect(useTripDraft.getState().mood).toEqual({ tags: moodTags, avoid: moodAvoid });
+      expect(useTripDraft.getState().conditions.prefs).toEqual({ tags: ['SEA_VIEW', 'ALLEY_WALK'], avoid: ['실내 제외'] });
+
+      const chips = screen.getByRole('group', { name: '해석된 조건' });
+      await userEvent.click(within(chips).getByRole('button', { name: /골목·산책/ }));
+      await userEvent.click(within(chips).getByRole('button', { name: /실내 제외/ }));
+      expect(useTripDraft.getState().conditions.prefs).toEqual({ tags: ['SEA_VIEW'] });
+
+      await userEvent.click(within(chips).getByRole('button', { name: /바다 전망/ }));
+      expect(useTripDraft.getState().mood).toBeNull();
+      expect(useTripDraft.getState().conditions.prefs).toBeUndefined();
+    });
+
+    it('다시 들어오면 전에 고른 칩을 켠 채로 추천을 다시 받는다', async () => {
+      useTripDraft.getState().setMood({ tags: [moodTags[0]!], avoid: ['실내 제외'] });
+      const mood = mockMood();
+      renderPage();
+
+      const chips = screen.getByRole('group', { name: '해석된 조건' });
+      expect(within(chips).getByRole('button', { name: /바다 전망/ })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(chips).getByRole('button', { name: /실내 제외/ })).toHaveAttribute('aria-pressed', 'true');
+      expect(await screen.findByRole('list', { name: '추천 장소' })).toBeInTheDocument();
+      expect(mood.mock.calls.map(([body]) => body)).toEqual([{ tags: ['SEA_VIEW'], avoid: ['실내 제외'], date: '2026-10-17' }]);
+    });
+
+    it('읽지 못한 문장으로 다시 찾으면 전에 고른 분위기를 지운다', async () => {
+      useTripDraft.getState().setMood({ tags: [moodTags[0]!], avoid: [] });
+      vi.spyOn(recommendApi, 'mood').mockImplementation(async (body: MoodRequest) =>
+        body.text !== undefined ? { tags: [], avoid: [], places: [] } : { tags: [], avoid: [], places: moodPlaces },
+      );
+      renderPage();
+      await search('아무 말');
+      expect(await screen.findByText(/문장에서 분위기를 읽지 못했어요/)).toBeInTheDocument();
+      expect(useTripDraft.getState().mood).toBeNull();
+    });
+  });
+
   it('여행 날짜가 없으면 오늘을 기준일로 보낸다', async () => {
     useTripDraft.getState().reset();
     vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 10, 17, 9) });
