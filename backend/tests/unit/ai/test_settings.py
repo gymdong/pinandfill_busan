@@ -19,9 +19,11 @@ def no_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("no_env_file")
-def test_default_timeout_waits_for_gemini_but_fits_screen_timeout():
+def test_default_timeout_waits_for_gemini_and_http_timeouts_fit_screen_timeout():
     settings = AISettings()
-    # 실제 응답(약 10초)보다 길고, 재시도까지 더해도 화면의 요청 제한(30초, 한 줄 해석·분위기 찾기) 안이다.
+    # 검사 범위는 HTTP 시간 제한의 합계뿐이다. 재시도(interpret·mood 의 `_ask_llm`)는 대기 없이 바로 다시 부른다.
+    # 30초: frontend `pages/trip-start`(API-001)·`pages/mood-search`(API-013)의 `timeoutMs: 30_000`.
+    # 남는 6초가 규칙 해석·응답 처리 여유다.
     assert settings.timeout_seconds > 10
     assert settings.timeout_seconds * settings.max_attempts < 30
 
