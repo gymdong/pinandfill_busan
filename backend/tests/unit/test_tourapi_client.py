@@ -99,3 +99,43 @@ def test_network_error():
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(TourAPIError):
             fetch_public_place("1997221", api_key="test-key", client=client)
+
+
+def test_http_error_does_not_expose_service_key():
+    """HTTP 오류에서 인증키가 예외 메시지에 노출되지 않아야 한다."""
+    import traceback
+
+    secret = "SECRET_TEST_KEY_123456"
+
+    with make_client(status_code=500) as client:
+        with pytest.raises(TourAPIError) as error:
+            fetch_public_place(
+                "1997221",
+                api_key=secret,
+                client=client,
+            )
+
+    assert secret not in str(error.value)
+    assert secret not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"response": None},
+        {"response": []},
+        {"response": {"body": None}},
+        {"response": {"body": []}},
+        {"response": {"body": {"items": None}}},
+        {"response": {"body": {"items": []}}},
+    ],
+)
+def test_malformed_nested_response(payload):
+    """잘못된 중첩 응답은 TourAPIError로 처리한다."""
+    with make_client(payload=payload) as client:
+        with pytest.raises(TourAPIError):
+            fetch_public_place(
+                "1997221",
+                api_key="test-key",
+                client=client,
+            )

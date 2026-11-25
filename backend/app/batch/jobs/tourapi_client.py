@@ -46,14 +46,25 @@ def fetch_public_place(
 
         response.raise_for_status()
         payload: Any = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise TourAPIError("TourAPI 요청 또는 JSON 처리 실패") from exc
+    except httpx.HTTPStatusError as exc:
+        raise TourAPIError(f"TourAPI 요청 실패 (HTTP {exc.response.status_code})") from None
+    except httpx.HTTPError:
+        raise TourAPIError("TourAPI 네트워크 요청 실패") from None
+    except ValueError:
+        raise TourAPIError("TourAPI JSON 처리 실패") from None
 
     if not isinstance(payload, dict):
         raise TourAPIError("TourAPI 응답 형식이 올바르지 않습니다.")
 
-    body = payload.get("response", {}).get("body", {})
-    items = body.get("items", {})
+    envelope = payload.get("response")
+    if not isinstance(envelope, Mapping):
+        raise TourAPIError("TourAPI response 형식 오류")
+
+    body = envelope.get("body")
+    if not isinstance(body, Mapping):
+        raise TourAPIError("TourAPI body 형식 오류")
+
+    items = body.get("items")
 
     if not isinstance(items, Mapping):
         raise TourAPIError("TourAPI 관광지 목록 형식이 올바르지 않습니다.")
