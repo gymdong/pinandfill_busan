@@ -44,7 +44,7 @@ async function pinAllSearchResults({ stay = '90' }: { stay?: string | null } = {
 }
 
 function generated(saved: boolean, unplaced: InitialScheduleResponse['generation']['unplaced'] = []): InitialScheduleResponse {
-  return { ...schedule, generation: { saved, confirmed: false, unplaced } };
+  return { ...schedule, generation: { saved, confirmed: false, unplaced, previewClientIds: {} } };
 }
 
 function mockCourseApis() {
@@ -370,6 +370,43 @@ describe('UI-01 여행 시작', () => {
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
       expect(await screen.findByText('타임라인 t9')).toBeInTheDocument();
       expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('고정 시각 충돌에 서버가 충돌한 장소를 알려 주면 그 장소 아래에 보여 주고, 계획을 고치면 지운다(#39)', async () => {
+      const { initial } = mockCourseApis();
+      const conflict = '고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요.';
+      const key = `public:${searchItems[0]!.placeId}`;
+      initial.mockRejectedValueOnce(
+        new ApiError({ id: 'ERR-009', status: 409, message: conflict, fields: { [`selections.${key}`]: conflict, 'selections.unknown': conflict } }),
+      );
+      renderPage();
+      setDates('2026-10-17', '2026-10-18');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+
+      expect(await screen.findByText('지정한 시간을 지킬 수 없는 장소가 있어요. 표시된 장소의 시간이나 날짜를 바꿔 다시 눌러 주세요.')).toBeInTheDocument();
+      // 담은 장소가 아닌 키는 버리고, 충돌한 장소 한 곳에만 문구가 붙는다.
+      expect(screen.getAllByText(conflict)).toHaveLength(1);
+
+      await userEvent.selectOptions(screen.getByLabelText(`${searchItems[0]!.name} 방문 일차`), '2');
+      expect(screen.queryByText(conflict)).not.toBeInTheDocument();
+    });
+
+    it('꼭 갈 곳이 30곳이면 검색 결과를 더 담을 수 없다고 알린다', async () => {
+      const many = Array.from({ length: 30 }, (_, index) => ({
+        kind: 'PUBLIC' as const,
+        placeId: `p${index}`,
+        name: `장소 ${index}`,
+        coords: { lat: 35.1, lng: 129.1 },
+      }));
+      useTripDraft.setState({ pinned: many });
+      renderPage();
+      vi.spyOn(placesApi, 'search').mockResolvedValue({ places: searchItems });
+      await userEvent.type(screen.getByLabelText('장소 검색'), '민락');
+      await userEvent.click(screen.getByRole('button', { name: '검색' }));
+      const results = await screen.findByRole('list', { name: '검색 결과' });
+      expect(screen.getByRole('status')).toHaveTextContent('꼭 갈 곳은 30곳까지 담을 수 있어요.');
+      for (const button of within(results).getAllByRole('button')) expect(button).toBeDisabled();
     });
 
     it('실패 뒤 여행 조건을 바꾸면 이전 여행을 쓰지 않고 새 여행을 만든다', async () => {

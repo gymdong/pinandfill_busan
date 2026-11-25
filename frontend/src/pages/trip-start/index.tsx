@@ -15,12 +15,21 @@ import {
 import {
   CourseFailedError,
   STAY_NEEDS_CHECK,
+  conflictsOf,
   createCourse,
   stayRequired,
   validatePlans,
   type StayAsked,
 } from '@/features/trip-start/createCourse';
-import { pinnedKey, planOf, useTripDraft, type PinnedPlace, type PinnedPlan } from '@/store/tripDraft';
+import {
+  PINNED_LIMIT,
+  PINNED_LIMIT_MESSAGE,
+  pinnedKey,
+  planOf,
+  useTripDraft,
+  type PinnedPlace,
+  type PinnedPlan,
+} from '@/store/tripDraft';
 import { formatDate, formatDuration } from '@/utils/format';
 import styles from './TripStartPage.module.css';
 
@@ -50,7 +59,8 @@ export default function TripStartPage() {
   const [savedEarlier, setSavedEarlier] = useState<string | null>(null);
   // 서버가 체류시간 근거가 없다고 알려 준(STAY_NEEDS_CHECK) 장소. 공공 DB 장소라도 머무를 시간을 고른다.
   const [stayAsked, setStayAsked] = useState<StayAsked>(new Set());
-  // 서버가 일정에 넣지 못한 장소와 그 이유(API-009 generation.unplaced). 키는 pinnedKey
+  // 서버가 장소별로 알려 준 문제: 일정에 넣지 못한 이유(API-009 generation.unplaced)와
+  // 고정 시각 충돌(409 ERR-009 fields, #39). 키는 pinnedKey
   const [unplaced, setUnplaced] = useState<Record<string, string>>({});
 
   // 당일 여행은 1일차뿐이다. 여행 기간을 줄이면 사라진 일차에 둔 장소는 마지막 날로 옮겨 보여 준다.
@@ -119,6 +129,10 @@ export default function TripStartPage() {
       setSubmitError('입력한 내용을 다시 확인해 주세요.');
       return;
     }
+    if (pinned.length > PINNED_LIMIT) {
+      setSubmitError(`${PINNED_LIMIT_MESSAGE} ${pinned.length - PINNED_LIMIT}곳을 빼 주세요.`);
+      return;
+    }
     setSubmitting(true);
     setUnplaced({});
     // 여행 조건이 그대로일 때만 저장하지 못한 빈 여행을 다시 쓴다. 담은 장소·계획은 전체를 다시 보낸다.
@@ -149,6 +163,13 @@ export default function TripStartPage() {
     } catch (error) {
       if (error instanceof CourseFailedError) {
         unsaved.current = { tripId: error.tripId, conditionsKey, selectionKey };
+        // 고정 시각 충돌이면 서버가 알려 준 장소 아래에 문구를 보여 준다. 담은 장소가 아닌 키는 버린다.
+        const conflicts = Object.entries(conflictsOf(error.apiError)).filter(([key]) => pickedKeys.has(key));
+        if (conflicts.length > 0) {
+          setUnplaced(Object.fromEntries(conflicts));
+          setSubmitError('지정한 시간을 지킬 수 없는 장소가 있어요. 표시된 장소의 시간이나 날짜를 바꿔 다시 눌러 주세요.');
+          return;
+        }
         setSubmitError(`${error.apiError.message} 다시 누르면 같은 여행으로 이어서 만들어요.`);
       } else {
         unsaved.current = null;
@@ -327,6 +348,7 @@ export default function TripStartPage() {
         <PlaceSearch
           pickedKeys={pickedKeys}
           onPick={(item) => addPinned(toPinnedPlace(item))}
+          pickBlocked={pinned.length >= PINNED_LIMIT ? PINNED_LIMIT_MESSAGE : null}
           onUnpick={(item) => removePinned(pinnedKey(toPinnedPlace(item)))}
           fallbackHint={MAP_HINT}
         />

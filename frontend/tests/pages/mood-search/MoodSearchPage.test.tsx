@@ -120,6 +120,22 @@ describe('UI-08 분위기로 찾기', () => {
     expect(screen.getByText('여행 시작 화면')).toBeInTheDocument();
   });
 
+  it('꼭 갈 곳이 30곳이면 담기지 않은 추천은 담을 수 없다고 알린다', async () => {
+    mockMood();
+    useTripDraft.setState({ pinned: Array.from({ length: 30 }, (_, index) => ({
+      kind: 'PUBLIC' as const,
+      placeId: `p${index}`,
+      name: `장소 ${index}`,
+      coords: { lat: 35.1, lng: 129.1 },
+    })) });
+    renderPage();
+    await search();
+    const button = await screen.findByRole('button', { name: '흰여울문화마을 담기' });
+    expect(button).toBeDisabled();
+    expect(screen.getByText('꼭 갈 곳은 30곳까지 담을 수 있어요.')).toBeInTheDocument();
+    expect(useTripDraft.getState().pinned).toHaveLength(30);
+  });
+
   it('해석된 태그가 없으면 다른 표현을 안내하고 추천을 요청하지 않는다', async () => {
     const mood = vi.spyOn(recommendApi, 'mood').mockResolvedValue({ tags: [], avoid: [], places: [] });
     renderPage();

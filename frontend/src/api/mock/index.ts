@@ -184,6 +184,10 @@ function addBlock(tripId: string, body: AddBlockRequest): ScheduleMutationRespon
 const STAY_NEEDS_CHECK: Violation = { type: 'STAY_NEEDS_CHECK', cause: '체류시간 근거 확인이 필요합니다.' };
 /** 목업 fixture의 공공 장소에는 기본 체류시간이 없어 쓰는 목업 값이다(실제 값 아님). API-006 mock과 같은 40분이다. */
 const MOCK_PUBLIC_STAY_MIN = 40;
+/** 백엔드 `MAX_INITIAL_SELECTIONS`(#39) */
+const MOCK_MAX_SELECTIONS = 30;
+/** 백엔드 409 ERR-009 문구(`trips/router.py`) */
+const FIXED_CONFLICT_MESSAGE = '고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요.';
 
 /**
  * API-009. `initial`이 없으면 지금 일정을 그대로 돌려준다(목업은 재계산하지 않는다).
@@ -198,14 +202,25 @@ function generateSchedule(tripId: string, body: GenerateScheduleRequest | Initia
   const tripState = state(tripId);
   if (tripState.schedule.days.some((day) => day.blocks.length > 0)) return invalid();
   const selections = body.initial?.selections ?? [];
-  if (body.initial?.policy !== 'FIRST_FEASIBLE' || selections.length === 0) return invalid();
+  // 백엔드처럼 선택은 30개까지다(MAX_INITIAL_SELECTIONS, #39).
+  if (body.initial?.policy !== 'FIRST_FEASIBLE' || selections.length === 0 || selections.length > MOCK_MAX_SELECTIONS) return invalid();
   if (new Set(selections.map((item) => item.clientId)).size !== selections.length) return invalid();
   selections.forEach(checkSelection);
-  // 백엔드처럼 고정 선택이 날짜·시각순이 아니면 겹치지 않아도 고정 순서 충돌이다.
-  if (!fixedInOrder(selections)) throw new ApiError({ id: 'ERR-009', status: 409 });
+  // 백엔드처럼 고정 선택이 날짜·시각순이 아니면 겹치지 않아도 고정 순서 충돌이다. 충돌한 선택을 fields 로 싣는다(#39).
+  const outOfOrder = fixedOutOfOrder(selections);
+  if (outOfOrder.length > 0) {
+    throw new ApiError({
+      id: 'ERR-009',
+      status: 409,
+      message: FIXED_CONFLICT_MESSAGE,
+      fields: Object.fromEntries(outOfOrder.map((clientId) => [`selections.${clientId}`, FIXED_CONFLICT_MESSAGE])),
+    });
+  }
 
   const draft: Schedule = { days: [], violations: [], conflicts: [] };
   const unplaced: { clientId: string; reason: Violation }[] = [];
+  // 미리보기 블록 ID → clientId. 저장되지 않았을 때만 돌려준다(#39).
+  const previewClientIds: Record<string, string> = {};
   let nextBlockNumber = tripState.nextBlockNumber;
   for (const selection of selections) {
     const input = selection.place;
@@ -220,8 +235,10 @@ function generateSchedule(tripId: string, body: GenerateScheduleRequest | Initia
     const dayNo = selection.fixedWindow?.dayNo ?? selection.dayNo ?? 1;
     const day = draft.days.find((item) => item.dayNo === dayNo) ?? addEmptyDay(draft, dayNo, tripState.trip);
     const window = selection.fixedWindow;
+    const id = `00000000-0000-4000-8000-${String(nextBlockNumber++).padStart(12, '0')}`;
+    previewClientIds[id] = selection.clientId;
     day.blocks.push({
-      id: `00000000-0000-4000-8000-${String(nextBlockNumber++).padStart(12, '0')}`,
+      id,
       dayNo, seq: day.blocks.length + 1, place, isFixed: Boolean(window),
       fixedStart: window?.start ?? null, fixedEnd: window?.end ?? null,
       stayMin: selection.stayMin ?? (window ? minutesOf(window.end) - minutesOf(window.start) : MOCK_PUBLIC_STAY_MIN),
@@ -238,7 +255,10 @@ function generateSchedule(tripId: string, body: GenerateScheduleRequest | Initia
     tripState.previous = null;
     tripState.nextBlockNumber = nextBlockNumber;
   }
-  return { ...structuredClone(draft), generation: { saved, confirmed: false, unplaced } };
+  return {
+    ...structuredClone(draft),
+    generation: { saved, confirmed: false, unplaced, previewClientIds: saved ? {} : previewClientIds },
+  };
 }
 
 function checkSelection(selection: InitialSelection): void {
@@ -253,9 +273,17 @@ function checkSelection(selection: InitialSelection): void {
   }
 }
 
-function fixedInOrder(selections: InitialSelection[]): boolean {
-  const keys = selections.flatMap((item) => (item.fixedWindow ? [item.fixedWindow.dayNo * 24 * 60 + minutesOf(item.fixedWindow.start)] : []));
-  return keys.every((key, index) => (keys[index - 1] ?? key) <= key);
+/** 앞선 고정 선택보다 이른 날짜·시각의 고정 선택(`clientId`). 비어 있으면 순서대로다. */
+function fixedOutOfOrder(selections: InitialSelection[]): string[] {
+  let latest = -Infinity;
+  const late: string[] = [];
+  for (const item of selections) {
+    if (!item.fixedWindow) continue;
+    const key = item.fixedWindow.dayNo * 24 * 60 + minutesOf(item.fixedWindow.start);
+    if (key < latest) late.push(item.clientId);
+    else latest = key;
+  }
+  return late;
 }
 
 function visitEnd(arriveAt: string | null, stayMin: number): string | null {

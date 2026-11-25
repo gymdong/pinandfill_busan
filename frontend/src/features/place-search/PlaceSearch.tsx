@@ -20,6 +20,8 @@ export interface PlaceSearchProps {
   onUnpick?: (item: PlaceSearchItem) => void;
   /** 결과가 없거나 검색이 안 될 때 함께 보여 줄 다른 방법 안내(예: 지도에서 고르기) */
   fallbackHint?: ReactNode;
+  /** 더 담을 수 없을 때의 안내. 있으면 담기지 않은 결과는 누를 수 없다(꼭 갈 곳 상한). */
+  pickBlocked?: string | null;
 }
 
 /** 이름에서 검색어와 겹치는 부분을 굵게 표시한다. */
@@ -39,7 +41,7 @@ function highlight(name: string, query: string): ReactNode {
  * 장소 검색(API-003)과 결과 배지(FR-001).
  * 카카오 응답은 화면에 보여 주기만 하고 저장하지 않는다. 검색은 입력할 때마다가 아니라 제출할 때 한 번 호출한다.
  */
-export function PlaceSearch({ pickedKeys, onPick, onUnpick, fallbackHint }: PlaceSearchProps) {
+export function PlaceSearch({ pickedKeys, onPick, onUnpick, fallbackHint, pickBlocked }: PlaceSearchProps) {
   const inputId = useId();
   const [text, setText] = useState('');
   const [state, setState] = useState<SearchState>({ status: 'idle' });
@@ -128,6 +130,7 @@ export function PlaceSearch({ pickedKeys, onPick, onUnpick, fallbackHint }: Plac
 
       {state.status === 'success' && state.places.length > 0 && (
         <>
+          {pickBlocked ? <p className={styles.hint} role="status">{pickBlocked}</p> : null}
           <ul className={styles.results} aria-label="검색 결과">
             {state.places.map((item) => {
               const picked = pickedKeys.has(pinnedKey(toPinnedPlace(item)));
@@ -138,7 +141,7 @@ export function PlaceSearch({ pickedKeys, onPick, onUnpick, fallbackHint }: Plac
                     type="button"
                     className={styles.result}
                     aria-pressed={picked}
-                    disabled={picked && !onUnpick}
+                    disabled={picked ? !onUnpick : Boolean(pickBlocked)}
                     onClick={() => (picked ? onUnpick?.(item) : onPick(item))}
                   >
                     <span className={styles.resultText}>
