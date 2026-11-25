@@ -19,6 +19,16 @@ def no_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("no_env_file")
+def test_default_timeout_waits_for_gemini_and_http_timeouts_fit_screen_timeout():
+    settings = AISettings()
+    # 검사 범위는 HTTP 시간 제한의 합계뿐이다. 재시도(interpret·mood 의 `_ask_llm`)는 대기 없이 바로 다시 부른다.
+    # 30초: frontend `pages/trip-start`(API-001)·`pages/mood-search`(API-013)의 `timeoutMs: 30_000`.
+    # 남는 6초가 규칙 해석·응답 처리 여유다.
+    assert settings.timeout_seconds > 10
+    assert settings.timeout_seconds * settings.max_attempts < 30
+
+
+@pytest.mark.usefixtures("no_env_file")
 def test_valid_settings_are_loaded(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", SECRET)
     monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "7")
