@@ -6,7 +6,7 @@ import { Badge, Button, ErrorState, LoadingState } from '@/components';
 import { CrowdBadge } from '@/features/crowd';
 import { DAY_LABEL, WEEK_ORDER, dayTypeOf, describeHours, hoursFor } from '@/features/place-detail/hours';
 import { useApi } from '@/hooks/useApi';
-import { pinnedKey, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
+import { PINNED_LIMIT, PINNED_LIMIT_MESSAGE, pinnedKey, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
 import type { PlaceDetailResponse, PlacePhoto } from '@/types/api';
 import { formatDate } from '@/utils/format';
 import styles from './PlaceDetailPage.module.css';
@@ -55,6 +55,7 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
   };
   const key = pinnedKey(asPinned);
   const isPinned = pinned.some((item) => pinnedKey(item) === key);
+  const full = !isPinned && pinned.length >= PINNED_LIMIT;
 
   const dayType = dayTypeOf(date);
   const today = describeHours(hoursFor(hours, dayType));
@@ -134,9 +135,15 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
       </section>
 
       <div className={styles.actions}>
-        <Button block variant={isPinned ? 'outline' : 'primary'} onClick={() => (isPinned ? removePinned(key) : addPinned(asPinned))}>
+        <Button
+          block
+          variant={isPinned ? 'outline' : 'primary'}
+          disabled={full}
+          onClick={() => (isPinned ? removePinned(key) : addPinned(asPinned))}
+        >
           {isPinned ? '✓ 꼭 갈 곳에 담김 · 빼기' : '꼭 갈 곳에 담기'}
         </Button>
+        {full && <p role="status">{PINNED_LIMIT_MESSAGE}</p>}
       </div>
     </>
   );

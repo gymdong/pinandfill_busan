@@ -261,7 +261,7 @@ describe('mockRequest', () => {
     it('모두 넣으면 저장하고, 되돌리기 지점은 만들지 않는다', async () => {
       const tripId = await newTrip();
       const result = await mockRequest<InitialScheduleResponse>({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([park, fixedCafe]) });
-      expect(result.generation).toEqual({ saved: true, confirmed: false, unplaced: [] });
+      expect(result.generation).toEqual({ saved: true, confirmed: false, unplaced: [], previewClientIds: {} });
       const saved = await mockRequest<TripDetailResponse>({ method: 'GET', path: `/trips/${tripId}` });
       expect(saved.schedule!.days.map((day) => [day.dayNo, day.blocks.map((block) => [block.isFixed, block.stayMin, block.arriveAt])]))
         .toEqual([[1, [[true, 90, '10:00']]], [2, [[false, 40, null]]]]);
@@ -278,7 +278,11 @@ describe('mockRequest', () => {
         saved: false,
         confirmed: false,
         unplaced: [{ clientId: 'kakao:2', reason: { type: 'STAY_NEEDS_CHECK', cause: '체류시간 근거 확인이 필요합니다.' } }],
+        previewClientIds: expect.any(Object),
       });
+      // 저장되지 않은 미리보기 블록마다 요청의 clientId 를 알려 준다(#39).
+      const previewBlocks = result.days.flatMap((day) => day.blocks.map((block) => block.id));
+      expect(previewBlocks.map((id) => result.generation.previewClientIds[id])).toEqual(['public:park']);
       const unchanged = await mockRequest<TripDetailResponse>({ method: 'GET', path: `/trips/${tripId}` });
       expect(unchanged.schedule!.days).toEqual([]);
       // 저장되지 않았으니 같은 여행에 다시 보낼 수 있다.
@@ -289,10 +293,12 @@ describe('mockRequest', () => {
     it('고정 선택이 날짜·시각순이 아니면 겹치지 않아도 ERR-009 이다', async () => {
       const lateDay1 = { ...fixedCafe, clientId: 'kakao:3', place: mockKakaoKey(3), fixedWindow: { dayNo: 1, start: '14:00', end: '15:00' } };
       const day2 = { ...fixedCafe, clientId: 'kakao:4', place: mockKakaoKey(4), fixedWindow: { dayNo: 2, start: '10:00', end: '11:00' } };
+      const conflict = '고정 장소의 지정 시각을 지킬 수 없습니다. 날짜 분리를 검토해 주세요.';
+      // 앞선 고정 선택보다 이른 선택을 fields 의 `selections.<clientId>` 로 알려 준다(#39).
       for (const selections of [[lateDay1, fixedCafe], [day2, park, fixedCafe]]) {
         const tripId = await newTrip();
         await expect(mockRequest({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial(selections) }))
-          .rejects.toMatchObject({ id: 'ERR-009', status: 409 });
+          .rejects.toMatchObject({ id: 'ERR-009', status: 409, fields: { 'selections.kakao:1': conflict } });
       }
       const tripId = await newTrip();
       const ordered = await mockRequest<InitialScheduleResponse>({ method: 'POST', path: `/trips/${tripId}/schedule`, body: initial([fixedCafe, park, lateDay1, day2]) });
@@ -302,6 +308,7 @@ describe('mockRequest', () => {
     it.each([
       ['options 와 함께 보냄', { ...initial([park]), options: {} }],
       ['빈 선택', initial([])],
+      ['선택 31개', initial(Array.from({ length: 31 }, (_, index) => ({ ...park, clientId: `public:${index}` })))],
       ['중복 clientId', initial([park, { ...park, dayNo: 1 }])],
       ['dayNo 와 시간창 일차가 다름', initial([{ ...fixedCafe, dayNo: 2 }])],
       ['체류시간이 시간창 길이와 다름', initial([{ ...fixedCafe, stayMin: 60 }])],

@@ -71,6 +71,10 @@ export function toBlockPlaceInput(place: PinnedPlace): BlockPlaceInput {
     : { kakaoPlaceId: place.kakaoPlaceId, placeUrl: place.placeUrl };
 }
 
+/** 꼭 갈 곳 최대 개수. 최초 생성(API-009)이 한 번에 받는 선택 수와 같다(백엔드 `MAX_INITIAL_SELECTIONS`, #39). */
+export const PINNED_LIMIT = 30;
+export const PINNED_LIMIT_MESSAGE = `꼭 갈 곳은 ${PINNED_LIMIT}곳까지 담을 수 있어요.`;
+
 interface TripDraftState {
   conditions: Partial<TripConditions>;
   pinned: PinnedPlace[];
@@ -81,6 +85,7 @@ interface TripDraftState {
   setConditions: (conditions: Partial<TripConditions>) => void;
   /** 분위기를 저장하고 `conditions.prefs`에 반영한다. 태그·피할 조건이 모두 비면 지운다. */
   setMood: (mood: MoodSelection | null) => void;
+  /** 이미 담았거나 `PINNED_LIMIT`곳이 찼으면 담지 않는다. */
   addPinned: (place: PinnedPlace) => void;
   removePinned: (key: string) => void;
   setPlan: (key: string, plan: Partial<PinnedPlan>) => void;
@@ -88,7 +93,7 @@ interface TripDraftState {
 }
 
 /** 여행을 만들기 전까지의 임시 상태. 카카오 응답을 보관하지 않도록 브라우저 저장소에 남기지 않는다. */
-export const useTripDraft = create<TripDraftState>((set) => ({
+export const useTripDraft = create<TripDraftState>((set, get) => ({
   conditions: {},
   pinned: [],
   plans: {},
@@ -114,11 +119,11 @@ export const useTripDraft = create<TripDraftState>((set) => ({
       return { mood: kept, conditions };
     }),
   addPinned: (place) => {
+    const { pinned } = get();
+    if (pinned.length >= PINNED_LIMIT || pinned.some((item) => pinnedKey(item) === pinnedKey(place))) return;
     // 카카오 장소의 이름·좌표는 이번 접속 동안 일정 계산과 표시에 쓰도록 기억한다.
     if (place.kind === 'KAKAO') rememberKakaoPlace(place.kakaoPlaceId, { name: place.name, coords: place.coords });
-    set((state) =>
-      state.pinned.some((item) => pinnedKey(item) === pinnedKey(place)) ? state : { pinned: [...state.pinned, place] },
-    );
+    set((state) => ({ pinned: [...state.pinned, place] }));
   },
   removePinned: (key) =>
     set((state) => ({

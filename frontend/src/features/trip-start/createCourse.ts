@@ -110,6 +110,21 @@ export class CourseFailedError extends Error {
   }
 }
 
+const SELECTION_FIELD = 'selections.';
+
+/**
+ * 고정 시각 충돌(409 ERR-009)에서 서버가 충돌한 선택마다 실어 준 문구(`fields["selections.<clientId>"]`, #39)를
+ * `clientId`(= `pinnedKey`)별로 돌려준다. 다른 오류나 `fields`가 없으면 빈 객체다.
+ */
+export function conflictsOf(error: ApiError): Record<string, string> {
+  if (error.id !== 'ERR-009') return {};
+  return Object.fromEntries(
+    Object.entries(error.fields ?? {})
+      .filter(([key]) => key.startsWith(SELECTION_FIELD) && key.length > SELECTION_FIELD.length)
+      .map(([key, message]) => [key.slice(SELECTION_FIELD.length), message]),
+  );
+}
+
 /** 응답을 받지 못해 서버가 저장했는지 알 수 없는 오류 */
 const UNCERTAIN = new Set(['NETWORK', 'TIMEOUT', 'UNKNOWN']);
 
