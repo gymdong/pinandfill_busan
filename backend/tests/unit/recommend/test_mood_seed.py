@@ -41,6 +41,8 @@ def test_every_place_tag_is_in_dictionary_and_every_tagged_place_exists():
         ("사람 적은 골목 산책", {"ALLEY_WALK"}),
         ("비 오는 날 갈 만한 미술관", {"INDOOR", "ART_CULTURE"}),
         ("바다 말고 숲", {"NATURE"}),
+        ("자연 속에서 쉬고 싶어", {"NATURE", "HEALING"}),
+        ("고즈넉한 사찰", {"TEMPLE"}),
     ],
 )
 def test_common_sentences_find_tags(text: str, codes: set[str]):
@@ -59,6 +61,10 @@ def test_common_sentences_find_tags(text: str, codes: set[str]):
         ("리뷰 좋은 곳", "VIEWPOINT"),
         ("인터뷰 영상에 나온 곳", "VIEWPOINT"),
         ("전통시장 구경", "TEMPLE"),
+        # '절에'·'자연'도 '계절에'·'자연스러운'에 섞여 뺐다.
+        ("이 계절에 가기 좋은 곳", "TEMPLE"),
+        ("가을 계절에 걷기", "TEMPLE"),
+        ("자연스러운 분위기 카페", "NATURE"),
     ],
 )
 def test_short_words_do_not_trigger_unrelated_tags(text: str, unrelated: str):
