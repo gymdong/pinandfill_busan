@@ -409,6 +409,23 @@ describe('UI-01 여행 시작', () => {
       for (const button of within(results).getAllByRole('button')) expect(button).toBeDisabled();
     });
 
+    it('담는 곳을 거치지 않고 31곳이 들어와도 제출 때 막고 몇 곳을 빼야 하는지 알린다', async () => {
+      const { create } = mockCourseApis();
+      // addPinned 를 거치지 않은 상태(상한이 바뀌거나 다른 경로로 채운 경우)를 흉내 낸다.
+      const many = Array.from({ length: 31 }, (_, index) => ({
+        kind: 'PUBLIC' as const,
+        placeId: `p${index}`,
+        name: `장소 ${index}`,
+        coords: { lat: 35.1, lng: 129.1 },
+      }));
+      useTripDraft.setState({ pinned: many });
+      renderPage();
+      setDates('2026-10-17', '2026-10-17');
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(await screen.findByText('꼭 갈 곳은 30곳까지 담을 수 있어요. 1곳을 빼 주세요.')).toBeInTheDocument();
+      expect(create).not.toHaveBeenCalled();
+    });
+
     it('실패 뒤 여행 조건을 바꾸면 이전 여행을 쓰지 않고 새 여행을 만든다', async () => {
       const { create, initial } = mockCourseApis();
       initial.mockRejectedValueOnce(new ApiError({ id: 'ERR-009', status: 409 }));
