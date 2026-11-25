@@ -19,6 +19,14 @@ def no_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("no_env_file")
+def test_default_timeout_waits_for_gemini_but_fits_screen_timeout():
+    settings = AISettings()
+    # 실제 응답(약 10초)보다 길고, 재시도까지 더해도 화면의 요청 제한(30초, 한 줄 해석·분위기 찾기) 안이다.
+    assert settings.timeout_seconds > 10
+    assert settings.timeout_seconds * settings.max_attempts < 30
+
+
+@pytest.mark.usefixtures("no_env_file")
 def test_valid_settings_are_loaded(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", SECRET)
     monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "7")
