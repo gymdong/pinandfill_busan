@@ -10,7 +10,7 @@
 import os
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -21,7 +21,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, StaticPool, inspect, make_url, select, text
+from sqlalchemy import Connection, StaticPool, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
@@ -391,23 +391,33 @@ def test_test_database_name_is_accepted():
     require_test_database(_NamedConnection("pinandfill_test"))  # type: ignore[arg-type]
 
 
-@needs_postgres
-def test_query_dbname_cannot_redirect_the_wipe_to_another_database():
-    # 경로는 _test 지만 ?dbname= 쿼리가 실제 연결 DB 를 바꾼다. 실제 DB 이름으로 막아야 한다.
-    url = make_url(POSTGRES_URL).update_query_dict({"dbname": "postgres"}).render_as_string(hide_password=False)
-    marker = f"guard_marker_{uuid.uuid4().hex}"
-    other = Database(url)
-    try:
-        with other.engine.begin() as connection:
-            assert connection.execute(text("SELECT current_database()")).scalar_one() == "postgres"
-            connection.execute(text(f"CREATE TABLE {marker} (id int)"))
-        with pytest.raises(pytest.fail.Exception, match="_test"):
-            open_database("postgres", url)
-        assert marker in inspect(other.engine).get_table_names()
-    finally:
-        with other.engine.begin() as connection:
-            connection.execute(text(f"DROP TABLE IF EXISTS {marker}"))
-        other.dispose()
+@pytest.mark.parametrize("name", ["pinandfill", "postgres"])
+def test_open_database_stops_before_any_schema_sql_and_closes_the_engine(name: str, monkeypatch: pytest.MonkeyPatch):
+    # 경로는 _test 지만 ?dbname= 쿼리가 실제 연결 DB 를 바꾸는 URL. 실제 DB 이름으로 막고,
+    # DROP·CREATE 를 하나도 보내지 않은 채 엔진을 닫아야 한다. 실제 DB 에는 붙지 않는다.
+    connection = _NamedConnection(name)
+    opened: list[Any] = []
+
+    class _FakeDatabase:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.disposed = False
+            self.engine = self
+            opened.append(self)
+
+        @contextmanager
+        def begin(self) -> Iterator[_NamedConnection]:
+            yield connection
+
+        def dispose(self) -> None:
+            self.disposed = True
+
+    monkeypatch.setitem(globals(), "Database", _FakeDatabase)
+    url = f"postgresql://u:p@localhost:5432/pinandfill_test?dbname={name}"
+    with pytest.raises(pytest.fail.Exception, match="_test"):
+        open_database("postgres", url)
+    assert connection.statements == ["SELECT current_database()"]
+    assert [(db.url, db.disposed) for db in opened] == [(url, True)]
 
 
 def test_alembic_ini_is_ascii_so_any_locale_can_read_it():
