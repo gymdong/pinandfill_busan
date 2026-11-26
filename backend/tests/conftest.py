@@ -45,6 +45,11 @@ def no_real_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(name, "")
     # backend/.env 에 DATABASE_URL 이 있어도 기본 구성은 메모리 저장소를 쓴다. DB 시험은 TEST_DATABASE_URL 로 따로 돈다.
     monkeypatch.setenv("DATABASE_URL", "")
+    # 장소는 CSV 에서 읽는다. 빈 값은 backend/.env 의 값으로 넘어가므로 기본값(csv)을 직접 넣는다.
+    monkeypatch.setenv("PLACE_DATA_SOURCE", "csv")
+    # 혼잡 입력·설정 위치와 관리자 알림은 개발자 환경이 아니라 저장소 기본값을 쓴다(os.environ 만 읽는다).
+    for name in ("CROWD_DATA_DIR", "CROWD_CONFIG_PATH", "ADMIN_ALERT_WEBHOOK_URL"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

@@ -28,9 +28,10 @@ from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
 from app.modules.places.matcher import PlaceMatcher
 from app.modules.places.photos import load_place_photos
 from app.modules.places.router import PlaceAPIError
-from app.modules.places.samples import SamplePlaceData, load_sample_places
+from app.modules.places.samples import SamplePlaceData
 from app.modules.places.service import PlaceSearchService
 from app.modules.places.settings import PlaceMatchSettings
+from app.modules.places.source import load_places
 from app.modules.trips.edit_history import EditHistory
 from app.modules.trips.initial import PublicStayDurations
 from app.modules.trips.repository import FakeTripRepository
@@ -41,22 +42,26 @@ from app.modules.trips.sql_repository import SqlSnapshotRepository, SqlTripRepos
 logger = logging.getLogger(__name__)
 
 
-def default_trip_service(places: SamplePlaceData) -> TripService:
-    """로컬 기본 구성: 표본 장소, 경로 키가 있을 때만 실제 경로 조회.
+def default_database() -> Database | None:
+    """`DATABASE_URL` 이 있으면 앱 전체(trips·places)가 함께 쓰는 Database 하나를 만든다. 만들 때 연결하지 않는다."""
+    settings = DatabaseSettings()
+    url = settings.url()
+    return Database(url, **settings.engine_options()) if url is not None else None
 
-    `DATABASE_URL` 이 있으면 여행·되돌리기 이력을 DB(trips·blocks·legs·schedule_snapshots)에 저장하고,
+
+def default_trip_service(places: SamplePlaceData, database: Database | None) -> TripService:
+    """로컬 기본 구성: 앱의 공공 장소(PLACE_DATA_SOURCE), 경로 키가 있을 때만 실제 경로 조회.
+
+    `database` 가 있으면 여행·되돌리기 이력을 DB(trips·blocks·legs·schedule_snapshots)에 저장하고,
     편집 한 번(일정 저장 + 스냅샷)을 한 트랜잭션으로 처리한다. 스키마는 `alembic upgrade head` 로 만든다.
     없으면 메모리 저장소를 쓰며, 프로세스가 재시작되면 여행과 이력이 사라진다.
     """
     engine = BasicItineraryEngine(places, build_route_provider())
     initial_planner = InitialSchedulePlanner(engine, PublicStayDurations(places.stay_min))
-    settings = DatabaseSettings()
-    url = settings.url()
-    if url is None:
+    if database is None:
         # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포에는 DATABASE_URL 을 설정한다.
         logger.warning("trip storage is in-memory (DATABASE_URL unset): trips and undo history are lost on restart")
         return TripService(FakeTripRepository({}), engine, places.stay_min, initial_planner=initial_planner)
-    database = Database(url, **settings.engine_options())
     return TripService(
         SqlTripRepository(database),
         engine,
@@ -117,9 +122,12 @@ def create_app(
     needs_places = (
         trip_service is None or place_search_service is None or place_detail_service is None or crowd_service is None
     )
-    places = load_sample_places() if needs_places else None
+    # 장소는 시작 때 한 번 읽는다(PLACE_DATA_SOURCE=csv|db). db 의 배치 결과는 재시작해야 반영된다.
+    # DB 는 trips 와 places 가 같은 Database(연결 풀) 하나를 쓴다.
+    database = default_database() if needs_places else None
+    places = load_places(database) if needs_places else None
     if trip_service is None and places is not None:
-        trip_service = default_trip_service(places)
+        trip_service = default_trip_service(places, database)
     # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
     if place_detail_service is None and places is not None:
         place_detail_service = PlaceDetailService(SamplePlaceDetails(places, load_place_photos()))
@@ -147,6 +155,8 @@ def create_app(
     application.state.place_search_service = place_search_service
     application.state.place_detail_service = place_detail_service
     application.state.crowd_service = crowd_service
+    # 분위기 추천 등 라우터가 앱과 같은 장소 데이터를 쓰게 한다. 서비스를 모두 주입한 앱에서는 None 이다.
+    application.state.places = places
 
     @application.exception_handler(TripAPIError)
     async def trip_error(request: Request, exc: TripAPIError) -> JSONResponse:
