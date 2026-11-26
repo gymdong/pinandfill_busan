@@ -57,6 +57,12 @@ class FakeAPI:
     calls: list[str] = field(default_factory=list)
     # 있으면 각 응답 전에 부른다.
     on_call: Callable[[], None] | None = None
+    # 명세와 다른 응답 흉내: DATA-06 값 필드 이름, 코드 뒤에 붙는 글자(자릿수 불일치), DATA-07 필드 이름
+    data06_value_field: str = "touNum"
+    data06_code_suffix: str = ""
+    data07_value_field: str = "cnctrRate"
+    # 있으면 DATA-07 영도구 예측을 이 날짜(YYYYMMDD)만 준다(값 40).
+    data07_days: list[str] | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.on_call is not None:
@@ -68,19 +74,21 @@ class FakeAPI:
             if ymd in self.fail:
                 return httpx.Response(500, json={})
             day = datetime.strptime(ymd, "%Y%m%d").date()
-            # 영도구: 평일 100(23일은 200), 주말 21일 300·22일 100. 해운대구는 매일 50.
+            # 영도구: 평일 100(23일은 200), 주말 21일 300·22일 100. 해운대구는 매일 50. 방문자 구분 1·2·3 합.
             yd = {21: 300, 22: 100, 23: 200}.get(day.day, 100)
-            return httpx.Response(
-                200,
-                json=envelope(
-                    [
-                        {"signguCode": "F06-YD", "baseYmd": ymd, "touDivCd": "1", "touNum": yd / 2},
-                        {"signguCode": "F06-YD", "baseYmd": ymd, "touDivCd": "2", "touNum": yd / 2},
-                        {"signguCode": "F06-HU", "baseYmd": ymd, "touDivCd": "1", "touNum": 50},
-                        {"signguCode": "F99-ZZ", "baseYmd": ymd, "touDivCd": "1", "touNum": 1},
-                    ]
-                ),
-            )
+            rows = []
+            for code, parts in (("F06-YD", (yd / 2, yd / 4, yd / 4)), ("F06-HU", (50, 0, 0))):
+                for index, value in enumerate(parts, start=1):
+                    rows.append(
+                        {
+                            "signguCode": code + self.data06_code_suffix,
+                            "baseYmd": ymd,
+                            "touDivCd": str(index),
+                            self.data06_value_field: value,
+                        }
+                    )
+            rows.append({"signguCode": "F99-ZZ", "baseYmd": ymd, "touDivCd": "1", "touNum": 1})
+            return httpx.Response(200, json=envelope(rows))
         code = params["signguCd"]
         self.calls.append(code)
         if code in self.fail:
@@ -88,12 +96,17 @@ class FakeAPI:
         if code == "F07-HU":
             # 부산 관광지 없음 → 빈 결과
             return httpx.Response(200, json=envelope([]))
+        value = self.data07_value_field
+        if self.data07_days is not None:
+            return httpx.Response(
+                200, json=envelope([{"signguCd": code, "baseYmd": ymd, value: 40} for ymd in self.data07_days])
+            )
         # 영도구: 11-30(월) 20, 12-01(화) 40 → 평일 평균 30. 12-05(토) 50 하나 → 1.0
         rows = [
-            {"signguCd": code, "baseYmd": "20261130", "tAtsNm": "가짜A", "cnctrRate": 10},
-            {"signguCd": code, "baseYmd": "20261130", "tAtsNm": "가짜B", "cnctrRate": 30},
-            {"signguCd": code, "baseYmd": "20261201", "tAtsNm": "가짜A", "cnctrRate": 40},
-            {"signguCd": code, "baseYmd": "20261205", "tAtsNm": "가짜A", "cnctrRate": 50},
+            {"signguCd": code, "baseYmd": "20261130", "tAtsNm": "가짜A", value: 10},
+            {"signguCd": code, "baseYmd": "20261130", "tAtsNm": "가짜B", value: 30},
+            {"signguCd": code, "baseYmd": "20261201", "tAtsNm": "가짜A", value: 40},
+            {"signguCd": code, "baseYmd": "20261205", "tAtsNm": "가짜A", value: 50},
         ]
         return httpx.Response(200, json=envelope(rows))
 
@@ -137,6 +150,7 @@ def make_harness(database: Database, tmp_path: Path, *, key: str | None = FAKE_K
         data07_service_key=key,
         data06_baseline_days=7,
         data06_lag_days=3,
+        crowd_multiplier_retention_days=30,
         crowd_region_codes_path=codes_path,
     )
     api, clock, crowd_dir = FakeAPI(), Clock(T0), tmp_path / "crowd"
@@ -338,3 +352,113 @@ def test_run_due_runs_both_daily_sources(database: Database, tmp_path: Path):
     # 같은 KST 날짜에는 다시 돌지 않는다(DAY 주기).
     h.clock.now = T0 + timedelta(hours=5)
     assert h.collector.run_due() == []
+
+
+@pytest.mark.parametrize(
+    ("source_id", "mismatch", "message"),
+    [
+        # 값 필드 이름이 명세와 다름 → 모든 항목 거절
+        ("data06", {"data06_value_field": "touCnt"}, "DATA-06 no usable rows (rejected=6, unmapped=1)"),
+        # 대응표는 짧은 코드인데 응답은 10자리(가짜) → 부산 구·군이 하나도 맞지 않음
+        ("data06", {"data06_code_suffix": "00000"}, "DATA-06 no usable rows (rejected=0, unmapped=7)"),
+        ("data07", {"data07_value_field": "cnctrRt"}, "DATA-07 no usable rows (rejected=4, unmapped=0)"),
+    ],
+)
+def test_spec_mismatch_fails_and_alerts_instead_of_empty_success(
+    database: Database, tmp_path: Path, source_id: str, mismatch: dict[str, str], message: str
+):
+    h = make_harness(database, tmp_path)
+    h.collector.run("data06")
+    before = h.output.read_bytes()
+    h.clock.now = T0 + timedelta(days=1)
+    for name, value in mismatch.items():
+        setattr(h.api, name, value)
+    run = h.collector.run(source_id)
+
+    assert run is not None and (run.status, run.error_message) == ("FAILED", message)
+    # 첫 응답에서 멈춘다. 기존 파일·기준 시각은 그대로다.
+    assert run.call_count == 1 and run.as_of is None and run.record_count is None
+    assert h.output.read_bytes() == before
+    assert [(body["source"], body["status"]) for body in h.webhook_bodies] == [(source_id, "FAILED")]
+
+
+def test_data06_all_empty_responses_fail_without_fresh_as_of(database: Database, tmp_path: Path):
+    h = make_harness(database, tmp_path)
+    job = h.collector.sources["data06"]
+    assert isinstance(job, Data06Job)
+    job._client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=envelope([]))))
+    run = h.collector.run("data06")
+
+    assert run is not None and (run.status, run.error_message, run.as_of) == (
+        "FAILED",
+        "DATA-06 no usable rows (rejected=0, unmapped=0)",
+        None,
+    )
+
+
+def test_data06_as_of_is_latest_used_date(database: Database, tmp_path: Path):
+    h = make_harness(database, tmp_path)
+    # 마지막 날(23일) 자료가 아직 없고(빈 응답) 22일 해운대구 항목 하나가 거절되면,
+    # as_of 는 실제로 쓴 가장 늦은 날(22일)이고 22일 해운대구는 빠진다.
+    handler = h.api.handler
+
+    def last_day_missing(request: httpx.Request) -> httpx.Response:
+        ymd = request.url.params.get("startYmd")
+        if ymd == "20261123":
+            return httpx.Response(200, json=envelope([]))
+        response = handler(request)
+        if ymd == "20261122":
+            payload = json.loads(response.content)
+            payload["response"]["body"]["items"]["item"][3]["touNum"] = "x"
+            return httpx.Response(200, json=payload)
+        return response
+
+    job = h.collector.sources["data06"]
+    assert isinstance(job, Data06Job)
+    job._client = httpx.Client(transport=httpx.MockTransport(last_day_missing))
+    run = h.collector.run("data06")
+
+    assert run is not None and run.status == "SUCCESS", run.error_message if run else None
+    assert run.as_of == datetime(2026, 11, 22, tzinfo=KST) and run.rejected_count == 1
+    got = multipliers(h)
+    assert (date(2026, 11, 23), "영도구") not in got and (date(2026, 11, 22), "해운대구") not in got
+    # 21일만 남은 해운대구 주말 평균 = 21일 값 → 1.0
+    assert got[(date(2026, 11, 21), "해운대구")] == (1.0, "DATA-06")
+
+
+def test_data07_new_forecast_replaces_stale_future_rows(database: Database, tmp_path: Path):
+    h = make_harness(database, tmp_path)
+    assert h.collector.run("data07").status == "SUCCESS"  # type: ignore[union-attr]
+    assert set(multipliers(h)) == {
+        (date(2026, 11, 30), "영도구"),
+        (date(2026, 12, 1), "영도구"),
+        (date(2026, 12, 5), "영도구"),
+    }
+
+    # 다음 날 예측에는 12-01 만 있다 → 오늘 이후의 옛 DATA-07 행(11-30·12-05)은 지운다.
+    h.clock.now = T0 + timedelta(days=1)
+    h.api.data07_days = ["20261201"]
+    run = h.collector.run("data07")
+
+    assert run is not None and (run.status, run.record_count) == ("SUCCESS", 1)
+    assert multipliers(h) == {(date(2026, 12, 1), "영도구"): (1.0, "DATA-07")}
+
+    # 대응표에서 구·군이 빠지거나 응답이 모두 비어도 옛 미래 예측을 남기지 않는다.
+    h.clock.now = T0 + timedelta(days=2)
+    h.api.data07_days = []
+    run = h.collector.run("data07")
+    assert run is not None and (run.status, run.record_count) == ("SUCCESS", 0)
+    assert multipliers(h) == {}
+
+
+def test_retention_prunes_old_rows(database: Database, tmp_path: Path):
+    h = make_harness(database, tmp_path)
+    h.collector.run("data06")
+    old = set(multipliers(h))
+    # 보존 기간(시험 설정 30일)보다 오래된 DATA-06 행은 다음 쓰기에서 지운다.
+    h.clock.now = T0 + timedelta(days=40)
+    h.collector.run("data06")
+
+    kept = set(multipliers(h))
+    assert not (old & kept)
+    assert min(day for day, _ in kept) >= (h.clock.now.astimezone(KST).date() - timedelta(days=30))

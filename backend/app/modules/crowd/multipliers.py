@@ -5,14 +5,21 @@ M(d, 구·군) = 값(d) / 같은 구·군·같은 평일/주말의 기간 평균
 - DATA-07(미래): 값 = 그날 그 구·군 관광지 집중률 평균. 기간 = 받은 예측 30일.
   예측이 없는 날·구·군은 행을 만들지 않는다(→ 파일 제공자가 M 을 곱하지 않고 신호로도 세지 않는다).
 값이 0 이거나 평균이 0 이면 배수를 만들지 않는다(파일 형식이 0 보다 큰 값만 받는다).
+공휴일은 평일로 센다(파일 제공자와 같다, spec A-9).
 
-파일 쓰기: 기존 파일의 행을 읽어 같은 (date, region) 행만 새 값으로 바꾸고 나머지는 그대로 둔다
-(다른 소스 행·과거 행 유지).
-같은 디렉터리의 임시 파일에 쓰고 rename 하므로, 쓰기가 중간에 실패하면 기존 파일이 그대로 남는다.
-기존 파일을 읽을 수 없으면(머리줄이 다름 등) 덮어쓰지 않고 예외를 낸다. 쓰는 프로세스는 배치 하나라고 본다.
+파일 쓰기(`write_multipliers`):
+- 같은 (date, region) 행은 새 값으로 바꾼다. 다른 소스 행은 그대로 둔다.
+- `replace_since` 를 주면 그 소스의 그 날짜 이후 행을 모두 새 결과로 바꾼다(DATA-07: 새 예측에 없는 날·구·군,
+  대응표에서 빠진 구·군의 옛 예측을 지운다).
+- `prune_before` 를 주면 그 소스의 그 날짜 전 행을 지운다(파일이 끝없이 커지지 않게).
+- 같은 디렉터리의 임시 파일에 쓰고 rename 하므로, 쓰기가 중간에 실패하면 기존 파일이 그대로 남는다.
+  기존 파일을 읽을 수 없으면(머리줄이 다름 등) 덮어쓰지 않고 예외를 낸다.
+- 읽기·합치기·바꾸기 동안 옆 잠금 파일(`.crowd_multipliers.csv.lock`)에 `fcntl.flock` 배타 잠금을 잡는다.
+  data06·data07 이나 CLI `run` 과 `loop` 가 겹쳐도 합친 결과를 잃지 않는다. POSIX 전용(Linux·macOS, compose 이미지).
 """
 
 import csv
+import fcntl
 import os
 import tempfile
 from collections.abc import Iterable, Mapping
@@ -25,6 +32,7 @@ from .estimator import day_type
 from .signals import KST, MULTIPLIER_SOURCES, MULTIPLIERS_FILE
 
 COLUMNS = ("date", "region", "multiplier", "source", "computed_at")
+LOCK_FILE = f".{MULTIPLIERS_FILE}.lock"
 
 
 def day_type_ratios(
@@ -60,31 +68,7 @@ def _existing_rows(path: Path) -> list[dict[str, str]]:
         return [{name: (row.get(name) or "").strip() for name in COLUMNS} for row in reader]
 
 
-def write_multipliers(
-    directory: Path, source: str, multipliers: Mapping[tuple[date, str], float], computed_at: datetime
-) -> int:
-    """`source` 의 배수를 파일에 합쳐 쓰고 쓴 행 수를 돌려준다. 새 행이 없으면 파일을 건드리지 않는다."""
-    if source not in MULTIPLIER_SOURCES:
-        raise ValueError(f"unknown multiplier source: {source}")
-    if not multipliers:
-        return 0
-    path = directory / MULTIPLIERS_FILE
-    stamp = computed_at.astimezone(KST).isoformat(timespec="seconds")
-    new_rows = {
-        (day.isoformat(), region): {
-            "date": day.isoformat(),
-            "region": region,
-            "multiplier": f"{value:.4f}",
-            "source": source,
-            "computed_at": stamp,
-        }
-        for (day, region), value in multipliers.items()
-    }
-    rows = [row for row in _existing_rows(path) if (row["date"], row["region"]) not in new_rows]
-    rows.extend(new_rows.values())
-    rows.sort(key=lambda row: (row["date"], row["region"]))
-
-    directory.mkdir(parents=True, exist_ok=True)
+def _write_atomic(directory: Path, path: Path, rows: list[dict[str, str]]) -> None:
     handle, temp_name = tempfile.mkstemp(prefix=f".{MULTIPLIERS_FILE}.", suffix=".tmp", dir=directory)
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="") as file:
@@ -97,4 +81,51 @@ def write_multipliers(
     except BaseException:
         Path(temp_name).unlink(missing_ok=True)
         raise
+
+
+def write_multipliers(
+    directory: Path,
+    source: str,
+    multipliers: Mapping[tuple[date, str], float],
+    computed_at: datetime,
+    *,
+    replace_since: date | None = None,
+    prune_before: date | None = None,
+) -> int:
+    """`source` 의 배수를 파일에 합쳐 쓰고 새로 쓴 행 수를 돌려준다. 바뀌는 것이 없으면 파일을 건드리지 않는다."""
+    if source not in MULTIPLIER_SOURCES:
+        raise ValueError(f"unknown multiplier source: {source}")
+    path = directory / MULTIPLIERS_FILE
+    stamp = computed_at.astimezone(KST).isoformat(timespec="seconds")
+    new_rows = {
+        (day.isoformat(), region): {
+            "date": day.isoformat(),
+            "region": region,
+            "multiplier": f"{value:.4f}",
+            "source": source,
+            "computed_at": stamp,
+        }
+        for (day, region), value in multipliers.items()
+    }
+    since = replace_since.isoformat() if replace_since else None
+    before = prune_before.isoformat() if prune_before else None
+
+    def drop(row: dict[str, str]) -> bool:
+        if (row["date"], row["region"]) in new_rows:
+            return True
+        if row["source"] != source:
+            return False
+        # ISO 날짜 문자열은 사전 순서가 날짜 순서와 같다.
+        return (since is not None and row["date"] >= since) or (before is not None and row["date"] < before)
+
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / LOCK_FILE).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        existing = _existing_rows(path)
+        rows = [row for row in existing if not drop(row)]
+        if not new_rows and len(rows) == len(existing):
+            return 0
+        rows.extend(new_rows.values())
+        rows.sort(key=lambda row: (row["date"], row["region"]))
+        _write_atomic(directory, path, rows)
     return len(new_rows)

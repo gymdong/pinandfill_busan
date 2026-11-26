@@ -1,5 +1,7 @@
 """날짜 배수 M 계산·파일 쓰기(FR-008). 값은 시험용 가짜(TEST FIXTURE)다."""
 
+import fcntl
+import threading
 from datetime import date, datetime
 from pathlib import Path
 
@@ -71,7 +73,7 @@ def test_write_merges_sources_and_provider_reads_it(tmp_path: Path):
         (date(2026, 11, 21), "영도구"): (1.1, "DATA-07", later),
         (date(2026, 12, 1), "영도구"): (1.25, "DATA-07", later),
     }
-    assert [p.name for p in tmp_path.iterdir()] == ["crowd_multipliers.csv"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".crowd_multipliers.csv.lock", "crowd_multipliers.csv"]
 
 
 def test_failed_write_keeps_previous_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -86,7 +88,7 @@ def test_failed_write_keeps_previous_file(tmp_path: Path, monkeypatch: pytest.Mo
         write_multipliers(tmp_path, "DATA-06", {(date(2026, 11, 20), "영도구"): 2.0}, AT)
 
     assert (tmp_path / "crowd_multipliers.csv").read_bytes() == before
-    assert [p.name for p in tmp_path.iterdir()] == ["crowd_multipliers.csv"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".crowd_multipliers.csv.lock", "crowd_multipliers.csv"]
 
 
 def test_unreadable_existing_file_is_not_overwritten(tmp_path: Path):
@@ -98,3 +100,71 @@ def test_unreadable_existing_file_is_not_overwritten(tmp_path: Path):
 
     with pytest.raises(ValueError):
         write_multipliers(tmp_path, "DATA-99", {(date(2026, 11, 20), "영도구"): 2.0}, AT)
+
+
+def _rows(directory: Path) -> dict[tuple[date, str], tuple[float, str]]:
+    return {key: (item.value, item.source) for key, item in load_inputs(directory).multipliers.items()}
+
+
+def test_forecast_replaces_all_future_rows_of_its_source(tmp_path: Path):
+    today = date(2026, 11, 26)
+    write_multipliers(tmp_path, "DATA-06", {(date(2026, 11, 20), "영도구"): 0.8}, AT)
+    write_multipliers(
+        tmp_path,
+        "DATA-07",
+        {
+            (date(2026, 11, 25), "영도구"): 1.3,  # 지난 날짜 예측: 그대로 둔다
+            (date(2026, 11, 30), "영도구"): 1.1,
+            (date(2026, 12, 1), "영도구"): 1.2,  # 새 예측에 없음 → 지운다
+            (date(2026, 12, 1), "중구"): 0.9,  # 대응표에서 빠진 구·군 → 지운다
+        },
+        AT,
+        replace_since=date(2026, 11, 20),
+    )
+    later = datetime(2026, 11, 26, 6, 0, tzinfo=KST)
+    written = write_multipliers(tmp_path, "DATA-07", {(date(2026, 11, 30), "영도구"): 1.4}, later, replace_since=today)
+
+    assert written == 1
+    assert _rows(tmp_path) == {
+        (date(2026, 11, 20), "영도구"): (0.8, "DATA-06"),
+        (date(2026, 11, 25), "영도구"): (1.3, "DATA-07"),
+        (date(2026, 11, 30), "영도구"): (1.4, "DATA-07"),
+    }
+
+    # 새 예측이 비어도(부산 관광지 없음) 오늘 이후의 옛 예측은 지운다.
+    assert write_multipliers(tmp_path, "DATA-07", {}, later, replace_since=today) == 0
+    assert set(_rows(tmp_path)) == {(date(2026, 11, 20), "영도구"), (date(2026, 11, 25), "영도구")}
+
+
+def test_prune_drops_old_rows_of_same_source_only(tmp_path: Path):
+    write_multipliers(tmp_path, "DATA-07", {(date(2025, 1, 1), "영도구"): 1.0}, AT)
+    write_multipliers(tmp_path, "DATA-06", {(date(2025, 1, 2), "영도구"): 1.0, (date(2026, 11, 1), "영도구"): 1.0}, AT)
+    write_multipliers(tmp_path, "DATA-06", {(date(2026, 11, 20), "영도구"): 1.1}, AT, prune_before=date(2025, 11, 26))
+
+    assert set(_rows(tmp_path)) == {
+        (date(2025, 1, 1), "영도구"),  # 다른 소스 행
+        (date(2026, 11, 1), "영도구"),
+        (date(2026, 11, 20), "영도구"),
+    }
+
+
+def test_write_waits_for_file_lock(tmp_path: Path):
+    lock = (tmp_path / ".crowd_multipliers.csv.lock").open("a")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    done = threading.Event()
+
+    def writer() -> None:
+        write_multipliers(tmp_path, "DATA-06", {(date(2026, 11, 20), "영도구"): 0.8}, AT)
+        done.set()
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    try:
+        # 다른 쓰기(다른 프로세스와 같은 잠금)가 끝날 때까지 읽기·합치기를 시작하지 않는다.
+        assert not done.wait(0.3)
+        assert not (tmp_path / "crowd_multipliers.csv").exists()
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+    thread.join(5)
+    assert done.is_set() and set(_rows(tmp_path)) == {(date(2026, 11, 20), "영도구")}

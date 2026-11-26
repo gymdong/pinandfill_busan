@@ -32,6 +32,7 @@ DB_ENV_NAMES = (
     "PUBLIC_DATA_PAGE_SIZE",
     "DATA06_BASELINE_DAYS",
     "DATA06_LAG_DAYS",
+    "CROWD_MULTIPLIER_RETENTION_DAYS",
     "CROWD_REGION_CODES_PATH",
 )
 # 모두 env_ignore_empty 라 빈 환경변수로는 .env 값을 막을 수 없어 .env 읽기를 끈다.

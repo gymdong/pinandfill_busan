@@ -119,8 +119,16 @@ uv run python -m app.batch.cli run --source data07   # 대응표에 DATA-07 코�
 - 엔드포인트 경로·응답 필드 이름은 키가 없어 확인하지 못했다. `app/adapters/public_data/visitors.py` 의
   `DATA06_OPERATION`·`DATA07_OPERATION`·`DATA06_FIELDS`·`DATA07_FIELDS` 에 모아 두었다(명세 확인 필요).
 - 쓰기: 수집이 모두 성공한 뒤에만 임시 파일 → rename 으로 바꾼다. 실패·중단이면 기존 파일이 그대로다.
-  같은 (날짜, 구·군) 행만 새 값으로 바꾸고 다른 행(다른 소스·지난 날짜)은 남긴다. 앱은 시작 때 읽으므로 반영하려면 앱을 다시 시작한다.
+  같은 (날짜, 구·군) 행만 새 값으로 바꾸고 다른 행(다른 소스·지난 날짜)은 남긴다. DATA-07 은 오늘 이후의 자기 행을 통째로 바꾸고,
+  두 소스 모두 `CROWD_MULTIPLIER_RETENTION_DAYS`(365)일보다 오래된 자기 행을 지운다. 앱은 시작 때 읽으므로 반영하려면 앱을 다시 시작한다.
+- 쓰기 동안 `.crowd_multipliers.csv.lock` 에 `fcntl.flock` 을 잡는다(POSIX 전용, Windows 에서는 배치를 돌리지 않는다).
+- 파일 교체는 DB 커밋보다 먼저다. 커밋이 실패하면 파일이 ingestion_runs 기록보다 새것일 수 있다(허용).
 - 응답 totalCount 가 `PUBLIC_DATA_PAGE_SIZE`(1000)보다 크면 잘린 자료로 계산하지 않고 FAILED 다(값을 늘린다).
+  응답 header 에 resultCode 가 없으면 봉투 오류로 FAILED 다.
+- 항목이 왔는데 쓸 수 있는 행이 0 이면 `DATA-06 no usable rows (rejected=N, unmapped=M)` 로 FAILED + 알림이다
+  (필드 이름·코드 자릿수가 명세와 다를 때 빈 성공으로 넘기지 않는다). DATA-06 은 쓸 자료가 하나도 없어도 FAILED 이고,
+  `as_of` 는 실제로 쓴 가장 늦은 자료일이다. 거절 항목이 있는 (날짜, 구·군)은 계산에서 뺀다.
+- 공휴일은 평일로 센다(파일 제공자와 같다, spec A-9).
 
 켜는 법(키·코드를 갖춘 뒤):
 

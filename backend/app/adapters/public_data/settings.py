@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.secrets import blank_key_is_no_key
@@ -28,7 +28,18 @@ class VisitorDataSettings(BaseSettings):
     data06_baseline_days: int = Field(default=28, ge=1)
     # DATA-06: 오늘(KST)에서 이만큼 앞선 날을 기준 기간 마지막 날로 둔다(자료 공개 지연, 명세 확인 필요).
     data06_lag_days: int = Field(default=3, ge=1)
+    # crowd_multipliers.csv 에서 오늘(KST)로부터 이 일수보다 오래된 DATA-06·07 행은 쓸 때 지운다.
+    # 기준 기간 + 지연보다 짧으면 방금 계산한 행을 지우므로 막는다.
+    crowd_multiplier_retention_days: int = Field(default=365, ge=1)
     crowd_region_codes_path: Path = REGION_CODES
+
+    @model_validator(mode="after")
+    def retention_covers_baseline(self) -> "VisitorDataSettings":
+        if self.crowd_multiplier_retention_days < self.data06_baseline_days + self.data06_lag_days:
+            raise ValueError(
+                "CROWD_MULTIPLIER_RETENTION_DAYS 는 DATA06_BASELINE_DAYS + DATA06_LAG_DAYS 이상이어야 합니다."
+            )
+        return self
 
     _normalize_secrets = field_validator("data06_service_key", "data07_service_key", mode="before")(blank_key_is_no_key)
 

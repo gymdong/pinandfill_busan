@@ -62,19 +62,29 @@ def data07(
     )
 
 
+def visitors(code: str, ymd: str, values: tuple[float, ...] = (60, 30, 10), **extra: Any) -> list[dict[str, Any]]:
+    """방문자 구분 1·2·3(가짜 값) 한 벌."""
+    return [
+        {"signguCode": code, "baseYmd": ymd, "touDivCd": str(index), "touNum": value, **extra}
+        for index, value in enumerate(values, start=1)
+    ]
+
+
+DAY = date(2026, 11, 20)
+
+
 def test_data06_maps_codes_to_district_names_and_drops_other_regions():
     seen: list[httpx.Request] = []
     rows = [
-        {"signguCode": "F06-YD", "baseYmd": "20261120", "touDivCd": "1", "touNum": "100.5"},
-        {"signguCode": "F06-YD", "baseYmd": "20261120", "touDivCd": "2", "touNum": 50},
-        {"signguCode": "F06-HU", "baseYmd": "20261120", "touDivCd": "1", "touNum": 10},
+        *visitors("F06-YD", "20261120", ("100.5", 50, 0)),
+        *visitors("F06-HU", "20261120", (10, 0, 0)),
         # 대응표에 없는 코드(부산 밖)는 버린다(거절로 세지 않는다).
         {"signguCode": "F99-XX", "baseYmd": "20261120", "touDivCd": "1", "touNum": 999},
     ]
-    result = data06(httpx.Response(200, json=envelope(rows)), seen).fetch_day(date(2026, 11, 20))
+    result = data06(httpx.Response(200, json=envelope(rows)), seen).fetch_day(DAY)
 
-    assert result.values == {(date(2026, 11, 20), "영도구"): [100.5, 50.0], (date(2026, 11, 20), "해운대구"): [10.0]}
-    assert result.rejected == 0
+    assert result.usable() == {(DAY, "영도구"): [100.5, 50.0, 0.0], (DAY, "해운대구"): [10.0, 0.0, 0.0]}
+    assert (result.received, result.rejected, result.unmapped) == (7, 0, 1)
     (request,) = seen
     assert request.url.path.endswith(DATA06_OPERATION)
     params = request.url.params
@@ -86,31 +96,79 @@ def test_data06_maps_codes_to_district_names_and_drops_other_regions():
     )
 
 
-def test_data06_rejects_bad_items_only():
-    rows = [
-        {"signguCode": "F06-YD", "baseYmd": "20261120", "touNum": "abc"},
-        {"signguCode": "F06-YD", "baseYmd": "20261121", "touNum": 5},  # 요청하지 않은 날짜
-        {"signguCode": "F06-YD", "baseYmd": "20261120", "touNum": -1},
-        "not-a-mapping",
-        {"signguCode": "F06-YD", "baseYmd": "20261120", "touNum": 7},
-    ]
-    result = data06(httpx.Response(200, json=envelope(rows))).fetch_day(date(2026, 11, 20))  # type: ignore[arg-type]
+def test_data06_rejected_item_excludes_its_region_day():
+    yd = visitors("F06-YD", "20261120")
+    yd[1]["touNum"] = "abc"
+    rows = [*yd, *visitors("F06-HU", "20261120")]
+    result = data06(httpx.Response(200, json=envelope(rows))).fetch_day(DAY)
 
-    assert result.values == {(date(2026, 11, 20), "영도구"): [7.0]}
-    assert result.rejected == 4
+    # 영도구 합이 줄지 않게 그날 영도구를 통째로 뺀다. 해운대구는 쓴다.
+    assert result.usable() == {(DAY, "해운대구"): [60.0, 30.0, 10.0]}
+    assert result.rejected == 1
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"baseYmd": "20261121"},  # 요청하지 않은 날짜
+        {"touNum": -1},
+        {"touDivCd": "9"},  # 모르는 방문자 구분
+    ],
+)
+def test_data06_invalid_item_variants_are_rejected(bad: dict[str, Any]):
+    yd = visitors("F06-YD", "20261120")
+    yd[0].update(bad)
+    result = data06(httpx.Response(200, json=envelope([*yd, *visitors("F06-HU", "20261120")]))).fetch_day(DAY)
+    assert set(result.usable()) == {(DAY, "해운대구")} and result.rejected == 1
+
+
+def test_data06_missing_or_duplicate_visitor_type_excludes_region_day():
+    missing = visitors("F06-YD", "20261120")[:2]
+    duplicate = visitors("F06-HU", "20261120") + visitors("F06-HU", "20261120")[:1]
+    ok = data06(httpx.Response(200, json=envelope([*visitors("F06-YD", "20261120")]))).fetch_day(DAY)
+    assert set(ok.usable()) == {(DAY, "영도구")}
+
+    with pytest.raises(VisitorTransportError, match=r"no usable rows \(rejected=0, unmapped=0\)"):
+        data06(httpx.Response(200, json=envelope([*missing, *duplicate]))).fetch_day(DAY)
+
+
+def test_data06_item_without_code_excludes_whole_day():
+    rows = [*visitors("F06-YD", "20261120"), *visitors("F06-HU", "20261120"), {"baseYmd": "20261120", "touNum": 1}]
+    with pytest.raises(VisitorTransportError, match=r"DATA-06 no usable rows \(rejected=1, unmapped=0\)"):
+        data06(httpx.Response(200, json=envelope(rows))).fetch_day(DAY)
+
+
+def test_data06_typo_field_fails_instead_of_empty_success():
+    rows = [{"signguCode": "F06-YD", "baseYmd": "20261120", "touDivCd": "1", "touCnt": 10}]
+    with pytest.raises(VisitorTransportError) as raised:
+        data06(httpx.Response(200, json=envelope(rows))).fetch_day(DAY)
+    assert str(raised.value) == "DATA-06 no usable rows (rejected=1, unmapped=0)"
+
+
+def test_data06_code_format_mismatch_fails():
+    # 대응표는 5자리인데 응답이 10자리(가짜)면 부산 구·군이 하나도 맞지 않는다.
+    rows = [*visitors("F06-YD00000", "20261120"), *visitors("F06-HU00000", "20261120")]
+    with pytest.raises(VisitorTransportError) as raised:
+        data06(httpx.Response(200, json=envelope(rows))).fetch_day(DAY)
+    assert str(raised.value) == "DATA-06 no usable rows (rejected=0, unmapped=6)"
+
+
+def test_data06_empty_response_is_not_an_error():
+    result = data06(httpx.Response(200, json=envelope(""))).fetch_day(DAY)
+    assert result.usable() == {} and result.received == 0
 
 
 def test_data07_single_item_and_busan_absent():
     one = {"signguCd": "F07-YD", "baseYmd": "20261201", "tAtsNm": "가짜 관광지", "cnctrRate": "42.5"}
     result = data07(httpx.Response(200, json=envelope([one]))).fetch_region("영도구")
-    assert result.values == {(date(2026, 12, 1), "영도구"): [42.5]}
+    assert result.usable() == {(date(2026, 12, 1), "영도구"): [42.5]}
 
     # 응답에 그 구·군 관광지가 없으면 빈 결과(오류 아님).
     empty = data07(httpx.Response(200, json=envelope(""))).fetch_region("영도구")
-    assert empty.values == {} and empty.rejected == 0
+    assert empty.usable() == {} and empty.rejected == 0
 
 
-def test_data07_sends_region_codes_and_rejects_other_region_items():
+def test_data07_sends_region_codes_and_drops_other_region_items():
     seen: list[httpx.Request] = []
     rows = [
         {"signguCd": "F07-YD", "baseYmd": "20261201", "cnctrRate": 10},
@@ -118,10 +176,32 @@ def test_data07_sends_region_codes_and_rejects_other_region_items():
     ]
     result = data07(httpx.Response(200, json=envelope(rows)), seen).fetch_region("영도구")
 
-    assert result.values == {(date(2026, 12, 1), "영도구"): [10.0]} and result.rejected == 1
+    assert result.usable() == {(date(2026, 12, 1), "영도구"): [10.0]}
+    assert (result.rejected, result.unmapped) == (0, 1)
     (request,) = seen
     assert request.url.path.endswith(DATA07_OPERATION)
     assert (request.url.params["areaCd"], request.url.params["signguCd"]) == ("FA", "F07-YD")
+
+
+def test_data07_rejected_item_excludes_that_date():
+    rows = [
+        {"signguCd": "F07-YD", "baseYmd": "20261201", "cnctrRate": 10},
+        {"signguCd": "F07-YD", "baseYmd": "20261201", "cnctrRate": "x"},
+        {"signguCd": "F07-YD", "baseYmd": "20261202", "cnctrRate": 20},
+    ]
+    result = data07(httpx.Response(200, json=envelope(rows))).fetch_region("영도구")
+    assert result.usable() == {(date(2026, 12, 2), "영도구"): [20.0]} and result.rejected == 1
+
+    # 날짜를 모르는 거절 항목이면 그 구·군 전체를 빼므로 쓸 행이 없다.
+    rows[1]["baseYmd"] = ""
+    with pytest.raises(VisitorTransportError, match=r"DATA-07 no usable rows \(rejected=1, unmapped=0\)"):
+        data07(httpx.Response(200, json=envelope(rows))).fetch_region("영도구")
+
+
+def test_data07_typo_field_fails():
+    rows = [{"signguCd": "F07-YD", "baseYmd": "20261201", "cnctrRt": 10}]
+    with pytest.raises(VisitorTransportError, match=r"DATA-07 no usable rows \(rejected=1, unmapped=0\)"):
+        data07(httpx.Response(200, json=envelope(rows))).fetch_region("영도구")
 
 
 @pytest.mark.parametrize(
@@ -134,9 +214,14 @@ def test_data07_sends_region_codes_and_rejects_other_region_items():
             "DATA-07 JSON 처리 실패",
         ),
         (httpx.Response(200, json={"unexpected": 1}), "DATA-07 response 형식 오류"),
+        (httpx.Response(200, json={"response": {"body": {"items": ""}}}), "DATA-07 header 형식 오류"),
+        (httpx.Response(200, json={"response": {"header": {}, "body": {}}}), "DATA-07 header 형식 오류"),
         (httpx.Response(200, json={"response": {"header": {"resultCode": "0000"}}}), "DATA-07 body 형식 오류"),
         (httpx.Response(200, json=envelope([], code="30")), "DATA-07 오류 응답 (resultCode 30)"),
-        (httpx.Response(200, json={"response": {"body": {"items": [1]}}}), "DATA-07 items 형식 오류"),
+        (
+            httpx.Response(200, json={"response": {"header": {"resultCode": "0000"}, "body": {"items": [1]}}}),
+            "DATA-07 items 형식 오류",
+        ),
         (
             httpx.Response(200, json=envelope([{"signguCd": "F07-YD"}], total=5)),
             "DATA-07 응답이 한 쪽을 넘습니다 (totalCount 5)",
@@ -200,3 +285,9 @@ def test_settings_blank_key_is_missing_and_env_file_is_isolated(tmp_path):
     from_file = VisitorDataSettings(_env_file=env)
     assert (from_file.data06_key(), from_file.data06_baseline_days) == ("fake-from-file", 14)
     assert "fake-from-file" not in repr(from_file)
+
+    # 보존 기간이 기준 기간 + 지연보다 짧으면 방금 계산한 행을 지우므로 설정 오류다.
+    with pytest.raises(ValueError):
+        VisitorDataSettings(
+            _env_file=None, data06_baseline_days=28, data06_lag_days=3, crowd_multiplier_retention_days=30
+        )
