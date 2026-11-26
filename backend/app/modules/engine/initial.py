@@ -15,8 +15,10 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field, model_validator
 
+from app.modules.crowd.avoidance import AvoidanceSettings, meets_confidence, pick_less_crowded
+from app.modules.crowd.schemas import PlaceCrowdResponse
 from app.modules.engine.constraints.chain import minutes, validate_chain
-from app.modules.engine.interfaces import RouteEstimate
+from app.modules.engine.interfaces import CrowdLookup, RouteEstimate
 from app.modules.engine.routing import estimate_departing, seoul_datetime
 from app.modules.engine.schemas import (
     CalculationContext,
@@ -139,7 +141,12 @@ class InitialSchedulePlanner:
     """SDD ADR-003 insertion heuristic with a deliberately bounded policy.
 
     Flexible selections are processed in caller order.  Days and insertion gaps
-    are tried in ascending order.  An unplaced result only means this bounded
+    are tried in ascending order.  With an injected crowd lookup whose data for
+    the place/date meets ``avoidance.min_confidence`` (FR-009, decision D1), all
+    acceptable gaps of the first workable day are compared and a gap whose stay
+    window is at least ``min_gain`` less crowded than the first one may win; no
+    waiting time is added and day assignment is unchanged.  The effect on
+    blocks shifted by the insertion is not scored (v1 limit).  An unplaced result only means this bounded
     policy could not verify a slot; it is not a proof that no global solution
     exists.
     """
@@ -150,10 +157,14 @@ class InitialSchedulePlanner:
         stay_durations: StayDurationProvider,
         *,
         tag_stays: TagStayPolicy | None = None,
+        crowd: CrowdLookup | None = None,
+        avoidance: AvoidanceSettings | None = None,
     ) -> None:
         self.engine = engine
         self.stay_durations = stay_durations
         self.tag_stays = tag_stays
+        self.crowd = crowd
+        self.avoidance = avoidance or AvoidanceSettings()
 
     def plan(
         self,
@@ -238,6 +249,11 @@ class InitialSchedulePlanner:
                     )
                     continue
                 candidate = _Resolved(selection, duration)
+                # FR-009: with usable crowd data every acceptable gap of this day is
+                # collected and the least crowded one is chosen; otherwise the
+                # first acceptable gap wins exactly as before.
+                crowd = self._usable_crowd(selection, command.trip.start_date + timedelta(days=day_no - 1))
+                options: list[tuple[list[_Resolved], _Day]] = []
                 for position in range(len(by_day[day_no]) + 1):
                     trial = list(by_day[day_no])
                     trial.insert(position, candidate)
@@ -246,6 +262,7 @@ class InitialSchedulePlanner:
                             command.trip, day_no, trial, request_context, details_cache, route_cache, budget
                         )
                     except _RouteBudgetExhausted:
+                        # Gaps already accepted stay placeable; only later choices are dropped.
                         exhausted = True
                         break
                     first_reason = first_reason or checked.reason
@@ -254,12 +271,18 @@ class InitialSchedulePlanner:
                         amount <= baseline.get((block_id, code), -1) for block_id, code, amount in checked.failures
                     )
                     if len(checked.blocks) == len(trial) and (checked.feasible or preserves_conflicts):
-                        by_day[day_no] = trial
-                        accepted[day_no] = checked
-                        placed = True
-                        break
+                        options.append((trial, checked))
+                        if crowd is None:
+                            break
+                if options:
+                    trial, checked = options[self._less_crowded(crowd, selection.block_id, options)]
+                    by_day[day_no] = trial
+                    accepted[day_no] = checked
+                    placed = True
                 if placed or exhausted:
                     break
+            if placed:
+                continue
             if exhausted:
                 unplaced.append(self._budget_unplaced(selection))
             elif not placed:
@@ -346,6 +369,38 @@ class InitialSchedulePlanner:
             self._log_failure("tag_stay_lookup", exc, item.place_ref)
             return None
         return duration if type(duration) is int and duration > 0 else None
+
+    def _usable_crowd(self, item: InitialSelection, on_date: date) -> PlaceCrowdResponse | None:
+        """Crowd data for this place/date only when it may move a block (FR-009, min_confidence)."""
+        if self.crowd is None:
+            return None
+        try:
+            crowd = self.crowd.crowd(item.place_ref, on_date=on_date)
+        except Exception as exc:
+            self._log_failure("crowd_lookup", exc, item.place_ref)
+            return None
+        return crowd if meets_confidence(crowd, self.avoidance.min_confidence) else None
+
+    def _less_crowded(
+        self,
+        crowd: PlaceCrowdResponse | None,
+        block_id: str,
+        options: list[tuple[list[_Resolved], _Day]],
+    ) -> int:
+        """Index of the chosen accepted gap; 0 (first acceptable gap) unless clearly less crowded."""
+        windows: list[tuple[time, time]] = []
+        for _, checked in options:
+            block = next(block for block in checked.blocks if block.id == block_id)
+            if block.arrive_at is None or block.depart_at is None:
+                return 0
+            windows.append((block.arrive_at, block.depart_at))
+        index = pick_less_crowded(
+            crowd,
+            windows,
+            min_gain=self.avoidance.min_gain,
+            min_confidence=self.avoidance.min_confidence,
+        )
+        return 0 if index is None else index
 
     def _details(self, ref: PlaceRef, on_date: date, context: CalculationContext) -> TransientPlaceDetails:
         if isinstance(ref, KakaoPlaceRef):

@@ -6,6 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 import app.modules.engine.initial as initial
+from app.modules.crowd.avoidance import AvoidanceSettings
+from app.modules.crowd.engine_lookup import CrowdServiceLookup
+from app.modules.crowd.schemas import CrowdHour, PlaceCrowdResponse
+from app.modules.crowd.service import CrowdService
 from app.modules.engine.initial import (
     MAX_ROUTE_LOOKUPS_PER_PLAN,
     InitialScheduleCommand,
@@ -689,3 +693,152 @@ def test_request_place_id_never_reaches_failure_log(caplog):
     assert "initial_place_lookup failed error=RuntimeError kind=PUBLIC" in caplog.text
     assert "SYNTHETIC_USER_TEXT" not in caplog.text and "FORGED_LOG_ENTRY" not in caplog.text
     assert all(len(record.getMessage().splitlines()) == 1 for record in caplog.records)
+
+
+# FR-009 혼잡 회피 배치(AC-010, 결정 D1: 같은 날 안 삽입 위치만 고른다)
+
+DAY1 = date(2026, 11, 14)
+
+
+def crowd_of(scores, confidence="높음"):
+    return PlaceCrowdResponse(
+        hours=[CrowdHour(h=h, score=score) for h, score in scores.items()],
+        confidence=confidence,
+        as_of=datetime(2026, 11, 1, tzinfo=UTC),
+        sources=["synthetic"],
+    )
+
+
+# x 는 오전(10~12시) 붐빔, 오후(13~14시) 여유
+X_MORNING_BUSY = {10: 0.9, 11: 0.9, 12: 0.9, 13: 0.2, 14: 0.2}
+
+
+class FakeCrowd:
+    def __init__(self, by_place=None, error=None):
+        self.by_place = by_place or {}
+        self.error = error
+        self.calls = []
+
+    def crowd(self, place_ref, *, on_date):
+        self.calls.append((place_ref.place_id, on_date))
+        if self.error is not None:
+            raise self.error
+        return self.by_place.get(place_ref.place_id)
+
+
+def crowd_setup(crowd=None, avoidance=None):
+    places, routes = Places(), Routes()
+    planner = InitialSchedulePlanner(BasicItineraryEngine(places, routes), Stays(), crowd=crowd, avoidance=avoidance)
+    return planner, places, routes
+
+
+def pin_then_two():
+    # 고정 a(10:00~10:30) 앞에는 2시간 체류가 들어가지 않는다. y 는 a 뒤(10:45~12:45),
+    # x 의 수락 위치는 a 와 y 사이(10:45~12:45) 또는 y 뒤(13:00~15:00) 두 곳이다.
+    return command(
+        selection("a", fixed_window=FixedWindow(day_no=1, start=time(10), end=time(10, 30))),
+        selection("y", stay_min=120),
+        selection("x", stay_min=120),
+    )
+
+
+def times(result):
+    return {block.id: (block.arrive_at, block.depart_at) for block in result.state.blocks}
+
+
+def test_flexible_block_moves_to_less_crowded_gap_and_pin_stays():
+    baseline = crowd_setup()[0].plan(pin_then_two())
+    assert times(baseline)["x"] == (time(10, 45), time(12, 45))
+
+    crowd = FakeCrowd({"x": crowd_of(X_MORNING_BUSY)})
+    result = crowd_setup(crowd)[0].plan(pin_then_two())
+
+    assert times(result)["x"] == (time(13), time(15))
+    assert times(result)["a"] == times(baseline)["a"] == (time(10), time(10, 30))
+    assert [block.id for block in result.state.blocks] == ["a", "y", "x"]
+    assert not result.unplaced and result.confirmed
+    # 고정 블록은 혼잡을 조회하지 않는다. 미고정 블록만 그 날짜로 조회한다.
+    assert crowd.calls == [("y", DAY1), ("x", DAY1)]
+
+
+@pytest.mark.parametrize(
+    "crowd",
+    [
+        None,
+        CrowdServiceLookup(CrowdService()),  # 운영 기본: 파일 없음 → 정보 부족
+        FakeCrowd(),
+        FakeCrowd({"x": crowd_of(X_MORNING_BUSY, "낮음"), "y": crowd_of(X_MORNING_BUSY, "낮음")}),
+        FakeCrowd(error=RuntimeError("crowd down")),
+    ],
+    ids=["not-injected", "empty-provider", "no-data", "low-confidence", "lookup-error"],
+)
+@pytest.mark.parametrize(
+    "request_factory",
+    [lambda: command(selection("a"), selection("b"), selection("c")), pin_then_two],
+    ids=["reproducible", "pin-then-two"],
+)
+def test_without_usable_crowd_output_equals_current_behavior(crowd, request_factory):
+    expected_planner, _, expected_routes = crowd_setup()
+    expected = expected_planner.plan(request_factory())
+    planner, _, routes = crowd_setup(crowd)
+    assert planner.plan(request_factory()) == expected
+    # 추가 위치 평가도 하지 않는다(경로 조회가 그대로).
+    assert routes.departures == expected_routes.departures
+
+
+def test_crowd_lookup_failure_is_logged_without_place_reference(caplog):
+    caplog.set_level("WARNING", logger="app.modules.engine.initial")
+    crowd_setup(FakeCrowd(error=RuntimeError("secret-body")))[0].plan(pin_then_two())
+    assert "initial_crowd_lookup failed error=RuntimeError kind=PUBLIC" in caplog.text
+    assert "secret-body" not in caplog.text
+
+
+def test_less_crowded_gap_after_closing_is_not_chosen():
+    planner, places, _ = crowd_setup(FakeCrowd({"x": crowd_of(X_MORNING_BUSY)}))
+    places.hours[("x", DAY1)] = OpeningHours(open_time=time(8), close_time=time(14))
+    result = planner.plan(pin_then_two())
+    assert times(result)["x"] == (time(10, 45), time(12, 45))
+    assert result.confirmed
+
+
+def test_small_crowd_difference_keeps_first_gap():
+    scores = {10: 0.5, 11: 0.5, 12: 0.5, 13: 0.45, 14: 0.45}
+    planner = crowd_setup(FakeCrowd({"x": crowd_of(scores)}))[0]
+    assert times(planner.plan(pin_then_two()))["x"] == (time(10, 45), time(12, 45))
+    # 최소 이득은 설정값이다.
+    relaxed = crowd_setup(FakeCrowd({"x": crowd_of(scores)}), AvoidanceSettings(min_gain=0.05))[0]
+    assert times(relaxed.plan(pin_then_two()))["x"] == (time(13), time(15))
+
+
+def test_low_confidence_moves_only_when_configured():
+    crowd = FakeCrowd({"x": crowd_of(X_MORNING_BUSY, "낮음")})
+    planner = crowd_setup(crowd, AvoidanceSettings(min_confidence="낮음"))[0]
+    assert times(planner.plan(pin_then_two()))["x"] == (time(13), time(15))
+
+
+def test_budget_exhausted_mid_evaluation_places_with_collected_gaps(monkeypatch):
+    # 조회 순서: y 위치 0·1 → 2건, x 위치 0 → 1건, 위치 1 → 2건(누적 5). x 위치 2(y→x) 에서 한도에 닿는다.
+    monkeypatch.setattr(initial, "MAX_ROUTE_LOOKUPS_PER_PLAN", 5)
+    planner, _, routes = crowd_setup(FakeCrowd({"x": crowd_of(X_MORNING_BUSY)}))
+    request = pin_then_two().model_copy(
+        update={"selections": (*pin_then_two().selections, selection("z", stay_min=30))}
+    )
+    result = planner.plan(request)
+
+    assert len(routes.departures) == 5
+    # 이미 수락된 위치(a 와 y 사이)로 배치하고, 뒤 선택은 지금처럼 예산 미배치다.
+    assert times(result)["x"] == (time(10, 45), time(12, 45))
+    assert [(item.block_id, item.reason.type) for item in result.unplaced] == [("z", "PLACEMENT_NEEDS_CHECK")]
+
+
+def test_route_lookup_cap_holds_with_full_gap_evaluation():
+    routes = CountingRoutes()
+    everyone = {f"s{i}": crowd_of({h: 0.5 for h in range(9, 23)}) for i in range(MAX_INITIAL_SELECTIONS)}
+    planner = InitialSchedulePlanner(BasicItineraryEngine(Places(), routes), Stays(10), crowd=FakeCrowd(everyone))
+    result = planner.plan(command(*[selection(f"s{i}") for i in range(MAX_INITIAL_SELECTIONS)], end=time(23)))
+
+    assert routes.calls == MAX_ROUTE_LOOKUPS_PER_PLAN
+    placed = [block.id for block in result.state.blocks]
+    unplaced = [item.block_id for item in result.unplaced]
+    assert sorted(placed + unplaced) == sorted(f"s{i}" for i in range(MAX_INITIAL_SELECTIONS))
+    assert len(placed) == len(set(placed))

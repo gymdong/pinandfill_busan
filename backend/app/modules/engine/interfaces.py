@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Literal, Protocol, runtime_checkable
 
+from app.modules.crowd.schemas import PlaceCrowdResponse
 from app.modules.engine.schemas import (
     CalculationContext,
     InsertInput,
@@ -61,6 +62,12 @@ class DepartureAwareRouteProvider(Protocol):
         mode: Literal["TRANSIT", "CAR", "WALK"],
         departure_at: datetime,
     ) -> RouteEstimate: ...
+
+
+class CrowdLookup(Protocol):
+    """FR-009 optional expected-crowd lookup. None means no information for that place/date."""
+
+    def crowd(self, place_ref: PlaceRef, *, on_date: date) -> PlaceCrowdResponse | None: ...
 
 
 @dataclass(frozen=True, slots=True)

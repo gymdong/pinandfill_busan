@@ -1,15 +1,19 @@
 """API-009 initial generation: HTTP contracts, persistence and edit interoperability."""
 
+import json
 from datetime import date
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+from app.main import create_app, default_crowd_service, default_trip_service
+from app.modules.crowd.engine_lookup import CrowdServiceLookup
+from app.modules.crowd.service import CrowdService
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.schemas import OpeningHours, ScheduleState
 from app.modules.engine.service import BasicItineraryEngine
+from app.modules.places.samples import load_sample_places
 from app.modules.trips.repository import FakeTripRepository, TripRecord
 from app.modules.trips.router import translate_error
 from app.modules.trips.schemas import MAX_INITIAL_SELECTIONS, GenerateScheduleRequest
@@ -336,6 +340,46 @@ def test_default_service_wires_initial_planner_without_external_keys():
         assert response.json()["generation"]["saved"]
         assert blocks(response.json())[0]["stayMin"] == 60
         assert client.get(f"/api/trips/{trip_id}").json()["schedule"]["days"][0]["blocks"]
+
+
+def test_default_app_shares_crowd_service_with_initial_planner():
+    application = create_app()
+    planner = application.state.trip_service.initial_planner
+    assert isinstance(planner.crowd, CrowdServiceLookup)
+    assert planner.crowd._service is application.state.crowd_service
+    assert (planner.avoidance.min_confidence, planner.avoidance.min_gain) == ("중간", 0.1)
+    injected = CrowdService()
+    assert create_app(crowd_service=injected).state.trip_service.initial_planner.crowd._service is injected
+
+
+def test_default_crowd_without_files_keeps_initial_response(monkeypatch, tmp_path):
+    """운영 기본(혼잡 파일 없음 → 정보 부족)이면 혼잡 연결 전과 응답이 같다(FR-009, A4-2)."""
+    monkeypatch.setenv("CROWD_DATA_DIR", str(tmp_path))
+    places = load_sample_places()
+    conditions = {
+        "dates": {"start": "2026-11-17", "end": "2026-11-17"},
+        "dayStart": "09:00",
+        "dayEnd": "20:00",
+        "mode": "TRANSIT",
+    }
+    request = body(pinned("126848", start="13:00", end="14:00"), item("126658"), item("130166"))
+
+    def generate(service):
+        with TestClient(create_app(trip_service=service)) as client:
+            trip_id = client.post("/api/trips", json=conditions).json()["tripId"]
+            response = client.post(f"/api/trips/{trip_id}/schedule", json=request)
+            assert response.status_code == 200, response.text
+            payload = response.json()
+        assert len(blocks(payload)) >= 2
+        # 서버 블록 UUID 는 매번 새로 만든다. 장소 ID 로 바꿔 비교한다.
+        text = json.dumps(payload)
+        for block in blocks(payload):
+            text = text.replace(block["id"], block["place"]["id"])
+        return json.loads(text)
+
+    with_crowd = default_trip_service(places, crowd_service=default_crowd_service(places))
+    assert with_crowd.initial_planner.crowd is not None
+    assert generate(with_crowd) == generate(default_trip_service(places))
 
 
 def test_reversed_fixed_day_order_is_rejected_without_saving():

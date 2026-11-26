@@ -67,6 +67,19 @@ def test_repo_config_file_values():
     config = load_config(CROWD_CONFIG)
     assert config.grade_percentiles == (0.4, 0.7, 0.9)
     assert config.b_weights == {"DATA-04": 1, "DATA-05": 1}
+    assert (config.avoidance.min_confidence, config.avoidance.min_gain) == ("중간", 0.1)
+
+
+def test_avoidance_config_values_are_used_and_validated(tmp_path):
+    path = tmp_path / "crowd_config.json"
+    base = {"grade_percentiles": [0.4, 0.7, 0.9], "b_weights": {"DATA-04": 1}}
+    path.write_text(json.dumps(base), encoding="utf-8")
+    assert load_config(path).avoidance.min_confidence == "중간"  # 칸이 없으면 기본값
+    path.write_text(json.dumps({**base, "avoidance": {"min_confidence": "높음", "min_gain": 0.2}}), encoding="utf-8")
+    assert (load_config(path).avoidance.min_confidence, load_config(path).avoidance.min_gain) == ("높음", 0.2)
+    path.write_text(json.dumps({**base, "avoidance": {"min_confidence": "매우"}}), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(path)
 
 
 def test_config_file_values_are_used(tmp_path):
