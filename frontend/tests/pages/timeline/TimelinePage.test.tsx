@@ -1,14 +1,19 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { placesApi, tripsApi } from '@/api';
 import { parseErrorResponse } from '@/api/errors';
 import { schedule, trip } from '@/api/mock/fixtures/schedule';
-import { searchItems, waypointCandidates } from '@/api/mock/fixtures/places';
+import { placeSummaries, searchItems, waypointCandidates } from '@/api/mock/fixtures/places';
 import TimelinePage from '@/pages/timeline';
 
 afterEach(() => vi.restoreAllMocks());
+
+function LocationProbe() {
+  const location = useLocation();
+  return <p data-testid="location">{location.pathname + location.search}</p>;
+}
 
 describe('코스 타임라인', () => {
   const empty = { ...schedule, days: [] };
@@ -33,6 +38,23 @@ describe('코스 타임라인', () => {
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.getAllByRole('link', { name: '카카오맵에서 장소 확인 (새 창)' })).toHaveLength(1);
+  });
+
+  it('공공 장소 블록은 그 일차 날짜를 담아 장소 상세로 연결한다(FR-008)', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    const [day] = schedule.days;
+    const taejongdae = placeSummaries.taejongdae;
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes>
+      <Route path="/trips/:tripId" element={<TimelinePage />} />
+      <Route path="/places/:placeId" element={<LocationProbe />} />
+    </Routes></MemoryRouter>);
+
+    const link = await screen.findByRole('link', { name: '태종대 장소 상세 보기' });
+    expect(link).toHaveAttribute('href', `/places/${taejongdae.id}?date=${day!.date}`);
+    // 카카오 장소는 공공 DB 상세가 없어 연결하지 않는다.
+    expect(screen.getAllByRole('link', { name: /장소 상세 보기$/ })).toHaveLength(3);
+    await userEvent.click(link);
+    expect(await screen.findByTestId('location')).toHaveTextContent(`/places/${taejongdae.id}?date=2026-10-17`);
   });
 
   it('인접한 블록 사이에 검색한 경유지를 삽입 요청한다', async () => {

@@ -54,6 +54,11 @@
   gap: var(--space-3);
 }
 
+.hourMissing {
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+}
+
 .hourLabel {
   width: 3em;
   flex-shrink: 0;

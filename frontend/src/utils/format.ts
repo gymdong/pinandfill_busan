@@ -25,10 +25,15 @@ const KST_PARTS = new Intl.DateTimeFormat('ko-KR', {
   hourCycle: 'h23',
 });
 
-/** ISO 일시 → 한국 시각 '10월 17일 (토) 05:00'. 보는 기기의 시간대와 관계없이 KST로 고정한다. */
+/**
+ * ISO 일시 → 한국 시각 '10월 17일 (토) 05:00'. 보는 기기의 시간대와 관계없이 KST로 고정한다.
+ * 읽을 수 없는 값이면 화면이 깨지지 않도록 '확인 필요'를 돌려준다(NFR-012).
+ */
 export function formatDateTime(isoDateTime: string): string {
+  const date = new Date(isoDateTime);
+  if (Number.isNaN(date.getTime())) return '확인 필요';
   const parts = Object.fromEntries(
-    KST_PARTS.formatToParts(new Date(isoDateTime)).map((part) => [part.type, part.value]),
+    KST_PARTS.formatToParts(date).map((part) => [part.type, part.value]),
   ) as Partial<Record<Intl.DateTimeFormatPartTypes, string>>;
   return `${parts.month}월 ${parts.day}일 (${parts.weekday}) ${parts.hour}:${parts.minute}`;
 }

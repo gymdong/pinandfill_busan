@@ -29,4 +29,8 @@ describe('formatDateTime', () => {
   it('오프셋이 붙은 일시는 그 시각 그대로 한국 시각으로 표시한다', () => {
     expect(formatDateTime('2026-10-17T05:00:00+09:00')).toBe('10월 17일 (토) 05:00');
   });
+
+  it.each(['', 'not-a-date', '2026-13-40T99:00:00Z'])('읽을 수 없는 일시 %j는 오류 대신 확인 필요로 표시한다', (value) => {
+    expect(formatDateTime(value)).toBe('확인 필요');
+  });
 });

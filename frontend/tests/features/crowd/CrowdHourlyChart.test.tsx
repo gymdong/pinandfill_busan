@@ -31,6 +31,18 @@ describe('CrowdHourlyChart (UI-04, AC-008)', () => {
     expect(rows.map((row) => row.querySelector('[data-filled]')?.getAttribute('data-filled'))).toEqual(['1', '2', '3', '4']);
   });
 
+  it('근거가 없는 시간대는 막대 없이 정보 부족 글자만 흐리게 보인다', () => {
+    const { container } = render(
+      <CrowdHourlyChart crowd={{ ...CROWD, hours: [CROWD.hours[0]!, { h: 10, grade: null, score: null }] }} />,
+    );
+    const rows = within(screen.getByRole('list', { name: '시간대별 예상 등급' })).getAllByRole('listitem');
+
+    expect(rows.map((row) => row.textContent)).toEqual(['9시예상 여유', '10시정보 부족']);
+    expect(rows[1]!.querySelector('[data-filled]')).toBeNull();
+    expect(rows[1]!.className).toMatch(/hourMissing/);
+    expect(container.querySelectorAll('[data-filled]')).toHaveLength(1);
+  });
+
   it("'예상' 라벨, 신뢰도, 한국 시각 기준 시각, 출처를 보인다", () => {
     render(<CrowdHourlyChart crowd={CROWD} />);
     const chart = screen.getByRole('region', { name: '시간대별 예상 혼잡' });
@@ -39,6 +51,11 @@ describe('CrowdHourlyChart (UI-04, AC-008)', () => {
     expect(within(chart).getByText('신뢰도').nextSibling).toHaveTextContent('중간');
     expect(within(chart).getByText('기준 시각').nextSibling).toHaveTextContent('11월 26일 (목) 14:00');
     expect(within(chart).getByText('출처').nextSibling).toHaveTextContent('시험 자료 A, 시험 자료 B');
+  });
+
+  it('기준 시각을 읽을 수 없으면 화면을 깨뜨리지 않고 확인 필요로 둔다', () => {
+    render(<CrowdHourlyChart crowd={{ ...CROWD, asOf: 'not-a-date' }} />);
+    expect(screen.getByText('기준 시각').nextSibling).toHaveTextContent('확인 필요');
   });
 
   it("'근거 보기'로 신호 목록을 펼치고 접는다", async () => {

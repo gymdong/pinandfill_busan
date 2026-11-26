@@ -42,9 +42,10 @@ export function CrowdHourlyChart({ crowd, onRetry }: CrowdHourlyChartProps) {
         <>
           <ol className={styles.hours} aria-label="시간대별 예상 등급">
             {crowd.hours.map(({ h, grade }) => (
-              <li key={h} className={styles.hour}>
+              // 근거가 없는 시간대는 막대 없이 글자만 흐리게 두어 등급이 있는 시간대와 구분한다.
+              <li key={h} className={grade ? styles.hour : `${styles.hour} ${styles.hourMissing}`}>
                 <span className={styles.hourLabel}>{h}시</span>
-                <CrowdBadge grade={grade} />
+                {grade ? <CrowdBadge grade={grade} /> : <span>정보 부족</span>}
               </li>
             ))}
           </ol>
