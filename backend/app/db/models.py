@@ -1,16 +1,27 @@
-"""SDD 5.2 의 일정 도메인 테이블 중 지금 저장하는 것만(trips·blocks·legs·schedule_snapshots).
+"""SDD 5.2 의 테이블 중 지금 저장하는 것만: 일정 도메인(trips·blocks·legs·schedule_snapshots)과
+공공 장소·수집 기록(places·place_hours·data_sources·ingestion_runs, FR-016).
 
 운영 DB 는 PostgreSQL 이다. 시험에서 SQLite 로도 만들 수 있게 JSONB 는 PostgreSQL 에서만 쓰고 그 밖에서는 JSON 이다.
 
 SDD 와 다른 점(현재 엔진 상태 `ScheduleState` 를 손실 없이 저장하기 위함):
 - blocks·legs 의 id 는 엔진이 정하는 문자열이며 여행 안에서만 유일하다. 그래서 (trip_id, id) 가 PK 다.
   legs 에도 trip_id 를 두어 (trip_id, from/to_block_id) 로 blocks 를 참조한다.
-- places 테이블이 아직 없어 blocks.place_id 는 FK 없는 문자열이다. 카카오 장소는 ID·URL 만 저장한다
-  (`KakaoPlaceRef`). 카카오 장소명·좌표는 저장하지 않는다(세션 한정).
+- blocks.place_id 는 FK 없는 문자열이다(places 에 없는 카카오·미등록 장소도 담는다). 카카오 장소는 ID·URL 만
+  저장한다(`KakaoPlaceRef`). 카카오 장소명·좌표는 저장하지 않는다(세션 한정).
 - position 은 저장한 순서(튜플 순서)를 그대로 되살리기 위한 열이다.
 - legs.computed_at 은 null 일 수 있고(경로 미조회), time_semantics·lookup_failed 를 함께 저장한다.
 - blocks.warnings 는 저장하지 않는다. 경고는 조회할 때마다 엔진이 다시 계산한다.
 - trips 는 일정 계산에 쓰는 열만 둔다. user_id·장소·동행·취향·예산·만료 등은 해당 기능이 저장할 때 추가한다.
+
+공공 장소·수집 기록에서 SDD 와 다른 점:
+- places.id 는 UUID 가 아니라 공공 원본 ID(TourAPI contentid) 문자열이다(A-3, 결정 D2). source_ref 에도 같은 값을
+  둔다. 다른 공공 소스의 ID 는 겹치지 않게 접두어를 붙인다(예: `busan:…`).
+- 표본 CSV 에 빈 값이 있어 default_stay_min·indoor_outdoor·ref_date 는 NULL 을 허용한다(값을 지어내지 않음, NFR-012).
+- places 에 address(주소)·source_org(장소 상세의 출처 기관)·collected_at(배치가 마지막으로 갱신한 시각) 열을 더한다.
+  ref_date 는 수동 확인 기준일(CSV checked_at)이며 배치가 덮어쓰지 않는다(MANUAL 영업시간의 기준일, NFR-012).
+  rating 은 쓰는 기능이 아직 없어 두지 않는다.
+- place_hours 는 (place_id, day_type) 가 유일하다(A-4). ingestion_runs 에 rejected_count(응답 검증 거절 건수, A-4)와
+  alerted_at(관리자 알림을 보낸 시각, 알림 중복 억제용)을 더한다. finished_at 은 실행 중이면 NULL 이다.
 """
 
 import uuid
@@ -22,12 +33,15 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Double,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     MetaData,
     SmallInteger,
     String,
+    Text,
     Time,
     UniqueConstraint,
     Uuid,
@@ -135,3 +149,81 @@ class ScheduleSnapshotRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JsonDocument)
     reason: Mapped[str] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(UtcDateTime)
+
+
+class PlaceRow(Base):
+    __tablename__ = "places"
+
+    # 공공 원본 ID(TourAPI contentid). 다른 소스는 접두어를 붙인다(예: `busan:…`).
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    lat: Mapped[float] = mapped_column(Double)
+    lng: Mapped[float] = mapped_column(Double)
+    category: Mapped[str] = mapped_column(String(50))
+    # PUBLIC(공공 DB) / USER_SELECTED(SDD D6, 아직 저장하지 않음)
+    source: Mapped[str] = mapped_column(String(20))
+    source_ref: Mapped[str | None] = mapped_column(String(100))
+    address: Mapped[str | None] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
+    closed_days_text: Mapped[str | None] = mapped_column(String(200))
+    default_stay_min: Mapped[int | None] = mapped_column(SmallInteger)
+    indoor_outdoor: Mapped[str | None] = mapped_column(String(10))
+    adm_dong_code: Mapped[str | None] = mapped_column(String(20))
+    # 장소 상세의 출처 기관 표기(예: '한국관광공사 TourAPI, 비짓부산')
+    source_org: Mapped[str | None] = mapped_column(String(200))
+    # 수동 확인 기준일(CSV checked_at). 배치 수집은 바꾸지 않는다(NFR-012).
+    ref_date: Mapped[date | None] = mapped_column(Date)
+    # 배치가 이름·좌표·주소를 마지막으로 갱신한 시각
+    collected_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime)
+
+
+class PlaceHourRow(Base):
+    __tablename__ = "place_hours"
+    __table_args__ = (UniqueConstraint("place_id", "day_type"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    place_id: Mapped[str] = mapped_column(String(64), ForeignKey("places.id", ondelete="CASCADE"))
+    # MON~SUN (HOLIDAY 는 아직 다루지 않는다)
+    day_type: Mapped[str] = mapped_column(String(10))
+    # 시각이 NULL 이면 '확인 필요'다(지어내지 않음, NFR-012).
+    open_time: Mapped[time | None] = mapped_column(Time)
+    close_time: Mapped[time | None] = mapped_column(Time)
+    break_start: Mapped[time | None] = mapped_column(Time)
+    break_end: Mapped[time | None] = mapped_column(Time)
+    is_closed: Mapped[bool] = mapped_column(Boolean)
+    # PARSED(파서) / MANUAL(수동 보정)
+    origin: Mapped[str] = mapped_column(String(10))
+
+
+class DataSourceRow(Base):
+    __tablename__ = "data_sources"
+
+    id: Mapped[str] = mapped_column(String(30), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    # API / CSV / SDK
+    kind: Mapped[str] = mapped_column(String(10))
+    # MONTH / DAY / MINUTE
+    refresh_cycle: Mapped[str] = mapped_column(String(20))
+    daily_call_limit: Mapped[int | None] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+
+
+class IngestionRunRow(Base):
+    __tablename__ = "ingestion_runs"
+    __table_args__ = (Index(None, "source_id", "started_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[str] = mapped_column(String(30), ForeignKey("data_sources.id"))
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    # SUCCESS / FAILED / SKIPPED
+    status: Mapped[str] = mapped_column(String(10))
+    record_count: Mapped[int | None] = mapped_column(Integer)
+    rejected_count: Mapped[int | None] = mapped_column(Integer)
+    call_count: Mapped[int | None] = mapped_column(Integer)
+    as_of: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    # 민감정보(serviceKey 등)를 넣지 않는다(NFR-010).
+    error_message: Mapped[str | None] = mapped_column(Text)
+    # 이 실행으로 관리자 알림을 보낸 시각. 알림 중복 억제에 쓴다.
+    alerted_at: Mapped[datetime | None] = mapped_column(UtcDateTime)

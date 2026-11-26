@@ -34,6 +34,19 @@ uv run alembic revision --autogenerate -m "설명"  # app/db/models.py 를 고�
 uv run alembic check                  # 모델과 DB 스키마가 같은지 확인한다
 ```
 
+공공 장소·수집 기록 테이블(places·place_hours·data_sources·ingestion_runs, FR-016)도 같은 마이그레이션으로 만든다.
+data_sources 의 tourapi·data06·data07 행은 마이그레이션이 넣는다. 표본 CSV(`data/samples/`)는 시드 명령으로 넣는다.
+앱은 아직 CSV 에서 장소를 읽는다(DB 읽기 경로는 별도 작업).
+
+```bash
+uv run alembic upgrade head
+uv run python -m app.batch.cli seed-places              # data/samples 의 places_sample.csv·place_hours.csv
+uv run python -m app.batch.cli seed-places --dir <디렉터리>  # 다른 표본 디렉터리
+```
+
+- 시드는 다시 돌려도 결과가 같다. 표본에 없는 장소 행은 지우지 않고, 표본에서 빠진 요일의 영업시간 행은 지운다.
+- 배치가 갱신한 이름·좌표·주소(collected_at 이 있는 행)는 시드가 덮어쓰지 않는다. ref_date(수동 확인 기준일)·
+  영업시간·출처 기관은 시드(CSV)만 바꾼다.
 - 마이그레이션 파일은 `alembic/versions/` 에 두고, 병합 순서는 마이그레이션 담당(홍민지)이 정한다.
 - DB 저장소 테스트는 SQLite(메모리)로 항상 돌고, `TEST_DATABASE_URL` 이 있으면 PostgreSQL 에서도 돈다.
   그 DB 의 public 스키마는 테스트마다 지우고 다시 만드므로 개발 DB 와 다른 DB 를 쓴다. 실제로 연결된 DB 이름이

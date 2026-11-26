@@ -39,6 +39,8 @@ class SamplePlace:
     description: str | None = None
     # 표본 CSV 의 주소(address 열). 예상 혼잡의 날짜 배수 지역(구·군)을 고를 때 쓴다.
     address: str | None = None
+    # 요일 → 영업시간 값의 출처(CSV origin 열: MANUAL·PARSED). 열이 비어 있는 요일은 없다.
+    hours_origin: Mapping[str, str] = field(default_factory=dict)
 
 
 class SamplePlaceData:
@@ -77,6 +79,10 @@ class SamplePlaceData:
         """공공 장소 ID 로 표본 한 곳을 찾는다. 카카오 장소 ID 는 공공 장소가 아니므로 찾지 않는다."""
         return self._places.get(place_id)
 
+    def samples(self) -> list[SamplePlace]:
+        """표본 장소 전부(CSV 순서). places 테이블 시드에 쓴다."""
+        return list(self._places.values())
+
     def repository(self) -> InMemoryPublicPlaceRepository:
         # 원래 테스트용 메모리 저장소다. places 테이블 저장소가 생기면 기본 구성(app.main)에서 그쪽으로 바꾼다.
         return InMemoryPublicPlaceRepository((item.place for item in self._places.values()), self._kakao_overrides)
@@ -112,6 +118,7 @@ def _positive_int(value: str) -> int | None:
 
 def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
     hours: dict[str, dict[str, OpeningHours]] = {}
+    hours_origin: dict[str, dict[str, str]] = {}
     skipped_hours = 0
     for row in _rows(directory / "place_hours.csv"):
         place_id, day_type = row.get("tourapi_contentid", ""), row.get("day_type", "")
@@ -127,6 +134,9 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
             )
         except ValueError:  # pydantic ValidationError 포함(예: 초가 붙은 시각)
             skipped_hours += 1
+            continue
+        if row.get("origin"):
+            hours_origin.setdefault(place_id, {})[day_type] = row["origin"].upper()
     if skipped_hours:
         logger.warning("place_samples skipped_hours=%d", skipped_hours)
 
@@ -169,6 +179,7 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
                 source_org=row.get("source_label_original") or None,
                 description=row.get("description") or None,
                 address=row.get("address") or None,
+                hours_origin=hours_origin.get(place.id, {}),
             )
         )
     if skipped:
