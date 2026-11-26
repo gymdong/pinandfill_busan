@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from app.modules.places.samples import SamplePlaceData, load_sample_places
 
@@ -328,6 +328,7 @@ def report(
     observation_rows: int,
     rejected: Sequence[str],
     criteria: Criteria = DEFAULT_CRITERIA,
+    excluded: Sequence[str] = (),
 ) -> str:
     lines = [
         "AC-009 혼잡 추정 검증",
@@ -356,6 +357,9 @@ def report(
     if unpaired:
         lines += ["", "[3] 짝을 못 지었거나 거절한 행"]
         lines += [f"  - {text}" for text in unpaired]
+    if excluded:
+        lines += ["", "[4] 계산에서 제외한 행"]
+        lines += [f"  - {text}" for text in excluded]
     lines += ["", f"종합: {result.overall}"]
     return "\n".join(lines)
 
@@ -402,24 +406,77 @@ class _Parser(argparse.ArgumentParser):
         raise SystemExit(EXIT_INPUT_ERROR)
 
 
+@dataclass(frozen=True)
+class Partition[T]:
+    kept: list[T]
+    outside: list[str]  # --places 밖이지만 표본에 있는 장소의 place_id(중복 제거)
+    unknown: list[str]  # --places 에도 표본에도 없는 place_id(오타 의심)
+    dropped_rows: int
+
+
+def partition_by_places[T](
+    rows: Iterable[T], place_of: Callable[[T], str], selected: set[str], known: set[str]
+) -> Partition[T]:
+    kept: list[T] = []
+    outside: set[str] = set()
+    unknown: set[str] = set()
+    dropped = 0
+    for row in rows:
+        place_id = place_of(row)
+        if place_id in selected:
+            kept.append(row)
+            continue
+        dropped += 1
+        (outside if place_id in known else unknown).add(place_id)
+    return Partition(kept, sorted(outside), sorted(unknown), dropped)
+
+
+def _excluded_lines(kind: str, part: Partition[Any]) -> list[str]:
+    lines = []
+    if part.outside:
+        lines.append(f"{kind}: --places 밖 장소의 행을 뺌 — {', '.join(part.outside)}")
+    if part.unknown:
+        lines.append(f"{kind}: 어느 장소인지 알 수 없는 place_id(오타 의심) — {', '.join(part.unknown)}")
+    if part.dropped_rows:
+        lines.append(f"{kind}: 계산에서 뺀 행 합계 {part.dropped_rows}개")
+    return lines
+
+
 def _run(args: argparse.Namespace) -> int:
     places = load_sample_places()
     place_ids = set(args.places if args.places else default_place_ids(places))
-    provider = FileCrowdProvider.from_dir(
-        args.crowd_dir or crowd_dir_from_env(), region_lookup(places), args.config or crowd_config_from_env()
-    )
+    known = {item.place.id for item in places.all()} | place_ids
+    try:
+        provider = FileCrowdProvider.from_dir(
+            args.crowd_dir or crowd_dir_from_env(), region_lookup(places), args.config or crowd_config_from_env()
+        )
+    except (OSError, ValueError) as error:  # 설정·입력 파일이 없거나 잘못됨
+        raise InputError(f"혼잡 입력·설정을 읽을 수 없습니다: {error}") from error
     lookup = provider_lookup(provider)
-    observations, rejected_obs = load_observations(args.observations)
-    wifi, rejected_wifi = load_wifi(args.wifi)
-    observations = [item for item in observations if item.place_id in place_ids]
-    wifi = [item for item in wifi if item.place_id in place_ids]
+    all_observations, rejected_obs = load_observations(args.observations)
+    all_wifi, rejected_wifi = load_wifi(args.wifi)
+    obs_part = partition_by_places(all_observations, lambda item: item.place_id, place_ids, known)
+    wifi_part = partition_by_places(all_wifi, lambda item: item.place_id, place_ids, known)
+    observations, wifi = obs_part.kept, wifi_part.kept
     criteria = Criteria(args.min_observations, args.min_places, args.min_points)
     within = within_place_rho(wifi, lookup, criteria.min_points)
     agreement = grade_agreement(observations, lookup)
     result = verdict(within, agreement, criteria)
+    excluded = [*_excluded_lines("관측", obs_part), *_excluded_lines("와이파이", wifi_part)]
+    if obs_part.unknown:
+        # 오타로 빠진 관측이 있으면 일치율이 부풀려졌을 수 있어 통과·미달을 주장하지 않는다.
+        result = Verdict(result.rho_pass, result.agreement_pass, "판정 불가")
+        excluded.append("판정 불가: 알 수 없는 place_id 의 관측이 있습니다. 오타를 고치거나 --places 에 추가하세요.")
     rejected = [*rejected_obs, *rejected_wifi]
-    print(report(within, agreement, result, len(wifi), len(observations), rejected, criteria))
+    print(report(within, agreement, result, len(wifi), len(observations), rejected, criteria, excluded))
     return EXIT_CODES[result.overall]
+
+
+def _at_least_one(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("1 이상이어야 합니다")
+    return number
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -434,13 +491,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="검증할 place_id. 기본은 표본에서 이름으로 찾은 흰여울문화마을·봉래물양장·감지해변(하나라도 없으면 필수)",
     )
-    parser.add_argument("--min-observations", type=int, default=MIN_OBSERVATIONS, help="필요한 관측 수(기본 30)")
-    parser.add_argument("--min-places", type=int, default=MIN_PLACES, help="ρ 를 내야 하는 장소 수(기본 3)")
-    parser.add_argument("--min-points", type=int, default=MIN_POINTS_PER_PLACE, help="장소별 필요한 쌍 수(기본 5)")
+    parser.add_argument(
+        "--min-observations", type=_at_least_one, default=MIN_OBSERVATIONS, help="필요한 관측 수(기본 30)"
+    )
+    parser.add_argument("--min-places", type=_at_least_one, default=MIN_PLACES, help="ρ 를 내야 하는 장소 수(기본 3)")
+    parser.add_argument(
+        "--min-points", type=_at_least_one, default=MIN_POINTS_PER_PLACE, help="장소별 필요한 쌍 수(기본 5)"
+    )
     args = parser.parse_args(argv)
     try:
         return _run(args)
-    except (InputError, OSError, ValueError) as error:  # ValueError: 설정 JSON·스키마 오류 포함
+    except InputError as error:
         print(f"입력 오류: {error}", file=sys.stderr)
         return EXIT_INPUT_ERROR
 

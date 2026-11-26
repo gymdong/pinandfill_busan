@@ -19,6 +19,7 @@ from app.modules.crowd.validation import (
     load_observations,
     load_wifi,
     main,
+    partition_by_places,
     provider_lookup,
     region_lookup,
     spearman,
@@ -283,7 +284,7 @@ def test_cli_end_to_end_with_fake_fixture(tmp_path: Path, capsys: pytest.Capture
     out = capsys.readouterr().out
     assert code == 2  # 관측 1건·장소 1곳이라 통과를 주장하지 않는다(판정 불가)
     assert "2684712: 쌍 9개, ρ = 0.99" in out  # M=0.8 이 일부 시간대를 백분위 0 으로 눌러 1 에서 약간 벗어난다
-    assert "9999" not in out  # --places 밖 장소는 걸러진다
+    assert "와이파이: 어느 장소인지 알 수 없는 place_id(오타 의심) — 9999" in out  # 걸러내되 보고한다
     assert "날짜·시각이 비어 ρ 에서 뺀 와이파이 행: 1개" in out
     assert "관측이 30건 미만" in out
     assert "종합: 판정 불가" in out
@@ -316,3 +317,61 @@ def test_cli_input_errors_exit_3_without_traceback(tmp_path: Path, capsys: pytes
         main(["--wifi", "x"])
     assert exited.value.code == 3
     capsys.readouterr()
+
+
+def test_partition_separates_known_outside_and_unknown_places() -> None:
+    rows = [obs("A", 9, "붐빔"), obs("B", 9, "붐빔"), obs("TYPO", 9, "붐빔"), obs("TYPO", 10, "붐빔")]
+    part = partition_by_places(rows, lambda item: item.place_id, {"A"}, {"A", "B"})
+    assert [item.place_id for item in part.kept] == ["A"]
+    assert (part.outside, part.unknown, part.dropped_rows) == (["B"], ["TYPO"], 3)
+
+
+def test_cli_unknown_observation_place_forces_undecidable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    population = [500, 600, 700, 800, 900, 1000, 900, 800, 700]
+    wifi_rows = "".join(f"2684712,2026-11-25,{h},{v}\n" for h, v in zip(HOURS, population, strict=True))
+    estimate = provider_lookup(FileCrowdProvider.from_dir(FIXTURES, region_lookup(load_sample_places())))
+    hours = estimate("2684712", DAY)
+    assert hours is not None
+    options = ("--places", "2684712", "--min-observations", "1", "--min-places", "1")
+    good = f"2684712,2026-11-25,14,{hours[14][1]},가짜,\n"
+    # 오타 행이 없으면 통과(0), 있으면 같은 입력이라도 판정 불가(2)
+    assert run_cli(tmp_path, *options, obs_rows=good, wifi_rows=wifi_rows) == 0
+    capsys.readouterr()
+    code = run_cli(tmp_path, *options, obs_rows=good + "TYPO,2026-11-25,14,붐빔,가짜,\n", wifi_rows=wifi_rows)
+    out = capsys.readouterr().out
+    assert code == 2
+    assert "오타 의심) — TYPO" in out
+    assert "종합: 판정 불가" in out
+
+
+def test_cli_known_place_outside_places_is_only_reported(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    code = run_cli(
+        tmp_path,
+        "--places",
+        "2684712",
+        obs_rows="126658,2026-11-25,14,붐빔,가짜,\n",
+        wifi_rows="126658,2026-11-25,10,5\n",  # 태종대: 표본에 있지만 --places 밖
+    )
+    out = capsys.readouterr().out
+    assert code == 2
+    assert "관측: --places 밖 장소의 행을 뺌 — 126658" in out
+    assert "와이파이: --places 밖 장소의 행을 뺌 — 126658" in out
+    assert "오타 의심" not in out
+
+
+@pytest.mark.parametrize("option", ["--min-observations", "--min-places", "--min-points"])
+@pytest.mark.parametrize("value", ["0", "-1", "abc"])
+def test_cli_rejects_min_options_below_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], option: str, value: str
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        run_cli(tmp_path, "--places", "2684712", option, value)
+    assert exited.value.code == 3
+    assert option in capsys.readouterr().err
+
+
+def test_cli_broken_config_is_input_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    bad = tmp_path / "config.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert run_cli(tmp_path, "--places", "2684712", "--config", str(bad)) == 3
+    assert "입력 오류" in capsys.readouterr().err
