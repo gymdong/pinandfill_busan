@@ -2,9 +2,14 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from app.main import create_app
-from tests.unit.trips.test_service_edits import TRIP, saved, setup_service
+from app.modules.engine.schemas import ScheduleState
+from app.modules.trips.schemas import UpdateBlockRequest
+from app.modules.trips.service import MAX_EDIT_ATTEMPTS
+from tests.unit.trips.test_service_edits import TRIP, InterferingEngine, in_thread, saved, setup_service
 
 BLOCKS = f"/api/trips/{TRIP}/blocks"
 UNDO = f"/api/trips/{TRIP}/undo"
@@ -183,4 +188,60 @@ def test_invalid_session_coords_are_not_echoed(method, path, extra, caplog):
     assert_error(response, 400, "ERR-001")
     assert SECRET not in response.text + caplog.text
     assert "129.7654321" not in response.text + caplog.text
+    assert saved(repository) == before
+
+
+def test_edit_that_keeps_colliding_returns_503_and_keeps_state():
+    service, repository, _ = setup_service()
+    client = TestClient(create_app(trip_service=service))
+    minutes = iter(range(40, 40 + MAX_EDIT_ATTEMPTS))
+    after_b: list[ScheduleState] = []
+
+    def edit_b() -> None:
+        in_thread(lambda: service.update_block(TRIP, "g", UpdateBlockRequest(stay_min=next(minutes))))
+        after_b.append(saved(repository))
+
+    service.engine = InterferingEngine(service.engine, edit_b)
+    response = client.patch(f"{BLOCKS}/c", json={"stayMin": 60})
+
+    assert_error(response, 503, "ERR-017")
+    assert response.json()["error"]["message"] == "다른 편집과 겹쳤습니다. 잠시 후 다시 시도해 주세요."
+    assert len(after_b) == MAX_EDIT_ATTEMPTS
+    assert saved(repository) == after_b[-1]
+
+
+class _DriverError(Exception):
+    def __init__(self, sqlstate: str | None) -> None:
+        super().__init__(f"canceled while handling {SECRET}")
+        self.sqlstate = sqlstate
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (
+            OperationalError("SELECT * FROM trips WHERE id = %(id)s", {"id": SECRET}, _DriverError("55P03")),
+            "lock_timeout",
+        ),
+        (OperationalError("UPDATE blocks", {"x": SECRET}, _DriverError("57014")), "statement_timeout"),
+        (OperationalError("SELECT 1", {}, _DriverError(None)), "operational_error"),
+        (PoolTimeoutError(f"QueuePool limit reached {SECRET}"), "pool_timeout"),
+    ],
+)
+def test_db_unavailable_is_retry_later_with_typed_log_only(error, kind, monkeypatch, caplog):
+    service, repository, _ = setup_service()
+    before = saved(repository)
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(service, "update_block", fail)
+    with caplog.at_level("WARNING"):
+        response = TestClient(create_app(trip_service=service)).patch(f"{BLOCKS}/c", json={"stayMin": 60})
+
+    assert_error(response, 503, "ERR-017")
+    assert "잠시 후 다시 시도" in response.json()["error"]["message"]
+    assert f"trip_db_unavailable kind={kind}" in caplog.text
+    for leaked in (SECRET, "SELECT", "UPDATE", "QueuePool"):
+        assert leaked not in caplog.text + response.text
     assert saved(repository) == before
