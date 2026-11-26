@@ -15,6 +15,7 @@ from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
 from app.db.session import Database, DatabaseSettings
+from app.modules.crowd.engine_lookup import CrowdServiceLookup
 from app.modules.crowd.file_provider import (
     FileCrowdProvider,
     crowd_config_from_env,
@@ -22,6 +23,7 @@ from app.modules.crowd.file_provider import (
     district,
 )
 from app.modules.crowd.service import CrowdService
+from app.modules.crowd.signals import load_config, load_inputs
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
@@ -41,15 +43,24 @@ from app.modules.trips.sql_repository import SqlSnapshotRepository, SqlTripRepos
 logger = logging.getLogger(__name__)
 
 
-def default_trip_service(places: SamplePlaceData) -> TripService:
+def default_trip_service(places: SamplePlaceData, *, crowd_service: CrowdService | None = None) -> TripService:
     """로컬 기본 구성: 표본 장소, 경로 키가 있을 때만 실제 경로 조회.
+
+    `crowd_service` 가 있으면 초기 일정 생성이 덜 붐비는 삽입 위치를 고른다(FR-009). 기준은 혼잡 설정 파일의
+    `avoidance` 이고, 혼잡 정보가 기준 신뢰도 미만이면(지금 운영은 정보 부족) 배치는 혼잡 없이와 같다.
 
     `DATABASE_URL` 이 있으면 여행·되돌리기 이력을 DB(trips·blocks·legs·schedule_snapshots)에 저장하고,
     편집 한 번(일정 저장 + 스냅샷)을 한 트랜잭션으로 처리한다. 스키마는 `alembic upgrade head` 로 만든다.
     없으면 메모리 저장소를 쓰며, 프로세스가 재시작되면 여행과 이력이 사라진다.
     """
     engine = BasicItineraryEngine(places, build_route_provider())
-    initial_planner = InitialSchedulePlanner(engine, PublicStayDurations(places.stay_min))
+    initial_planner = InitialSchedulePlanner(
+        engine,
+        PublicStayDurations(places.stay_min),
+        crowd=CrowdServiceLookup(crowd_service) if crowd_service is not None else None,
+        # 혼잡 계산과 같은 설정 파일에서 읽은 값을 서비스가 들고 있다(둘이 어긋나지 않게).
+        avoidance=crowd_service.avoidance if crowd_service is not None else None,
+    )
     settings = DatabaseSettings()
     url = settings.url()
     if url is None:
@@ -77,7 +88,9 @@ def default_crowd_service(places: SamplePlaceData) -> CrowdService:
         item = places.place(place_id)
         return district(item.address) if item is not None else None
 
-    return CrowdService(FileCrowdProvider.from_dir(crowd_dir_from_env(), region_of, crowd_config_from_env()))
+    config = load_config(crowd_config_from_env())
+    provider = FileCrowdProvider(load_inputs(crowd_dir_from_env()), config, region_of)
+    return CrowdService(provider, avoidance=config.avoidance)
 
 
 def kakao_settings() -> KakaoSettings | None:
@@ -118,13 +131,14 @@ def create_app(
         trip_service is None or place_search_service is None or place_detail_service is None or crowd_service is None
     )
     places = load_sample_places() if needs_places else None
+    # 혼잡 서비스를 여행 서비스보다 먼저 만들어 API-012 와 초기 일정 생성(FR-009)이 같은 인스턴스를 쓴다.
+    if crowd_service is None and places is not None:
+        crowd_service = default_crowd_service(places)
     if trip_service is None and places is not None:
-        trip_service = default_trip_service(places)
+        trip_service = default_trip_service(places, crowd_service=crowd_service)
     # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
     if place_detail_service is None and places is not None:
         place_detail_service = PlaceDetailService(SamplePlaceDetails(places, load_place_photos()))
-    if crowd_service is None and places is not None:
-        crowd_service = default_crowd_service(places)
     kakao = kakao_settings() if place_search_service is None else None
 
     @asynccontextmanager
