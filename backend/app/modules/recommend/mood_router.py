@@ -4,6 +4,7 @@ SD-03 순서대로 두 번 부른다: 문장을 보내면 태그·피할 조건�
 태그를 보내면 그 태그로 공공 DB 장소를 추천한다.
 """
 
+import logging
 from datetime import date
 from typing import Annotated, Literal, Self
 
@@ -18,6 +19,8 @@ from app.modules.places.samples import SamplePlaceData, load_sample_places
 
 from .mood import MoodService, UnknownMoodValueError, build_mood_service
 from .mood_data import ThemeTag, load_mood_data
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recommend", tags=["recommend"])
 
@@ -88,6 +91,8 @@ def mood_service(request: Request) -> MoodService:
     if not isinstance(service, MoodService):
         places = getattr(request.app.state, "places", None)
         if not isinstance(places, SamplePlaceData):
+            # 서비스를 모두 주입한 앱(시험)만 여기로 온다. PLACE_DATA_SOURCE 와 상관없이 표본 CSV 를 읽는다.
+            logger.warning("mood_service places=csv_fallback (app has no place data)")
             places = load_sample_places()
         service = build_mood_service(load_mood_data(places))
         request.app.state.mood_service = service

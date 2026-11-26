@@ -14,13 +14,15 @@ from fastapi.testclient import TestClient
 
 from app.adapters.kakao import KakaoPlace
 from app.batch import cli
-from app.db.session import Database
+from app.db.session import Database, DatabaseSettings
 from app.main import create_app
 from app.modules.engine.schemas import PublicPlaceRef
 from app.modules.places.samples import SamplePlaceData, load_kakao_overrides, load_sample_places
 from app.modules.places.source import PlaceSourceError, PlaceSourceSettings
 from app.modules.recommend.mood_data import load_theme_tags
+from app.modules.trips.repository import FakeTripRepository
 from app.modules.trips.schemas import KakaoPlaceKey, PublicPlaceInput
+from tests.conftest import isolate_db_settings
 from tests.integration.test_db_persistence import DB_KINDS, open_database, upgrade
 
 CROWD_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "crowd"
@@ -150,13 +152,18 @@ def test_trips_and_places_share_one_database(tmp_path: Path, monkeypatch: pytest
     assert {item.place.id for item in application.state.places.all()} == {item.place.id for item in SAMPLES}
     trip = {"dates": {"start": "2026-11-17", "end": "2026-11-17"}, "dayStart": "09:00", "dayEnd": "20:00"}
     block = {"dayNo": 1, "place": {"placeId": "130166"}, "isFixed": False, "origin": "USER"}
+    disposed: list[Database] = []
+    monkeypatch.setattr(RecordingDatabase, "dispose", lambda self: disposed.append(self))
     with TestClient(application) as client:
         trip_id = client.post("/api/trips", json={**trip, "mode": "TRANSIT"}).json()["tripId"]
         added = client.post(f"/api/trips/{trip_id}/blocks", json=block)
+        assert disposed == []
     assert added.status_code == 200
     # 체류시간은 DB 의 default_stay_min 이다.
     assert added.json()["schedule"]["days"][0]["blocks"][0]["stayMin"] == 90
-    created[0].dispose()
+    # 앱이 끝나면 공유 연결 풀을 닫는다.
+    assert disposed == created
+    Database.dispose(created[0])
 
 
 def test_db_mode_without_database_url_fails_at_startup(monkeypatch: pytest.MonkeyPatch):
@@ -172,8 +179,13 @@ def test_db_mode_with_empty_places_fails_at_startup(tmp_path: Path, monkeypatch:
     empty.dispose()
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.setenv("PLACE_DATA_SOURCE", "db")
+    disposed: list[Database] = []
+    dispose = Database.dispose
+    monkeypatch.setattr(Database, "dispose", lambda self: (disposed.append(self), dispose(self)))
     with pytest.raises(PlaceSourceError, match="places table is empty"):
         create_app()
+    # 시작이 실패해도 만든 연결 풀을 닫는다.
+    assert len(disposed) == 1
 
 
 @pytest.mark.parametrize("value", [None, "", "csv"])
@@ -196,3 +208,26 @@ def test_unknown_source_fails_at_startup(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PLACE_DATA_SOURCE", "postgres")
     with pytest.raises(ValueError):
         create_app()
+
+
+def test_tests_do_not_read_database_settings_from_the_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # 실제 backend/.env 는 읽지 않는다. 임시 .env 를 backend/.env 자리(설정의 env_file)에 둔다.
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DATABASE_URL=sqlite:///{tmp_path / 'leak.db'}\nPLACE_DATA_SOURCE=db\n", encoding="utf-8")
+    for settings_class in (DatabaseSettings, PlaceSourceSettings):
+        monkeypatch.setitem(settings_class.model_config, "env_file", env_file)
+    # 예전 방식(빈 환경변수)으로는 .env 값이 그대로 쓰인다(#64 리뷰에서 재현한 누수).
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("PLACE_DATA_SOURCE", "")
+    assert DatabaseSettings().url() is not None
+    assert PlaceSourceSettings().place_data_source == "db"
+
+    isolate_db_settings(monkeypatch)
+
+    assert DatabaseSettings().url() is None
+    assert PlaceSourceSettings().place_data_source == "csv"
+    application = create_app()
+    assert isinstance(application.state.trip_service.repository, FakeTripRepository)
+    assert not (tmp_path / "leak.db").exists()
+    # 파일을 직접 넘기는 .env 읽기 시험은 그대로 된다.
+    assert DatabaseSettings(_env_file=env_file).url() is not None  # type: ignore[call-arg]

@@ -44,6 +44,9 @@ data_sources 의 tourapi·data06·data07 행은 마이그레이션이 넣는다.
 - 장소는 앱 시작 때 한 번만 읽는다. 시드·배치로 DB 를 바꾸면 앱을 다시 시작해야 반영된다.
 - `db` 인데 `DATABASE_URL` 이 없거나 places 가 비어 있으면(시드 전) 빈 데이터로 돌지 않고 앱 시작이 실패한다.
 - 카카오 매칭표(`kakao_id_mapping.csv`)와 장소 사진(`place_photos.csv`)은 `db` 에서도 CSV 를 읽는다.
+- 혼잡 검증 도구(`python -m app.modules.crowd.validation`)는 앱이 아니라 따로 도는 명령이라 `db` 에서도
+  표본 CSV 의 장소를 읽는다.
+- 앱이 끝나면(lifespan 종료) 함께 쓰던 DB 연결 풀을 닫고, 시작이 실패해도 닫은 뒤 예외를 낸다.
 
 ```bash
 uv run alembic upgrade head
