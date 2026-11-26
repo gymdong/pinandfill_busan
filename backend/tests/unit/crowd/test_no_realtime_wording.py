@@ -15,7 +15,7 @@ def test_crowd_sources_and_docs_have_no_forbidden_wording():
         *sorted((BACKEND / "app" / "modules" / "crowd").glob("*.py")),
         *sorted((REPO / "data" / "crowd").glob("*")),
         REPO / "data" / "seed" / "crowd" / "crowd_config.json",
-        *sorted((BACKEND / "tests" / "fixtures" / "crowd").glob("*")),
+        *sorted((BACKEND / "tests" / "fixtures" / "crowd").rglob("*")),
     ]
     offenders = [path.name for path in paths if path.is_file() and FORBIDDEN in path.read_text(encoding="utf-8")]
     assert offenders == []

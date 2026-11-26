@@ -6,4 +6,5 @@
 - 파일 형식은 운영 입력과 같다: [`data/crowd/README.md`](../../../../data/crowd/README.md).
 - 각 CSV 첫 줄은 `#` 주석으로 가짜 값임을 적는다(로더가 `#` 줄을 건너뛴다).
 - 일부 행은 일부러 깨 두었다(잘못된 `day_type`·`hour`, 음수 배수, 모르는 신호). 로더가 건너뛰는지 시험한다.
+- `partial/`: 신호마다 평일/주말 한쪽 행만 있는 가짜 표본(DATA-04 평일만, DATA-05 주말만, 영도구 M 은 2026-11-28 만).
 - 운영 경로 `data/crowd/` 에 복사하지 않는다. 시험은 `CROWD_DATA_DIR` 또는 `FileCrowdProvider.from_dir` 로 이 디렉터리를 주입한다.

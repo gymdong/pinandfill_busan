@@ -1,6 +1,7 @@
 """FR-008 예상 혼잡 계산 단위 시험(A3-1·A3-2·A3-3). 입력 값은 모두 시험용 가짜 값이다."""
 
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -90,6 +91,8 @@ def test_relative_and_base_profile_hand_calculation():
 def test_percentile_uses_mid_rank():
     assert estimator.percentile(3, [1, 2, 3, 4]) == pytest.approx(0.625)
     assert estimator.percentile(5, [5, 5, 5]) == 0.5
+    assert estimator.percentile(9, [1, 2, 3]) == 1.0
+    assert estimator.percentile(0, [1, 2, 3]) == 0.0
     with pytest.raises(ValueError):
         estimator.percentile(1, [])
 
@@ -130,11 +133,37 @@ def test_hand_calculated_scores_without_multiplier():
     ]
 
 
-def test_hand_calculated_scores_with_multiplier_distribution():
-    # M 은 가짜구 수요일 2.0 하나뿐 → 분포는 평일 B × 2.0 4개. 순위는 B 와 같다: (0.5, 1.5, 2.5, 3.5)/4
+def test_hand_calculated_scores_with_multiplier_against_b_only_reference():
+    # 기준 분포는 M 과 무관하게 B 8개(원값 [1,2,2,3,4,4,6,8]). 수요일 M=2.0 → 방문일 점수(원값) [2,4,6,8]
+    # 2: (1 + 2/2)/8 = 0.25, 4: (4 + 2/2)/8 = 0.625, 6: (6 + 1/2)/8 = 0.8125, 8: (7 + 1/2)/8 = 0.9375
     result = provider(fake_inputs(with_multiplier=True)).find("P1", WEDNESDAY)
-    assert [hour.score for hour in result.hours] == [0.125, 0.375, 0.625, 0.875]
-    assert [hour.grade for hour in result.hours] == ["여유", "여유", "보통", "붐빔"]
+    assert [hour.score for hour in result.hours] == [0.25, 0.625, 0.8125, 0.9375]
+    assert [hour.grade for hour in result.hours] == ["여유", "보통", "붐빔", "매우 붐빔"]
+
+
+def with_single_multiplier(value: float) -> CrowdInputs:
+    inputs = fake_inputs(with_metro=True)
+    inputs.multipliers[(WEDNESDAY, "가짜구")] = Multiplier(value, "DATA-06", datetime(2026, 11, 24, tzinfo=UTC))
+    return inputs
+
+
+def test_single_multiplier_of_one_does_not_change_grades():
+    without = provider(fake_inputs(with_metro=True)).find("P1", WEDNESDAY)
+    with_one = provider(with_single_multiplier(1.0)).find("P1", WEDNESDAY)
+    assert [(hour.h, hour.grade, hour.score) for hour in with_one.hours] == [
+        (hour.h, hour.grade, hour.score) for hour in without.hours
+    ]
+    assert (without.confidence, with_one.confidence) == ("중간", "높음")
+
+
+def test_multiplier_above_one_never_lowers_grade():
+    without = provider(fake_inputs(with_metro=True)).find("P1", WEDNESDAY)
+    busier = provider(with_single_multiplier(1.5)).find("P1", WEDNESDAY)
+    for before, after in zip(without.hours, busier.hours, strict=True):
+        assert estimator.GRADES.index(after.grade) >= estimator.GRADES.index(before.grade)
+        assert after.score >= before.score
+    quieter = provider(with_single_multiplier(0.5)).find("P1", WEDNESDAY)
+    assert all(after.score <= before.score for before, after in zip(without.hours, quieter.hours, strict=True))
 
 
 def test_weight_missing_from_config_excludes_signal():
@@ -154,3 +183,27 @@ def test_invalid_config_is_rejected():
         CrowdConfig(grade_percentiles=(0.7, 0.4, 0.9), b_weights={"DATA-04": 1})
     with pytest.raises(ValueError):
         CrowdConfig(grade_percentiles=(0.4, 0.7, 0.9), b_weights={"DATA-04": 0})
+
+
+PARTIAL = Path(__file__).resolve().parents[2] / "fixtures" / "crowd" / "partial"
+
+
+def partial_provider() -> FileCrowdProvider:
+    """가짜 표본: DATA-04 는 평일 행만, DATA-05 는 주말 행만, 영도구 M 은 2026-11-28 만."""
+    return FileCrowdProvider.from_dir(PARTIAL, lambda place_id: "영도구" if place_id == "126658" else None)
+
+
+def test_signal_without_rows_for_day_type_is_not_counted_on_saturday():
+    result = partial_provider().find("126658", SATURDAY)
+    assert result.confidence == "중간"  # DATA-05(주말) + M
+    assert [signal.source for signal in result.signals] == ["DATA-05", "DATA-06"]
+    assert all("행정동" not in source for source in result.sources)
+    assert result.as_of == datetime.fromisoformat("2026-11-24T06:00:00+09:00")
+
+
+def test_signal_without_rows_for_day_type_is_not_counted_on_friday():
+    result = partial_provider().find("126658", date(2026, 11, 27))
+    assert result.confidence == "낮음"  # DATA-04(평일)만, 그날 M 없음
+    assert [signal.source for signal in result.signals] == ["DATA-04"]
+    assert len(result.sources) == 1
+    assert result.as_of == datetime.fromisoformat("2026-10-01T00:00:00+09:00")

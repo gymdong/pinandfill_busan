@@ -86,6 +86,18 @@ def test_unknown_kakao_or_unlinked_place_is_no_information(fixture_client, place
     assert response.json() == {"hours": [], "confidence": "없음", "asOf": None, "sources": [], "signals": []}
 
 
+def test_config_path_can_be_overridden(monkeypatch, tmp_path):
+    config = tmp_path / "crowd_config.json"
+    config.write_text('{"grade_percentiles": [0.001, 0.002, 0.003], "b_weights": {"DATA-04": 1}}', encoding="utf-8")
+    monkeypatch.setenv("CROWD_DATA_DIR", str(FIXTURES))
+    monkeypatch.setenv("CROWD_CONFIG_PATH", str(config))
+    with TestClient(create_app(Settings(app_name="Backend test"))) as client:
+        body = client.get("/api/places/126658/crowd", params={"date": "2026-11-27"}).json()
+    # DATA-05 가중치가 없어 DATA-04 만 쓰이고, 경계가 낮아 모두 '매우 붐빔'
+    assert body["confidence"] == "낮음"
+    assert {hour["grade"] for hour in body["hours"]} == {"매우 붐빔"}
+
+
 def test_empty_data_directory_is_no_information(monkeypatch, tmp_path):
     monkeypatch.setenv("CROWD_DATA_DIR", str(tmp_path))
     with TestClient(create_app(Settings(app_name="Backend test"))) as client:

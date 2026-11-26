@@ -26,6 +26,8 @@ DayType = Literal["WEEKDAY", "WEEKEND"]
 BaseSignal = Literal["DATA-04", "DATA-05"]
 DAY_TYPES: tuple[DayType, ...] = ("WEEKDAY", "WEEKEND")
 BASE_SIGNALS: tuple[BaseSignal, ...] = ("DATA-04", "DATA-05")
+# 날짜 배수 M 을 추정할 수 있는 자료(DATA-06 지역별 방문자수, DATA-07 관광지 집중률)
+MULTIPLIER_SOURCES = frozenset({"DATA-06", "DATA-07"})
 
 LIVING_POPULATION_FILE = "living_population.csv"
 METRO_HOURLY_FILE = "metro_hourly.csv"
@@ -187,7 +189,7 @@ def _load_multipliers(inputs: CrowdInputs, directory: Path) -> None:
     for row in _rows(directory / MULTIPLIERS_FILE):
         try:
             value = float(row["multiplier"])
-            if not math.isfinite(value) or value <= 0 or not row["region"] or not row["source"]:
+            if not math.isfinite(value) or value <= 0 or not row["region"] or row["source"] not in MULTIPLIER_SOURCES:
                 raise ValueError("multiplier")
             slot = (date.fromisoformat(row["date"]), row["region"])
             if slot in inputs.multipliers:

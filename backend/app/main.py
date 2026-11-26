@@ -15,7 +15,12 @@ from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
 from app.db.session import Database, DatabaseSettings
-from app.modules.crowd.file_provider import FileCrowdProvider, crowd_dir_from_env, district
+from app.modules.crowd.file_provider import (
+    FileCrowdProvider,
+    crowd_config_from_env,
+    crowd_dir_from_env,
+    district,
+)
 from app.modules.crowd.service import CrowdService
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
@@ -62,13 +67,16 @@ def default_trip_service(places: SamplePlaceData) -> TripService:
 
 
 def default_crowd_service(places: SamplePlaceData) -> CrowdService:
-    """data/crowd/(또는 CROWD_DATA_DIR)의 정규화 CSV 로 예상 혼잡을 계산한다. 파일이 없으면 정보 부족이다."""
+    """data/crowd/(또는 CROWD_DATA_DIR)의 정규화 CSV 로 예상 혼잡을 계산한다. 파일이 없으면 정보 부족이다.
+
+    설정은 data/seed/crowd/crowd_config.json(또는 CROWD_CONFIG_PATH). 설정이 없거나 잘못되면 앱 시작이 실패한다.
+    """
 
     def region_of(place_id: str) -> str | None:
         item = places.place(place_id)
         return district(item.address) if item is not None else None
 
-    return CrowdService(FileCrowdProvider.from_dir(crowd_dir_from_env(), region_of))
+    return CrowdService(FileCrowdProvider.from_dir(crowd_dir_from_env(), region_of, crowd_config_from_env()))
 
 
 def kakao_settings() -> KakaoSettings | None:

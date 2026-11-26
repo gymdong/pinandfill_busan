@@ -45,6 +45,19 @@ def test_comment_lines_and_duplicates(tmp_path):
     assert inputs.profiles[("DATA-04", "D")]["2026-10"] == {("WEEKDAY", 9): 10}
 
 
+def test_multiplier_source_must_be_data06_or_data07(tmp_path, caplog):
+    (tmp_path / "crowd_multipliers.csv").write_text(
+        "date,region,multiplier,source,computed_at\n"
+        "2026-11-28,영도구,1.2,DATA-07,2026-11-24T06:00:00\n"
+        "2026-11-29,영도구,1.2,MANUAL,2026-11-24T06:00:00\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.WARNING):
+        inputs = load_inputs(tmp_path)
+    assert list(inputs.multipliers) == [(date(2026, 11, 28), "영도구")]
+    assert "skipped_rows file=crowd_multipliers.csv count=1" in caplog.text
+
+
 def test_unreadable_file_is_empty(tmp_path):
     (tmp_path / "metro_hourly.csv").write_bytes(b"\xff\xfe\x00bad")
     assert load_inputs(tmp_path).profiles == {}
@@ -72,6 +85,8 @@ def test_config_file_values_are_used(tmp_path):
     [
         ("부산광역시 영도구 전망로 24", "영도구"),
         ("부산광역시 기장군 기장읍 용궁길 86", "기장군"),
+        ("영도구 절영로 194", "영도구"),
+        ("부산 중구 용두산길 37-55", "중구"),
         ("주소 미상", None),
         (None, None),
     ],

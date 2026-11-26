@@ -3,10 +3,12 @@
 - B: 장소에 연결된 1단계 신호(DATA-04·DATA-05)를 신호마다 자기 평균으로 나눈 상대값의 가중 평균.
 - M: 날짜 배수 파일 값. 없으면 곱하지 않는다(대체 상수 없음).
 - R: 3단계 보정(DATA-08, P2). P0 에서는 곱하지 않는다(spec A-8).
-등급은 장소별 점수 분포 안의 백분위를 설정 파일의 경계로 나눈다.
+등급은 방문일 점수를 장소별 기준 분포(B 만, 모든 평일·주말×시간대) 안의 백분위로 바꿔 설정 파일의 경계로 나눈다.
+기준 분포는 M 과 무관해 안정적이고, M>1 이면 그날이 더 붐비게, M<1 이면 더 한산하게 나온다.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from bisect import bisect_left, bisect_right
+from collections.abc import Iterable, Sequence
 from datetime import date
 
 from .schemas import CrowdConfidence, CrowdGrade
@@ -47,13 +49,16 @@ def score(base: float, multiplier: float | None) -> float:
     return base * multiplier
 
 
-def percentile(value: float, distribution: Sequence[float]) -> float:
-    """중간 순위 백분위: (작은 값 수 + 같은 값 수 / 2) / 전체 수. 값이 모두 같으면 0.5."""
-    if not distribution:
-        raise ValueError("distribution must not be empty")
-    below = sum(1 for item in distribution if item < value)
-    equal = sum(1 for item in distribution if item == value)
-    return (below + equal / 2) / len(distribution)
+def percentile(value: float, reference: Sequence[float]) -> float:
+    """중간 순위 백분위: (작은 값 수 + 같은 값 수 / 2) / 전체 수. reference 는 오름차순 정렬돼 있어야 한다.
+
+    값이 모두 같으면 0.5, 최댓값보다 크면 1.0, 최솟값보다 작으면 0.0.
+    """
+    if not reference:
+        raise ValueError("reference must not be empty")
+    below = bisect_left(reference, value)
+    equal = bisect_right(reference, value) - below
+    return (below + equal / 2) / len(reference)
 
 
 def grade(rank: float, cutoffs: Sequence[float]) -> CrowdGrade:
@@ -73,21 +78,3 @@ def confidence(signal_count: int) -> CrowdConfidence:
     if signal_count == 1:
         return "낮음"
     return "없음"
-
-
-def distribution(
-    base: HourlyValues,
-    multipliers: Mapping[date, float],
-) -> list[float]:
-    """장소별 점수 분포 S_p.
-
-    M 이 있으면 그 지역에 M 이 있는 모든 날짜 d'' 에 대해 B(day_type(d''), h) × M(d'') 이고,
-    M 이 없으면 B 의 모든 day_type·시간대 값이다.
-    """
-    if not multipliers:
-        return list(base.values())
-    values: list[float] = []
-    for other_date, multiplier in multipliers.items():
-        kind = day_type(other_date)
-        values.extend(score(value, multiplier) for (slot_type, _), value in base.items() if slot_type == kind)
-    return values
