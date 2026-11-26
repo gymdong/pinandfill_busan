@@ -39,6 +39,7 @@ from app.modules.trips.schemas import (
     UpdateBlockRequest,
 )
 from app.modules.trips.service import (
+    ConcurrentEditError,
     FixedScheduleConflictError,
     InitialScheduleExistsError,
     StayDurationRequiredError,
@@ -99,6 +100,8 @@ def translate_error(exc: Exception) -> TripAPIError:
         return TripAPIError(
             400, "ERR-001", "명시적 삽입 구간·시작 시각·체류시간이 필요하며 자동 배치 옵션은 지원하지 않습니다."
         )
+    if isinstance(exc, ConcurrentEditError):
+        return TripAPIError(503, "ERR-017", "다른 편집과 겹쳤습니다. 잠시 후 다시 시도해 주세요.")
     if isinstance(exc, NeedsConfirmationError):
         return TripAPIError(503, "ERR-017", "일정 계산에 필요한 장소·경로 정보를 확인해 주세요.")
     return TripAPIError(503, "ERR-017", "일정 계산을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.")

@@ -1,6 +1,9 @@
 """FR-006: API-007(편집)·008(삭제)·010(되돌리기)의 TripService 동작과 편집 유형별 AC-006 판정."""
 
+from collections.abc import Callable
 from datetime import date, time
+from threading import Thread
+from typing import Any
 
 import pytest
 
@@ -33,7 +36,7 @@ from app.modules.trips.schemas import (
     UndoRequest,
     UpdateBlockRequest,
 )
-from app.modules.trips.service import FixedScheduleConflictError, TripService
+from app.modules.trips.service import MAX_EDIT_ATTEMPTS, ConcurrentEditError, FixedScheduleConflictError, TripService
 from tests.unit.engine.test_service import _block, _engine, _trip
 
 TRIP = "trip"
@@ -749,3 +752,128 @@ def test_edit_with_kakao_block_uses_request_coords_only(with_coords):
     assert "123" not in places.calls
     for secret in ("35.1234567", "129.7654321"):
         assert secret not in after.model_dump_json() + repr(after) + response.model_dump_json()
+
+
+# ---- 동시 편집: 계산은 락 밖, 저장은 비교 후(#42 후속) ----
+
+
+def in_thread(action: Callable[[], object]) -> None:
+    """다른 요청처럼 다른 스레드에서 끝까지 실행한다. 편집 A 가 락·행 잠금을 쥐고 계산 중이면 여기서 막힌다."""
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            action()
+        except BaseException as error:  # noqa: BLE001 - 시험 스레드의 예외를 호출 쪽으로 넘긴다
+            errors.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "the other edit was blocked: the computing edit holds a lock"
+    if errors:
+        raise errors[0]
+
+
+class InterferingEngine:
+    """엔진 계산(경로 조회 자리) 직전에 `during()` 을 부르는 시험용 엔진. 다른 편집이 계산 도중 저장된 상황을 만든다.
+
+    `during` 안의 엔진 호출(다른 편집 자신의 계산)에는 다시 끼어들지 않는다.
+    """
+
+    def __init__(self, engine: Any, during: Callable[[], object]) -> None:
+        self.engine = engine
+        self.during = during
+        self.calls = 0
+        self._busy = False
+
+    def __getattr__(self, name: str) -> Any:
+        target = getattr(self.engine, name)
+        if name not in ("insert", "recompute", "project"):
+            return target
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            if not self._busy:
+                self._busy = True
+                try:
+                    self.calls += 1
+                    self.during()
+                finally:
+                    self._busy = False
+            return target(*args, **kwargs)
+
+        return call
+
+
+def test_edit_retries_on_top_of_an_edit_saved_while_it_computed():
+    service, repository, _ = setup_service()
+    expected, expected_repository, _ = setup_service()
+    expected.delete_block(TRIP, "e", DeleteBlockRequest())
+    after_b = saved(expected_repository)
+    expected.update_block(TRIP, "c", stay(60))
+
+    def edit_b() -> None:
+        if service.engine.calls == 1:
+            in_thread(lambda: service.delete_block(TRIP, "e", DeleteBlockRequest()))
+
+    service.engine = InterferingEngine(service.engine, edit_b)
+    service.update_block(TRIP, "c", stay(60))
+
+    # A 는 B 가 저장된 상태 위에서 다시 계산했다: B(e 삭제)와 A(c 체류 60분)가 모두 남는다.
+    assert service.engine.calls == 2
+    assert saved(repository) == saved(expected_repository)
+    assert "e" not in {block.id for block in saved(repository).blocks}
+    assert times(saved(repository), "c") == (time(10, 30), time(11, 30))
+    # 되돌리기 1단계는 마지막 편집(A) 직전, 곧 B 만 반영된 상태다.
+    service.undo(TRIP, UndoRequest())
+    assert saved(repository) == after_b
+
+
+def test_edit_gives_up_after_max_attempts_without_saving_or_recording():
+    service, repository, _ = setup_service()
+    minutes = iter(range(40, 40 + MAX_EDIT_ATTEMPTS))
+
+    def edit_b() -> None:
+        in_thread(lambda: service.update_block(TRIP, "g", stay(next(minutes))))
+
+    service.engine = InterferingEngine(service.engine, edit_b)
+    with pytest.raises(ConcurrentEditError):
+        service.update_block(TRIP, "c", stay(60))
+
+    assert service.engine.calls == MAX_EDIT_ATTEMPTS
+    # 남은 것은 마지막 B 뿐이다. A 는 저장도, 되돌리기 지점도 남기지 않았다.
+    after_last_b = saved(repository)
+    assert times(after_last_b, "c") == (time(10, 30), time(11))
+    assert next(b for b in after_last_b.blocks if b.id == "g").stay_min == 40 + MAX_EDIT_ATTEMPTS - 1
+    point = service.history.latest_edit(TRIP)
+    assert point is not None and ScheduleState.model_validate(point.payload) != after_last_b
+    service.engine = service.engine.engine
+    service.undo(TRIP, UndoRequest())
+    assert next(b for b in saved(repository).blocks if b.id == "g").stay_min == 40 + MAX_EDIT_ATTEMPTS - 2
+
+
+def test_generate_retries_on_top_of_an_edit_saved_while_it_computed():
+    service, repository, _ = setup_service()
+
+    def edit_b() -> None:
+        if service.engine.calls == 1:
+            in_thread(lambda: service.update_block(TRIP, "b", stay(60)))
+
+    service.engine = InterferingEngine(service.engine, edit_b)
+    service.generate(TRIP, GenerateScheduleRequest())
+
+    assert times(saved(repository), "b") == (time(9, 45), time(10, 45))
+
+
+def test_detail_does_not_take_the_edit_lock():
+    service, _, _ = setup_service()
+
+    def edit_b() -> None:
+        in_thread(lambda: service.update_block(TRIP, "b", stay(60)))
+
+    with service._lock:
+        # 같은 스레드가 락을 쥔 채 다른 스레드의 detail 이 끝나야 한다(detail 은 락을 기다리지 않는다).
+        in_thread(lambda: service.detail(TRIP))
+    service.engine = InterferingEngine(service.engine, edit_b)
+    service.detail(TRIP)
+    assert times(saved(service.repository), "b") == (time(9, 45), time(10, 45))

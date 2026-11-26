@@ -43,12 +43,13 @@ def default_trip_service(places: SamplePlaceData) -> TripService:
     """
     engine = BasicItineraryEngine(places, build_route_provider())
     initial_planner = InitialSchedulePlanner(engine, PublicStayDurations(places.stay_min))
-    url = DatabaseSettings().url()
+    settings = DatabaseSettings()
+    url = settings.url()
     if url is None:
         # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포에는 DATABASE_URL 을 설정한다.
         logger.warning("trip storage is in-memory (DATABASE_URL unset): trips and undo history are lost on restart")
         return TripService(FakeTripRepository({}), engine, places.stay_min, initial_planner=initial_planner)
-    database = Database(url)
+    database = Database(url, **settings.engine_options())
     return TripService(
         SqlTripRepository(database),
         engine,

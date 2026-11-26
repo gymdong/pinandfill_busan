@@ -21,12 +21,12 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, StaticPool, inspect, select, text
+from sqlalchemy import Connection, StaticPool, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from app.db.models import Base, BlockRow, ScheduleSnapshotRow
-from app.db.session import Database
+from app.db.session import Database, DatabaseSettings
 from app.main import create_app
 from app.modules.engine.schemas import (
     CalculationContext,
@@ -49,6 +49,7 @@ from app.modules.trips.schemas import DeleteBlockRequest, UndoRequest, UpdateBlo
 from app.modules.trips.service import TripService
 from app.modules.trips.sql_repository import SqlSnapshotRepository, SqlTripRepository
 from tests.unit.engine.test_service import _block, _engine, _trip
+from tests.unit.trips.test_service_edits import InterferingEngine, in_thread
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 POSTGRES_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
@@ -306,6 +307,112 @@ def test_db_error_inside_edit_is_not_masked(database: Database):
         service.update_block(TRIP, "e", UpdateBlockRequest(stay_min=60))
     assert repository.get(TRIP) == current
     assert service.history.latest_edit(TRIP) is None
+
+
+# ---- 경로 조회 중에는 트랜잭션·행 잠금을 쥐지 않는다(#42 후속) ----
+
+
+class RecordingRepository(SqlTripRepository):
+    def __init__(self, database: Database) -> None:
+        super().__init__(database)
+        self.locked_reads = 0
+
+    def get_for_update(self, trip_id: str) -> TripRecord | None:
+        self.locked_reads += 1
+        return super().get_for_update(trip_id)
+
+
+@contextmanager
+def captured_sql(database: Database) -> Iterator[list[str]]:
+    statements: list[str] = []
+
+    def record(connection: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(statement)
+
+    event.listen(database.engine, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(database.engine, "before_cursor_execute", record)
+
+
+def stay_of(record: TripRecord | None, block_id: str) -> int | None:
+    assert record is not None
+    return next(block.stay_min for block in record.schedule.blocks if block.id == block_id)
+
+
+def test_concurrent_edit_is_not_lost_and_engine_runs_outside_transaction(database: Database):
+    service, repository = db_service(database)
+    original_e = stay_of(repository.get(TRIP), "e")
+    seen_transaction: list[bool] = []
+
+    def edit_b() -> None:
+        seen_transaction.append(database.in_transaction())
+        if service.engine.calls == 1:
+            # 다른 요청(다른 스레드·연결). A 가 행을 잠근 채 계산 중이면 PostgreSQL 에서 여기서 막힌다.
+            in_thread(lambda: service.update_block(TRIP, "h", UpdateBlockRequest(stay_min=45)))
+
+    service.engine = InterferingEngine(service.engine, edit_b)
+    service.update_block(TRIP, "e", UpdateBlockRequest(stay_min=60, session_coords=COORDS))
+
+    assert seen_transaction == [False, False]
+    assert service.engine.calls == 2
+    edited = repository.get(TRIP)
+    assert (stay_of(edited, "h"), stay_of(edited, "e")) == (45, 60)
+    # 되돌리기 1단계는 마지막 편집(A) 직전: B 만 반영된 상태.
+    service.engine = service.engine.engine
+    service.undo(TRIP, UndoRequest(session_coords=COORDS))
+    undone = repository.get(TRIP)
+    assert (stay_of(undone, "h"), stay_of(undone, "e")) == (45, original_e)
+
+
+def test_detail_reads_without_row_lock(database: Database):
+    service, _ = db_service(database)
+    recording = RecordingRepository(database)
+    service.repository = recording
+
+    with captured_sql(database) as statements:
+        service.detail(TRIP)
+    assert recording.locked_reads == 0
+    assert statements and not any("FOR UPDATE" in statement.upper() for statement in statements)
+    assert not database.in_transaction()
+
+    with captured_sql(database) as statements:
+        service.update_block(TRIP, "e", UpdateBlockRequest(stay_min=60, session_coords=COORDS))
+    assert recording.locked_reads == 1
+    if database.engine.dialect.name == "postgresql":
+        assert sum("FOR UPDATE" in statement.upper() for statement in statements) == 1
+
+
+def test_get_for_update_needs_a_transaction(database: Database):
+    with pytest.raises(RuntimeError):
+        SqlTripRepository(database).get_for_update(TRIP)
+
+
+def test_engine_options_from_settings_work_on_sqlite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    for name, value in {"DB_POOL_SIZE": "2", "DB_MAX_OVERFLOW": "1", "DB_POOL_TIMEOUT": "3"}.items():
+        monkeypatch.setenv(name, value)
+    database = Database(f"sqlite:///{tmp_path / 'app.db'}", **DatabaseSettings().engine_options())
+    try:
+        with database.transaction() as session:
+            assert session.execute(text("SELECT 1")).scalar_one() == 1
+    finally:
+        database.dispose()
+
+
+@needs_postgres
+def test_postgres_connections_get_pool_and_timeout_settings(monkeypatch: pytest.MonkeyPatch):
+    settings = {"DB_POOL_SIZE": "2", "DB_MAX_OVERFLOW": "1", "DB_LOCK_TIMEOUT_MS": "1234"}
+    for name, value in {**settings, "DB_STATEMENT_TIMEOUT_MS": "5678"}.items():
+        monkeypatch.setenv(name, value)
+    database = Database(POSTGRES_URL, **DatabaseSettings().engine_options())
+    try:
+        with database.transaction() as session:
+            assert session.execute(text("SHOW lock_timeout")).scalar_one() == "1234ms"
+            assert session.execute(text("SHOW statement_timeout")).scalar_one() == "5678ms"
+        assert database.engine.pool.size() == 2  # type: ignore[attr-defined]
+    finally:
+        database.dispose()
 
 
 # ---- 카카오 장소명·좌표는 저장하지 않는다 ----

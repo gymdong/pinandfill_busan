@@ -4,7 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from tests.unit.trips.test_service_edits import TRIP, saved, setup_service
+from app.modules.engine.schemas import ScheduleState
+from app.modules.trips.schemas import UpdateBlockRequest
+from app.modules.trips.service import MAX_EDIT_ATTEMPTS
+from tests.unit.trips.test_service_edits import TRIP, InterferingEngine, in_thread, saved, setup_service
 
 BLOCKS = f"/api/trips/{TRIP}/blocks"
 UNDO = f"/api/trips/{TRIP}/undo"
@@ -184,3 +187,22 @@ def test_invalid_session_coords_are_not_echoed(method, path, extra, caplog):
     assert SECRET not in response.text + caplog.text
     assert "129.7654321" not in response.text + caplog.text
     assert saved(repository) == before
+
+
+def test_edit_that_keeps_colliding_returns_503_and_keeps_state():
+    service, repository, _ = setup_service()
+    client = TestClient(create_app(trip_service=service))
+    minutes = iter(range(40, 40 + MAX_EDIT_ATTEMPTS))
+    after_b: list[ScheduleState] = []
+
+    def edit_b() -> None:
+        in_thread(lambda: service.update_block(TRIP, "g", UpdateBlockRequest(stay_min=next(minutes))))
+        after_b.append(saved(repository))
+
+    service.engine = InterferingEngine(service.engine, edit_b)
+    response = client.patch(f"{BLOCKS}/c", json={"stayMin": 60})
+
+    assert_error(response, 503, "ERR-017")
+    assert response.json()["error"]["message"] == "다른 편집과 겹쳤습니다. 잠시 후 다시 시도해 주세요."
+    assert len(after_b) == MAX_EDIT_ATTEMPTS
+    assert saved(repository) == after_b[-1]
