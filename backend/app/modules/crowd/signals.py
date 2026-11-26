@@ -18,6 +18,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, model_validator
 
+from app.modules.crowd.avoidance import AvoidanceSettings
+
 logger = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
@@ -47,6 +49,8 @@ class CrowdConfig(BaseModel):
     grade_percentiles: tuple[float, float, float]
     # 1단계 신호별 가중치
     b_weights: dict[BaseSignal, PositiveFloat] = Field(min_length=1)
+    # FR-009 혼잡 회피 배치 기준(spec A-14). 칸이 없으면 기본값('중간'·0.1)
+    avoidance: AvoidanceSettings = Field(default_factory=AvoidanceSettings)
 
     @model_validator(mode="after")
     def validate_percentiles(self) -> "CrowdConfig":

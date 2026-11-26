@@ -4,6 +4,7 @@ import logging
 from datetime import date
 from typing import Protocol
 
+from .avoidance import AvoidanceSettings
 from .schemas import PlaceCrowdResponse
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,12 @@ class CrowdService:
     def __init__(
         self,
         provider: CrowdDataProvider | None = None,
+        *,
+        avoidance: AvoidanceSettings | None = None,
     ) -> None:
         self._provider = provider
+        # FR-009 배치 기준. 혼잡 계산과 같은 설정 파일에서 읽어 넘긴다(엔진 설정과 어긋나지 않게).
+        self.avoidance = avoidance or AvoidanceSettings()
 
     def get(
         self,
@@ -39,7 +44,8 @@ class CrowdService:
                 return result
 
         # 검증된 혼잡 데이터가 없으면 임의의 예측값을 만들지 않는다. 신호 0건은 로그로 남긴다(ERR-011).
-        logger.info("crowd_no_signal place=%r", place_id)
+        # 초기 일정 생성은 선택·날짜마다 부르므로 debug 로 남기고, 요청당 요약은 엔진이 info 로 남긴다.
+        logger.debug("crowd_no_signal place=%r", place_id)
         return PlaceCrowdResponse(
             hours=[],
             confidence="없음",
