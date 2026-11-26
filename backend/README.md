@@ -48,6 +48,7 @@ uv run python -m app.batch.cli seed-places --prune      # CSV 에 없는 영업�
 - 시드는 다시 돌려도 결과가 같고, 값이 그대로인 장소는 updated_at 도 그대로다. 표본에 없는 장소 행은 지우지 않는다.
 - CSV 에 없는 영업시간 행(DB 에 직접 넣은 MANUAL 행 등)은 `--prune` 일 때만 지운다. CSV 에서 읽지 못한 행
   (예: 초가 붙은 시각, 알 수 없는 origin)의 요일은 `--prune` 이어도 DB 행을 그대로 두고 경고 로그에 건수를 남긴다.
+- 주의: `--prune` 은 CSV 에 없는 DB 영업시간 행을 origin 과 상관없이 지운다(DB 에서 직접 넣은 MANUAL 행·HOLIDAY 행 포함).
 - 배치가 갱신한 이름·좌표·주소(collected_at 이 있는 행)는 시드가 덮어쓰지 않는다. ref_date(수동 확인 기준일)·
   영업시간·출처 기관은 시드(CSV)만 바꾼다.
 - 마이그레이션 파일은 `alembic/versions/` 에 두고, 병합 순서는 마이그레이션 담당(홍민지)이 정한다.

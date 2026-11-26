@@ -43,7 +43,7 @@ def table_counts(database: Database) -> tuple[int, int]:
 
 
 def test_seeded_places_load_back_like_the_csv(database: Database):
-    expected = by_id(load_sample_places().samples())
+    expected = by_id(load_sample_places().all())
     assert expected and any(item.hours for item in expected)
     store = SqlPlaceStore(database)
 
@@ -57,7 +57,7 @@ def test_seeded_places_load_back_like_the_csv(database: Database):
 
 
 def test_seed_twice_is_idempotent(database: Database):
-    expected = by_id(load_sample_places().samples())
+    expected = by_id(load_sample_places().all())
     store = SqlPlaceStore(database)
     store.upsert_seed(expected, SEEDED_AT)
     with database.transaction() as session:
@@ -77,7 +77,7 @@ def test_seed_twice_is_idempotent(database: Database):
 
 
 def test_collected_values_survive_reseed_and_manual_values_survive_collection(database: Database):
-    expected = by_id(load_sample_places().samples())
+    expected = by_id(load_sample_places().all())
     first = expected[0]
     store = SqlPlaceStore(database)
     store.upsert_seed(expected, SEEDED_AT)
@@ -223,5 +223,5 @@ def test_cli_seed_places_runs_twice(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert cli.main(["seed-places", "--dir", str(SAMPLE_DIR)]) == 0
     assert cli.main(["seed-places"]) == 0
 
-    assert SqlPlaceStore(database).load() == by_id(load_sample_places().samples())
+    assert SqlPlaceStore(database).load() == by_id(load_sample_places().all())
     database.dispose()

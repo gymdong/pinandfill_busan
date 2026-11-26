@@ -88,8 +88,7 @@ class SamplePlaceData:
         """공공 장소 ID 로 표본 한 곳을 찾는다. 카카오 장소 ID 는 공공 장소가 아니므로 찾지 않는다."""
         return self._places.get(place_id)
 
-    def samples(self) -> list[SamplePlace]:
-        """표본 장소 전부(CSV 순서). places 테이블 시드에 쓴다."""
+    def all(self) -> list[SamplePlace]:
         return list(self._places.values())
 
     def repository(self) -> InMemoryPublicPlaceRepository:

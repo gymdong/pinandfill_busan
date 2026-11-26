@@ -22,7 +22,7 @@ def seed_places(database: Database, directory: Path = SAMPLE_DIR, *, prune: bool
     # CSV 파서를 그대로 쓴다(따옴표 안 줄바꿈 처리, 빈 값은 비워 둠).
     data = load_sample_places(directory)
     return SqlPlaceStore(database).upsert_seed(
-        data.samples(), datetime.now(UTC), invalid_hours=data.invalid_hours, prune=prune
+        data.all(), datetime.now(UTC), invalid_hours=data.invalid_hours, prune=prune
     )
 
 
