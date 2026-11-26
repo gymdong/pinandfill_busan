@@ -41,7 +41,13 @@ def no_real_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
     환경변수가 .env 보다 우선하므로 빈 값으로 두면 기본 구성은 키가 없는 것으로 본다.
     """
-    for name in ("KAKAO_REST_API_KEY", "TMAP_API_KEY", "ODSAY_API_KEY"):
+    for name in (
+        "KAKAO_REST_API_KEY",
+        "TMAP_API_KEY",
+        "ODSAY_API_KEY",
+        "TOURAPI_SERVICE_KEY",
+        "ADMIN_ALERT_WEBHOOK_URL",
+    ):
         monkeypatch.setenv(name, "")
     # backend/.env 에 DATABASE_URL 이 있어도 기본 구성은 메모리 저장소를 쓴다. DB 시험은 TEST_DATABASE_URL 로 따로 돈다.
     monkeypatch.setenv("DATABASE_URL", "")
