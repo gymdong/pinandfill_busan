@@ -28,8 +28,9 @@ class FakeConnection:
     response = FakeResponse()
     error = None
 
-    def __init__(self, host, port, *, timeout):
+    def __init__(self, host, port, *, timeout, context=None):
         self.host, self.port, self.timeout = host, port, timeout
+        self.context = context
         self.closed = False
         self.debuglevel = None
         self.request_args = None
@@ -228,3 +229,41 @@ def test_budget_rejects_invalid_pause(seconds):
 
 def test_zero_limit_never_allows_calls():
     assert not CallBudget(0).allow()
+
+
+def test_https_uses_certifi_store_with_verification_on():
+    import ssl
+
+    import certifi
+
+    FakeConnection.instances.clear()
+    FakeConnection.response = FakeResponse()
+    FakeConnection.error = None
+    with patch("app.adapters.route.transport.http.client.HTTPSConnection", FakeConnection):
+        SafeHTTPTransport().post("https://api.odsay.com/v1/api/maasRP", headers={}, body={}, encoding="form", timeout=1)
+    context = FakeConnection.instances[-1].context
+    assert context is not None
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+    expected = ssl.create_default_context(cafile=certifi.where())
+    assert context.cert_store_stats()["x509_ca"] == expected.cert_store_stats()["x509_ca"]
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({}, "certifi"),
+        ({"SSL_CERT_FILE": "", "SSL_CERT_DIR": ""}, "certifi"),
+        ({"SSL_CERT_FILE": "/etc/corp.pem"}, {"cafile": "/etc/corp.pem"}),
+        ({"SSL_CERT_DIR": "/etc/corp-certs"}, {"capath": "/etc/corp-certs"}),
+        ({"SSL_CERT_FILE": "/etc/corp.pem", "SSL_CERT_DIR": "/etc/corp-certs"}, {"cafile": "/etc/corp.pem"}),
+    ],
+)
+def test_tls_store_follows_httpx_env_precedence(environ, expected):
+    import certifi
+
+    from app.adapters.route import transport
+
+    calls = []
+    with patch.object(transport.ssl, "create_default_context", lambda **kw: calls.append(kw) or object()):
+        transport.build_tls_context(environ)
+    assert calls == [{"cafile": certifi.where()} if expected == "certifi" else expected]
