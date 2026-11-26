@@ -251,6 +251,8 @@ def test_data07_success_writes_future_rows_only_where_forecast_exists(
     # 기장군은 DATA-07 코드가 없어 부르지 않는다. 해운대구는 빈 응답이라 행이 없다.
     assert h.api.calls == ["F07-YD", "F07-HU"]
     assert (run.call_count, run.record_count, run.as_of) == (2, 3, T0)
+    # 일부 구·군만 비면 성공이고, 빈 구·군 수를 남긴다.
+    assert "data07_empty_regions empty=1 regions=2" in caplog.text
     assert multipliers(h) == {
         (date(2026, 11, 30), "영도구"): (round(20 / 30, 4), "DATA-07"),
         (date(2026, 12, 1), "영도구"): (round(40 / 30, 4), "DATA-07"),
@@ -443,12 +445,25 @@ def test_data07_new_forecast_replaces_stale_future_rows(database: Database, tmp_
     assert run is not None and (run.status, run.record_count) == ("SUCCESS", 1)
     assert multipliers(h) == {(date(2026, 12, 1), "영도구"): (1.0, "DATA-07")}
 
-    # 대응표에서 구·군이 빠지거나 응답이 모두 비어도 옛 미래 예측을 남기지 않는다.
-    h.clock.now = T0 + timedelta(days=2)
+
+def test_data07_all_regions_empty_fails_and_keeps_forecast(
+    database: Database, tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    h = make_harness(database, tmp_path)
+    assert h.collector.run("data07").status == "SUCCESS"  # type: ignore[union-attr]
+    before = h.output.read_bytes()
+
+    # 모든 구·군 응답이 비면(코드가 틀렸을 수 있다) 옛 미래 예측을 지우지 않고 실패로 알린다.
+    h.clock.now = T0 + timedelta(days=1)
     h.api.data07_days = []
-    run = h.collector.run("data07")
-    assert run is not None and (run.status, run.record_count) == ("SUCCESS", 0)
-    assert multipliers(h) == {}
+    with caplog.at_level(logging.INFO):
+        run = h.collector.run("data07")
+
+    assert run is not None and (run.status, run.error_message) == ("FAILED", "DATA-07 all regions empty")
+    assert run.call_count == 2 and run.record_count is None
+    assert h.output.read_bytes() == before
+    assert [(body["source"], body["status"]) for body in h.webhook_bodies] == [("data07", "FAILED")]
+    assert_no_secret(caplog, h)
 
 
 def test_retention_prunes_old_rows(database: Database, tmp_path: Path):

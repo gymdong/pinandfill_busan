@@ -75,6 +75,8 @@
 - 항목이 왔는데 쓸 수 있는 행이 하나도 없으면(필드 이름·코드 형식이 명세와 다름) 그 실행은 FAILED + 알림이고 파일은 그대로다.
   DATA-06 은 쓸 수 있는 과거 자료가 하나도 없어도 FAILED 다. DATA-06 실행의 `as_of` 는 실제로 쓴 가장 늦은 자료일이다.
 - DATA-07 을 쓸 때 오늘(KST) 이후의 DATA-07 행은 모두 새 예측으로 바꾼다(새 예측에 없는 날·대응표에서 빠진 구·군의 옛 예측은 지운다).
+  단, 모든 구·군 응답이 비면 코드(areaCd·signguCd)가 틀렸을 수 있어 `DATA-07 all regions empty` 로 FAILED + 알림이고
+  파일은 그대로다. 일부 구·군만 비면 SUCCESS 이고 빈 구·군 수를 `data07_empty_regions` 경고 로그로 남긴다.
 - 두 소스 모두 오늘에서 `CROWD_MULTIPLIER_RETENTION_DAYS`(365)일보다 오래된 자기 행은 쓸 때 지운다.
 - `region` 은 응답의 시군구 코드를 [`data/seed/crowd/busan_region_codes.csv`](../seed/crowd/busan_region_codes.csv)
   (부산 16개 구·군)로 바꾼 이름이다. 표에 없는 코드(부산 밖)는 버린다. **TODO: 이 표의 코드 칸은 아직 비어 있다.**

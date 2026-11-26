@@ -5,7 +5,9 @@
   as_of 는 실제로 쓴 가장 늦은 자료일(KST 0시)이다.
 - `Data07Job`(data07): 대응표에 DATA-07 코드가 있는 구·군마다 1회 받아 향후 30일 날짜 배수를 만든다.
   호출 수 = 그 구·군 수. 미래 날짜의 M 은 이 잡만 만든다. 오늘(KST) 이후의 DATA-07 행은 매번 새 예측으로 통째로 바꾼다.
-  모든 응답이 비면(부산 관광지 없음) 행 없이 SUCCESS, 항목이 왔는데 쓸 수 있는 행이 없으면 FAILED 다.
+  모든 구·군 응답이 비면 FAILED('DATA-07 all regions empty') + 알림이고 쓰지 않는다(코드가 틀렸을 수 있어
+  미래 예측을 통째로 지우지 않는다). 일부만 비면 그 구·군은 행 없이 SUCCESS 이고 빈 구·군 수를 로그에 남긴다.
+  항목이 왔는데 쓸 수 있는 행이 없으면 FAILED 다.
 
 결과는 CROWD_DATA_DIR(기본 data/crowd)/crowd_multipliers.csv 에 합쳐 쓴다(`multipliers.write_multipliers`).
 두 소스 모두 CROWD_MULTIPLIER_RETENTION_DAYS 보다 오래된 자기 행은 지운다.
@@ -14,6 +16,7 @@
 앱은 시작 때 파일을 읽으므로 새 배수는 앱을 다시 시작해야 보인다.
 """
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -34,6 +37,8 @@ from app.modules.crowd.multipliers import day_type_ratios, write_multipliers
 from app.modules.crowd.signals import KST
 
 from ..collector import INTERRUPTED, JobOutcome
+
+logger = logging.getLogger(__name__)
 
 Clock = Callable[[], datetime]
 
@@ -165,7 +170,7 @@ class Data07Job(_VisitorJob):
         key, regions = checked
         if not regions.data07:
             return JobOutcome(call_count=0, error="지역 코드 대응표에 DATA-07 코드가 없습니다.")
-        fetched, calls = Fetched(), 0
+        fetched, calls, empty_regions = Fetched(), 0, 0
         client = self._http()
         try:
             adapter = ConcentrationForecastAdapter(key, regions, client, page_size=self._settings.public_data_page_size)
@@ -173,14 +178,21 @@ class Data07Job(_VisitorJob):
                 if should_stop():
                     return JobOutcome(call_count=calls, rejected_count=fetched.rejected, error=INTERRUPTED)
                 calls += 1
-                fetched.add(adapter.fetch_region(region))
+                result = adapter.fetch_region(region)
+                empty_regions += result.received == 0
+                fetched.add(result)
         except VisitorTransportError as exc:
             return JobOutcome(call_count=calls, rejected_count=fetched.rejected, error=str(exc))
         finally:
             if self._client is None:
                 client.close()
+        if empty_regions == calls:
+            # 대응표 코드(areaCd·signguCd)가 틀려도 이렇게 보인다. 옛 예측을 지우지 않고 실패로 알린다.
+            return JobOutcome(call_count=calls, error="DATA-07 all regions empty")
+        if empty_regions:
+            logger.warning("data07_empty_regions empty=%d regions=%d", empty_regions, calls)
         ratios = day_type_ratios(fetched.usable(), combine="mean")
-        if fetched.received and not ratios:
+        if not ratios:
             return JobOutcome(
                 call_count=calls, rejected_count=fetched.rejected, error=fetched.no_usable_rows("DATA-07")
             )

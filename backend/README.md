@@ -128,6 +128,8 @@ uv run python -m app.batch.cli run --source data07   # 대응표에 DATA-07 코�
 - 항목이 왔는데 쓸 수 있는 행이 0 이면 `DATA-06 no usable rows (rejected=N, unmapped=M)` 로 FAILED + 알림이다
   (필드 이름·코드 자릿수가 명세와 다를 때 빈 성공으로 넘기지 않는다). DATA-06 은 쓸 자료가 하나도 없어도 FAILED 이고,
   `as_of` 는 실제로 쓴 가장 늦은 자료일이다. 거절 항목이 있는 (날짜, 구·군)은 계산에서 뺀다.
+- DATA-07 모든 구·군 응답이 비면 `DATA-07 all regions empty` 로 FAILED + 알림이고 기존 예측을 지우지 않는다.
+  일부만 비면 SUCCESS + `data07_empty_regions empty=… regions=…` 경고 로그다.
 - 공휴일은 평일로 센다(파일 제공자와 같다, spec A-9).
 
 켜는 법(키·코드를 갖춘 뒤):
