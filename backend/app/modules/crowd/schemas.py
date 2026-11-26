@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.modules.engine.schemas import ContractModel
 
@@ -26,3 +26,17 @@ class PlaceCrowdResponse(ContractModel):
     confidence: CrowdConfidence = "없음"
     as_of: datetime | None = None
     sources: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_crowd_consistency(self):
+        """혼잡도 데이터, 신뢰도, 출처 및 기준 시각의 일관성을 검증한다."""
+        if self.confidence == "없음" and self.hours:
+            raise ValueError("신뢰도가 '없음'이면 혼잡도 시간대 데이터가 없어야 합니다.")
+
+        if self.hours:
+            if self.as_of is None:
+                raise ValueError("혼잡도 데이터가 있으면 기준 시각(as_of)이 필요합니다.")
+            if not self.sources or any(not source.strip() for source in self.sources):
+                raise ValueError("혼잡도 데이터가 있으면 유효한 출처(sources)가 필요합니다.")
+
+        return self
