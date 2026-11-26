@@ -1,6 +1,5 @@
 """FR-016 TourAPI 관광지 상세정보 수집 클라이언트."""
 
-import logging
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -8,9 +7,6 @@ from typing import Any
 import httpx
 
 from .public_places import PublicPlaceRecord, parse_public_place
-
-# httpx 는 INFO 로 요청 URL 전체를 남기는데 TourAPI 는 serviceKey 를 쿼리로 보낸다. 키가 로그에 남지 않게 한다.
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 TOURAPI_DETAIL_URL = "https://apis.data.go.kr/B551011/KorService2/detailCommon2"
 

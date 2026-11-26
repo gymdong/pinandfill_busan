@@ -14,6 +14,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.logging import quiet_http_client_logs
 from app.db.models import IngestionRunRow
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,8 @@ class AdminAlert:
     def __init__(self, webhook_url: str | None = None, *, client: httpx.Client | None = None) -> None:
         self._webhook_url = webhook_url
         self._client = client
+        # httpx 는 INFO 로 요청 URL 전체를 남긴다. 웹훅 URL 은 비밀이므로 이 클래스만 써도 막는다.
+        quiet_http_client_logs()
 
     def send(self, event: str, run: IngestionRunRow) -> None:
         reason = run.error_message or ""

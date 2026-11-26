@@ -21,6 +21,7 @@ from app.batch.alerts import AdminAlert
 from app.batch.collector import BatchCollector
 from app.batch.jobs.tourapi_job import TourAPIPlacesJob
 from app.batch.settings import BatchSettings
+from app.core.logging import quiet_http_client_logs
 from app.db.session import Database, DatabaseSettings
 from app.modules.places.db_repository import SeedResult, SqlPlaceStore
 from app.modules.places.samples import SAMPLE_DIR, load_sample_places
@@ -36,7 +37,7 @@ def seed_places(database: Database, directory: Path = SAMPLE_DIR, *, prune: bool
     )
 
 
-def build_collector(database: Database, settings: BatchSettings) -> BatchCollector:
+def build_collector(database: Database, settings: BatchSettings, stop: threading.Event | None = None) -> BatchCollector:
     # data06·data07 은 U7 에서 잡을 붙인다. 그 전까지 data_sources 에서도 꺼져 있다.
     return BatchCollector(
         database,
@@ -44,6 +45,7 @@ def build_collector(database: Database, settings: BatchSettings) -> BatchCollect
         alert=AdminAlert(settings.webhook_url()),
         sources={"tourapi": TourAPIPlacesJob(settings.tourapi_key())},
         backoff_base=timedelta(minutes=settings.batch_backoff_base_min),
+        stop=stop,
     )
 
 
@@ -74,6 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     loop.add_argument("--tick", type=float, default=300, help="tick 간격(초)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    quiet_http_client_logs()
 
     settings = DatabaseSettings()
     url = settings.url()
@@ -84,7 +87,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "seed-places":
             return _seed(database, args.dir, args.prune)
-        collector = build_collector(database, BatchSettings())
+        # SIGTERM·SIGINT: 지금 호출을 마치고 실행을 쓰기 없이 FAILED('interrupted') 로 끝낸 뒤 종료한다.
+        stop = threading.Event()
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(signum, lambda *_: stop.set())
+        collector = build_collector(database, BatchSettings(), stop)
         if args.command == "run":
             if args.source not in collector.sources:
                 logger.error("unknown source: %s", args.source)
@@ -93,9 +100,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if result is None or result.status != "FAILED" else 1
         if args.command == "run-due":
             return 1 if any(run.status == "FAILED" for run in collector.run_due()) else 0
-        stop = threading.Event()
-        for signum in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(signum, lambda *_: stop.set())
         logger.info("batch_loop started tick=%ss", args.tick)
         ticks = run_loop(collector.run_due, args.tick, stop)
         logger.info("batch_loop stopped ticks=%d", ticks)

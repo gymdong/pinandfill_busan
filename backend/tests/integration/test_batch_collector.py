@@ -7,7 +7,7 @@ SQLite(alembic)는 항상, PostgreSQL 은 TEST_DATABASE_URL 이 있을 때 돈�
 import json
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -41,12 +41,16 @@ class FakeTourAPI:
     calls: list[str] = field(default_factory=list)
     # (들어옴, 풀림): 있으면 첫 응답 전에 들어옴을 알리고 풀릴 때까지 기다린다.
     gate: tuple[threading.Event, threading.Event] | None = None
+    # 있으면 각 응답 전에 부른다.
+    on_call: Callable[[], None] | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.gate is not None:
             entered, release = self.gate
             entered.set()
             assert release.wait(10)
+        if self.on_call is not None:
+            self.on_call()
         content_id = request.url.params["contentId"]
         self.calls.append(content_id)
         failure = self.failures.get(content_id)
@@ -355,7 +359,8 @@ def test_backoff_is_capped_by_cycle():
     from app.batch.collector import backoff_until
 
     assert backoff_until("MINUTE", 30, T0, timedelta(minutes=15)) == T0 + timedelta(seconds=60)
-    assert backoff_until("MONTH", 500, T0, timedelta(minutes=15)) == T0 + timedelta(days=30)
+    # 주기가 MONTH 여도 24시간을 넘기지 않는다.
+    assert backoff_until("MONTH", 500, T0, timedelta(minutes=15)) == T0 + timedelta(hours=24)
 
 
 def test_webhook_failure_does_not_change_result(database: Database, caplog: pytest.LogCaptureFixture):
@@ -417,3 +422,91 @@ def test_loop_runs_ticks_until_stopped():
 
     assert run_loop(once, 0, stop) == 2
     assert len(calls) == 2
+
+
+def add_run(database: Database, status: str, started: datetime, error: str | None = None) -> None:
+    with database.transaction() as session:
+        session.add(
+            IngestionRunRow(
+                source_id="tourapi",
+                started_at=started,
+                finished_at=None if status == "RUNNING" else started,
+                status=status,
+                call_count=0,
+                error_message=error,
+            )
+        )
+
+
+def test_long_failure_retries_daily_and_resets_each_cycle(harness: Harness):
+    # 10월에 성공한 뒤 11월 내내 실패했다(연속 실패가 아무리 많아도 하루에 한 번은 다시 시도한다).
+    add_run(harness.database, "SUCCESS", datetime(2026, 10, 15, tzinfo=UTC))
+    for day in range(2, 27):
+        add_run(harness.database, "FAILED", datetime(2026, 11, day, 1, 0, tzinfo=UTC), "TourAPI 네트워크 요청 실패")
+    assert harness.collector.due_sources(T0 + timedelta(hours=23, minutes=59)) == []
+    assert harness.collector.due_sources(T0 + timedelta(hours=24)) == ["tourapi"]
+
+    # 11월 30일 23:00 KST 의 실패 뒤라도, 12월(KST) 주기가 시작되면 연속 실패 수를 새로 센다.
+    add_run(harness.database, "FAILED", datetime(2026, 11, 30, 14, 0, tzinfo=UTC), "TourAPI 네트워크 요청 실패")
+    assert harness.collector.due_sources(datetime(2026, 11, 30, 14, 59, tzinfo=UTC)) == []
+    assert harness.collector.due_sources(datetime(2026, 11, 30, 15, 0, tzinfo=UTC)) == ["tourapi"]
+
+
+def test_disabled_skip_does_not_count_toward_backoff(harness: Harness):
+    set_source(harness.database, enabled=False)
+    assert harness.collector.run("tourapi").status == "SKIPPED"  # type: ignore[union-attr]
+    set_source(harness.database, enabled=True)
+    assert harness.collector.due_sources(T0 + timedelta(minutes=1)) == ["tourapi"]
+
+
+def test_abandoned_running_row_is_closed_and_alerted(harness: Harness, caplog: pytest.LogCaptureFixture):
+    # 이전 프로세스가 SIGKILL 로 죽어 RUNNING 이 남았다.
+    add_run(harness.database, "RUNNING", T0 - timedelta(hours=1))
+    with caplog.at_level(logging.INFO):
+        run = harness.collector.run("tourapi")
+
+    assert run is not None and run.status == "SUCCESS"
+    statuses = [(row.status, row.error_message, row.finished_at) for row in runs(harness.database)]
+    assert statuses == [("FAILED", "abandoned", T0), ("SUCCESS", None, T0)]
+    assert len(alert_lines(caplog)) == 1
+    assert len(alert_lines(caplog, "ingestion_recovered")) == 1
+    assert [body["event"] for body in harness.webhook_bodies] == ["ingestion_alert", "ingestion_recovered"]
+
+
+def test_stop_finishes_current_call_then_fails_without_writing(harness: Harness):
+    snapshot = place_rows(harness.database)
+    harness.api.on_call = harness.collector.stop.set
+    run = harness.collector.run("tourapi")
+
+    assert run is not None and (run.status, run.error_message) == ("FAILED", "interrupted")
+    assert run.call_count == len(harness.api.calls) == 1
+    assert place_rows(harness.database) == snapshot
+
+
+class BrokenJob:
+    def planned_calls(self, database: Database) -> int:
+        raise RuntimeError("boom")
+
+    def collect(self, database: Database, should_stop: Callable[[], bool]) -> Any:
+        raise AssertionError("not reached")
+
+
+def test_one_source_error_does_not_block_others(harness: Harness, caplog: pytest.LogCaptureFixture):
+    with harness.database.transaction() as session:
+        source = session.get(DataSourceRow, "data06")
+        assert source is not None
+        source.enabled = True
+    collector = BatchCollector(
+        harness.database,
+        clock=harness.clock,
+        alert=harness.collector.alert,
+        sources={"data06": BrokenJob(), "tourapi": harness.collector.sources["tourapi"]},
+    )
+    with caplog.at_level(logging.INFO):
+        results = collector.run_due()
+
+    assert [(run.source_id, run.status, run.error_message) for run in results] == [
+        ("data06", "FAILED", "unexpected error: RuntimeError"),
+        ("tourapi", "SUCCESS", None),
+    ]
+    assert len(alert_lines(caplog)) == 1

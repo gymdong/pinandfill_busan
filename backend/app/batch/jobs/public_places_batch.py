@@ -1,6 +1,7 @@
 """FR-016 TourAPI 관광지 다건 수집 및 결과 집계."""
 
 import os
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 
@@ -22,6 +23,8 @@ class BatchResult:
     call_count: int
     # 첫 전송 오류 메시지. 키·URL 을 담지 않는다.
     error_message: str | None = None
+    # should_stop 으로 중간에 멈췄다(남은 ID 는 부르지 않았다).
+    interrupted: bool = False
 
     @property
     def failed_count(self) -> int:
@@ -33,11 +36,13 @@ def collect_public_places(
     *,
     api_key: str | None = None,
     client: httpx.Client | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> BatchResult:
     """관광지 ID별로 조회하고 성공·거절·전송 오류 건수를 집계한다. DB 에 쓰지 않는다.
 
     키가 없으면 호출하지 않고 `TourAPITransportError` 를 낸다.
     전송 오류가 나면 남은 ID 는 부르지 않는다(실행 전체가 실패이므로 호출 한도를 아낀다).
+    `should_stop()` 이 참이면 지금 호출을 마친 뒤 멈추고 `interrupted=True` 로 돌려준다.
     """
     key = (api_key or os.getenv("TOURAPI_SERVICE_KEY") or "").strip()
     if not key:
@@ -46,9 +51,13 @@ def collect_public_places(
     records = []
     rejected = transport = calls = 0
     error: str | None = None
+    interrupted = False
     # 넘겨받은 client 는 닫지 않는다.
     with httpx.Client(timeout=10.0) if client is None else nullcontext(client) as http:
         for content_id in dict.fromkeys(content_ids):
+            if should_stop is not None and should_stop():
+                interrupted = True
+                break
             if not content_id.isdigit():
                 rejected += 1
                 continue
@@ -69,4 +78,5 @@ def collect_public_places(
         rejected=rejected,
         call_count=calls,
         error_message=error,
+        interrupted=interrupted,
     )

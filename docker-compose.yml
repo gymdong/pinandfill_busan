@@ -41,6 +41,9 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    # SIGTERM 뒤 지금 TourAPI 호출(타임아웃 10초)을 마치고 실행을 FAILED('interrupted') 로 닫을 시간.
+    # 그래도 죽으면 남은 RUNNING 행은 다음 실행이 FAILED('abandoned') 로 닫는다.
+    stop_grace_period: 60s
 
 volumes:
   pinandfill-db:
