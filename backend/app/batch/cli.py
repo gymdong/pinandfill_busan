@@ -3,7 +3,7 @@
 - `seed-places [--dir data/samples]`: 표본 CSV(places_sample.csv·place_hours.csv)를 places·place_hours 에 넣는다.
   다시 돌려도 결과가 같다. 스키마는 먼저 `alembic upgrade head` 로 만든다. DATABASE_URL 이 필요하다.
   CSV 에 없는 영업시간 행은 `--prune` 일 때만 지운다. CSV 에서 읽지 못한 행의 요일은 지우지 않는다.
-- `run --source tourapi`: 소스 하나를 지금 수집한다(주기·백오프 무시, 한도·잠금은 지킨다).
+- `run --source tourapi|data06|data07`: 소스 하나를 지금 수집한다(주기·백오프 무시, 한도·잠금은 지킨다).
 - `run-due`: 주기가 돌아온 소스를 한 번 수집한다.
 - `loop [--tick 300]`: tick 초마다 `run-due` 를 한다. SIGTERM·SIGINT 를 받으면 지금 tick 을 마치고 끝낸다.
   compose 의 `batch` 서비스가 이 명령을 돈다.
@@ -17,12 +17,15 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.adapters.public_data.settings import VisitorDataSettings
 from app.batch.alerts import AdminAlert
 from app.batch.collector import BatchCollector
 from app.batch.jobs.tourapi_job import TourAPIPlacesJob
+from app.batch.jobs.visitor_jobs import Data06Job, Data07Job
 from app.batch.settings import BatchSettings
 from app.core.logging import quiet_http_client_logs
 from app.db.session import Database, DatabaseSettings
+from app.modules.crowd.file_provider import crowd_dir_from_env
 from app.modules.places.db_repository import SeedResult, SqlPlaceStore
 from app.modules.places.samples import SAMPLE_DIR, load_sample_places
 
@@ -37,13 +40,24 @@ def seed_places(database: Database, directory: Path = SAMPLE_DIR, *, prune: bool
     )
 
 
-def build_collector(database: Database, settings: BatchSettings, stop: threading.Event | None = None) -> BatchCollector:
-    # data06·data07 은 U7 에서 잡을 붙인다. 그 전까지 data_sources 에서도 꺼져 있다.
+def build_collector(
+    database: Database,
+    settings: BatchSettings,
+    stop: threading.Event | None = None,
+    visitor_settings: VisitorDataSettings | None = None,
+) -> BatchCollector:
+    # data06·data07 은 data_sources 에서 꺼져 있다(키·지역 코드 대응표를 갖춘 뒤 켠다, backend/README.md).
+    visitors = visitor_settings or VisitorDataSettings()
+    crowd_dir = crowd_dir_from_env()
     return BatchCollector(
         database,
         clock=lambda: datetime.now(UTC),
         alert=AdminAlert(settings.webhook_url()),
-        sources={"tourapi": TourAPIPlacesJob(settings.tourapi_key())},
+        sources={
+            "tourapi": TourAPIPlacesJob(settings.tourapi_key()),
+            "data06": Data06Job(visitors, crowd_dir),
+            "data07": Data07Job(visitors, crowd_dir),
+        },
         backoff_base=timedelta(minutes=settings.batch_backoff_base_min),
         stop=stop,
     )
@@ -70,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     seed.add_argument("--dir", type=Path, default=SAMPLE_DIR, help="표본 CSV 디렉터리")
     seed.add_argument("--prune", action="store_true", help="CSV 에 없는 영업시간 행을 지운다")
     run_one = commands.add_parser("run", help="소스 하나를 지금 수집한다")
-    run_one.add_argument("--source", required=True, help="data_sources.id (예: tourapi)")
+    run_one.add_argument("--source", required=True, help="data_sources.id (tourapi·data06·data07)")
     commands.add_parser("run-due", help="주기가 돌아온 소스를 한 번 수집한다")
     loop = commands.add_parser("loop", help="tick 마다 run-due 를 한다")
     loop.add_argument("--tick", type=float, default=300, help="tick 간격(초)")
