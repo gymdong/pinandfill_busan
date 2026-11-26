@@ -38,7 +38,7 @@ class CrowdSummary(ContractModel):
 
 
 class KakaoPlaceKey(ContractModel):
-    kakao_place_id: str = Field(pattern=r"^[0-9]+$")
+    kakao_place_id: str = Field(pattern=r"^[0-9]+$", max_length=32)
     place_url: HttpUrl
 
     @model_validator(mode="after")

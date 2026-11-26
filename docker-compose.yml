@@ -1,0 +1,23 @@
+# 로컬 개발용 PostgreSQL. 운영 배포 구성이 아니다.
+#   docker compose up -d db
+#   backend/.env 에 DATABASE_URL=postgresql://pinandfill:pinandfill@localhost:5432/pinandfill 을 넣고
+#   cd backend && uv run alembic upgrade head
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pinandfill
+      POSTGRES_PASSWORD: pinandfill
+      POSTGRES_DB: pinandfill
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pinandfill-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pinandfill -d pinandfill"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pinandfill-db:

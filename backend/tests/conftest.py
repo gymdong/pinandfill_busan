@@ -37,12 +37,14 @@ def no_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def no_real_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """backend/.env 에 키가 있어도 기본 구성이 실제 카카오·TMAP·ODsay 를 부르지 않게 한다.
+    """backend/.env 에 키가 있어도 기본 구성이 실제 카카오·TMAP·ODsay·DB 를 쓰지 않게 한다.
 
     환경변수가 .env 보다 우선하므로 빈 값으로 두면 기본 구성은 키가 없는 것으로 본다.
     """
     for name in ("KAKAO_REST_API_KEY", "TMAP_API_KEY", "ODSAY_API_KEY"):
         monkeypatch.setenv(name, "")
+    # backend/.env 에 DATABASE_URL 이 있어도 기본 구성은 메모리 저장소를 쓴다. DB 시험은 TEST_DATABASE_URL 로 따로 돈다.
+    monkeypatch.setenv("DATABASE_URL", "")
 
 
 @pytest.fixture
