@@ -614,7 +614,17 @@ def test_db_never_stores_kakao_name_or_coordinates(database: Database):
     service, _ = db_service(database)
     service.update_block(TRIP, "e", UpdateBlockRequest(stay_min=60, session_coords=COORDS))
     inspector = inspect(database.engine)
-    columns = {column["name"] for table in inspector.get_table_names() for column in inspector.get_columns(table)}
+    # places 는 공공 장소(TourAPI 등)의 이름·좌표를 저장하는 테이블이라 열 이름 검사에서만 뺀다.
+    # data_sources.name 은 데이터 소스 이름이다. 새 테이블은 자동으로 검사 대상이다.
+    # 저장된 값 검사(아래)는 모든 테이블이다.
+    allowed = {("places", None), ("data_sources", "name")}
+    columns = {
+        column["name"]
+        for table in inspector.get_table_names()
+        if (table, None) not in allowed
+        for column in inspector.get_columns(table)
+        if (table, column["name"]) not in allowed
+    }
     assert not {"name", "lat", "lng", "place_name", "x", "y"} & columns
     with database.engine.connect() as connection:
         dumped = ""
@@ -639,7 +649,25 @@ def test_migration_matches_models_and_downgrades(database: Database):
     downgrade(database)
     assert set(inspect(database.engine).get_table_names()) <= {"alembic_version"}
     upgrade(database)
-    assert {"trips", "blocks", "legs", "schedule_snapshots"} <= set(inspect(database.engine).get_table_names())
+    tables = {"trips", "blocks", "legs", "schedule_snapshots"}
+    tables |= {"places", "place_hours", "data_sources", "ingestion_runs"}
+    assert tables <= set(inspect(database.engine).get_table_names())
+    with database.engine.connect() as connection:
+        sources = connection.execute(
+            text("SELECT id, kind, refresh_cycle, daily_call_limit, enabled FROM data_sources ORDER BY id")
+        ).all()
+    assert [tuple(row) for row in sources] == [
+        ("data06", "API", "DAY", None, False),
+        ("data07", "API", "DAY", None, False),
+        ("tourapi", "API", "MONTH", 1000, True),
+    ]
+
+
+def test_downgrade_to_0001_keeps_trip_tables(database: Database):
+    downgrade(database, "0001")
+    tables = set(inspect(database.engine).get_table_names())
+    assert {"trips", "blocks", "legs", "schedule_snapshots"} <= tables
+    assert not {"places", "place_hours", "data_sources", "ingestion_runs"} & tables
 
 
 # ---- 기본 구성(DATABASE_URL) ----
