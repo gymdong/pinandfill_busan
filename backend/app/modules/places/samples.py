@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 SAMPLE_DIR = Path(__file__).resolve().parents[4] / "data" / "samples"
 DAY_TYPES = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+# place_hours.origin 의 값. PARSED(파서) / MANUAL(수동 보정)
+HOURS_ORIGINS = ("PARSED", "MANUAL")
 
 
 @dataclass(frozen=True)
@@ -46,10 +48,17 @@ class SamplePlace:
 class SamplePlaceData:
     """표본 장소의 엔진 PlaceDataProvider 이자 장소 검색 저장소 재료."""
 
-    def __init__(self, places: Iterable[SamplePlace], kakao_overrides: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        places: Iterable[SamplePlace],
+        kakao_overrides: Mapping[str, str] | None = None,
+        invalid_hours: Iterable[tuple[str, str]] = (),
+    ) -> None:
         self._places = {item.place.id: item for item in places}
         # 카카오 장소 ID → 공공 장소 ID (수동 매칭표)
         self._kakao_overrides = dict(kakao_overrides or {})
+        # 영업시간 CSV 에서 읽지 못해 건너뛴 (장소 ID, 요일). 시드가 DB 의 그 요일 행을 지우지 않게 한다.
+        self.invalid_hours = frozenset(invalid_hours)
 
     def get(self, place_ref: PlaceRef, *, on_date: date) -> TransientPlaceDetails:
         item = self._places.get(place_ref.place_id) if isinstance(place_ref, PublicPlaceRef) else None
@@ -119,10 +128,14 @@ def _positive_int(value: str) -> int | None:
 def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
     hours: dict[str, dict[str, OpeningHours]] = {}
     hours_origin: dict[str, dict[str, str]] = {}
-    skipped_hours = 0
+    invalid_hours: set[tuple[str, str]] = set()
     for row in _rows(directory / "place_hours.csv"):
         place_id, day_type = row.get("tourapi_contentid", ""), row.get("day_type", "")
         if not place_id or day_type not in DAY_TYPES:
+            continue
+        origin = row.get("origin", "").upper()
+        if origin and origin not in HOURS_ORIGINS:
+            invalid_hours.add((place_id, day_type))
             continue
         try:
             hours.setdefault(place_id, {})[day_type] = OpeningHours(
@@ -133,12 +146,12 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
                 break_end=_time(row.get("break_end", "")),
             )
         except ValueError:  # pydantic ValidationError 포함(예: 초가 붙은 시각)
-            skipped_hours += 1
+            invalid_hours.add((place_id, day_type))
             continue
-        if row.get("origin"):
-            hours_origin.setdefault(place_id, {})[day_type] = row["origin"].upper()
-    if skipped_hours:
-        logger.warning("place_samples skipped_hours=%d", skipped_hours)
+        if origin:
+            hours_origin.setdefault(place_id, {})[day_type] = origin
+    if invalid_hours:
+        logger.warning("place_samples skipped_hours=%d", len(invalid_hours))
 
     places: list[SamplePlace] = []
     skipped = 0
@@ -192,4 +205,4 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
         and row.get("kakao_place_id", "").isdigit()
         and row.get("tourapi_contentid")
     }
-    return SamplePlaceData(places, overrides)
+    return SamplePlaceData(places, overrides, invalid_hours)

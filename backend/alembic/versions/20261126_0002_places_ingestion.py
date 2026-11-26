@@ -52,6 +52,8 @@ def upgrade() -> None:
     sa.Column('break_end', sa.Time(), nullable=True),
     sa.Column('is_closed', sa.Boolean(), nullable=False),
     sa.Column('origin', sa.String(length=10), nullable=False),
+    sa.CheckConstraint("day_type IN ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN', 'HOLIDAY')", name=op.f('ck_place_hours_day_type')),
+    sa.CheckConstraint("origin IN ('PARSED', 'MANUAL')", name=op.f('ck_place_hours_origin')),
     sa.ForeignKeyConstraint(['place_id'], ['places.id'], name=op.f('fk_place_hours_place_id_places'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_place_hours')),
     sa.UniqueConstraint('place_id', 'day_type', name=op.f('uq_place_hours_place_id_day_type'))
@@ -77,6 +79,7 @@ def upgrade() -> None:
     sa.Column('as_of', sa.DateTime(timezone=True), nullable=True),
     sa.Column('error_message', sa.Text(), nullable=True),
     sa.Column('alerted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.CheckConstraint("status IN ('RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED')", name=op.f('ck_ingestion_runs_status')),
     sa.ForeignKeyConstraint(['source_id'], ['data_sources.id'], name=op.f('fk_ingestion_runs_source_id_data_sources')),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_ingestion_runs'))
     )

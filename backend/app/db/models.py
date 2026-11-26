@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Double,
@@ -79,6 +80,7 @@ class Base(DeclarativeBase):
             "fk": "fk_%(table_name)s_%(column_0_N_name)s_%(referred_table_name)s",
             "uq": "uq_%(table_name)s_%(column_0_N_name)s",
             "ix": "ix_%(table_name)s_%(column_0_N_name)s",
+            "ck": "ck_%(table_name)s_%(constraint_name)s",
         }
     )
 
@@ -180,11 +182,15 @@ class PlaceRow(Base):
 
 class PlaceHourRow(Base):
     __tablename__ = "place_hours"
-    __table_args__ = (UniqueConstraint("place_id", "day_type"),)
+    __table_args__ = (
+        UniqueConstraint("place_id", "day_type"),
+        CheckConstraint("day_type IN ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN', 'HOLIDAY')", name="day_type"),
+        CheckConstraint("origin IN ('PARSED', 'MANUAL')", name="origin"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     place_id: Mapped[str] = mapped_column(String(64), ForeignKey("places.id", ondelete="CASCADE"))
-    # MON~SUN (HOLIDAY 는 아직 다루지 않는다)
+    # MON~SUN 또는 HOLIDAY(SDD). 앱은 아직 HOLIDAY 행을 읽지 않는다.
     day_type: Mapped[str] = mapped_column(String(10))
     # 시각이 NULL 이면 '확인 필요'다(지어내지 않음, NFR-012).
     open_time: Mapped[time | None] = mapped_column(Time)
@@ -211,13 +217,16 @@ class DataSourceRow(Base):
 
 class IngestionRunRow(Base):
     __tablename__ = "ingestion_runs"
-    __table_args__ = (Index(None, "source_id", "started_at"),)
+    __table_args__ = (
+        Index(None, "source_id", "started_at"),
+        CheckConstraint("status IN ('RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED')", name="status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     source_id: Mapped[str] = mapped_column(String(30), ForeignKey("data_sources.id"))
     started_at: Mapped[datetime] = mapped_column(UtcDateTime)
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
-    # SUCCESS / FAILED / SKIPPED
+    # SUCCESS / FAILED / SKIPPED. RUNNING 은 실행 중(finished_at 이 NULL)인 행이다.
     status: Mapped[str] = mapped_column(String(10))
     record_count: Mapped[int | None] = mapped_column(Integer)
     rejected_count: Mapped[int | None] = mapped_column(Integer)

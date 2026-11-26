@@ -6,12 +6,18 @@
 - 배치(`update_collected`)는 이름·좌표·주소·collected_at 만 쓴다. ref_date·영업시간·source_org 는 건드리지 않는다
   (NFR-012: MANUAL 영업시간의 기준일을 수집일로 덮어쓰지 않는다).
 - 이름·좌표·주소는 배치가 한 번 갱신한 뒤(collected_at 이 있으면) 시드가 다시 덮어쓰지 않는다.
+- 시드는 CSV 에 없는 영업시간 행(DB 에서 직접 넣은 MANUAL 행 등)을 지우지 않는다. `prune=True` 일 때만 지운다.
+  CSV 에서 읽지 못한 행(예: 초가 붙은 시각)의 요일은 `prune` 이어도 DB 행을 그대로 둔다.
+- 값이 바뀐 장소만 updated_at 을 바꾼다.
 
 앱 읽기 경로는 아직 CSV 다. `load()` 는 DB 읽기 경로(U5)가 쓸 `SamplePlace` 목록을 만든다.
 """
 
-from collections.abc import Iterable
+import logging
+from collections.abc import Collection, Iterable
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 
@@ -23,56 +29,113 @@ from app.modules.engine.schemas import OpeningHours
 from .samples import DAY_TYPES, SamplePlace
 from .schemas import PlaceHours, PublicPlace
 
+logger = logging.getLogger(__name__)
+
 PUBLIC = "PUBLIC"
 # 표본 CSV 는 사람이 확인해 적은 값이다. origin 열이 비어 있으면 MANUAL 로 본다.
 DEFAULT_HOURS_ORIGIN = "MANUAL"
+
+
+@dataclass(frozen=True)
+class SeedResult:
+    places: int
+    # 값이 바뀐(새로 넣은 것 포함) 장소 수
+    changed: int
+    # CSV 에서 읽지 못해 DB 값을 그대로 둔 영업시간 행 수
+    kept_invalid: int
+    # CSV 에 없어 그대로 둔 영업시간 행 수(prune 이 아닐 때)
+    kept_unlisted: int
+    # CSV 에 없어 지운 영업시간 행 수(prune 일 때)
+    pruned: int
+
+
+def _assign(row: Any, values: dict[str, Any]) -> bool:
+    changed = False
+    for name, value in values.items():
+        if getattr(row, name) != value:
+            setattr(row, name, value)
+            changed = True
+    return changed
 
 
 class SqlPlaceStore:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def upsert_seed(self, places: Iterable[SamplePlace], at: datetime) -> int:
-        """표본 장소를 넣거나 갱신한다. 같은 표본으로 다시 불러도 결과가 같다. 표본에 없는 행은 지우지 않는다."""
-        count = 0
+    def upsert_seed(
+        self,
+        places: Iterable[SamplePlace],
+        at: datetime,
+        *,
+        invalid_hours: Collection[tuple[str, str]] = (),
+        prune: bool = False,
+    ) -> SeedResult:
+        """표본 장소를 넣거나 갱신한다. 같은 표본으로 다시 불러도 결과가 같다. 표본에 없는 장소 행은 지우지 않는다.
+
+        `invalid_hours` 는 CSV 에서 읽지 못한 (장소 ID, 요일)이다(`SamplePlaceData.invalid_hours`).
+        """
+        count = changed = kept_invalid = kept_unlisted = pruned = 0
         with self.database.transaction() as session:
             for item in places:
                 place = item.place
                 row = session.get(PlaceRow, place.id)
+                dirty = row is None
                 if row is None:
-                    row = PlaceRow(id=place.id, source=PUBLIC, source_ref=place.id)
+                    row = PlaceRow(id=place.id, source=PUBLIC, source_ref=place.id, updated_at=at)
                     session.add(row)
+                values: dict[str, Any] = {
+                    "category": place.category,
+                    "description": item.description,
+                    "closed_days_text": item.closed_days_text,
+                    "default_stay_min": item.stay_min,
+                    "indoor_outdoor": item.indoor_outdoor,
+                    "source_org": item.source_org,
+                    "ref_date": item.ref_date,
+                }
                 if row.collected_at is None:
-                    row.name, row.lat, row.lng, row.address = place.name, place.lat, place.lng, item.address
-                row.category = place.category
-                row.description = item.description
-                row.closed_days_text = item.closed_days_text
-                row.default_stay_min = item.stay_min
-                row.indoor_outdoor = item.indoor_outdoor
-                row.source_org = item.source_org
-                row.ref_date = item.ref_date
-                row.updated_at = at
-                self._replace_hours(item)
-                count += 1
-        return count
+                    values |= {"name": place.name, "lat": place.lat, "lng": place.lng, "address": item.address}
+                dirty = _assign(row, values) or dirty
 
-    def _replace_hours(self, item: SamplePlace) -> None:
-        with self.database.transaction() as session:
-            existing = {
-                row.day_type: row
-                for row in session.scalars(select(PlaceHourRow).where(PlaceHourRow.place_id == item.place.id))
-            }
-            for day_type, row in existing.items():
-                if day_type not in item.hours:
-                    session.delete(row)
-            session.flush()
-            for day_type, hours in item.hours.items():
-                row = existing.get(day_type) or PlaceHourRow(place_id=item.place.id, day_type=day_type)
-                row.open_time, row.close_time = hours.open_time, hours.close_time
-                row.break_start, row.break_end = hours.break_start, hours.break_end
-                row.is_closed = hours.is_closed
-                row.origin = item.hours_origin.get(day_type, DEFAULT_HOURS_ORIGIN)
-                session.add(row)
+                existing = {
+                    hour.day_type: hour
+                    for hour in session.scalars(select(PlaceHourRow).where(PlaceHourRow.place_id == place.id))
+                }
+                for day_type, hour in existing.items():
+                    if day_type in item.hours:
+                        continue
+                    if (place.id, day_type) in invalid_hours:
+                        kept_invalid += 1
+                    elif prune:
+                        session.delete(hour)
+                        pruned += 1
+                        dirty = True
+                    else:
+                        kept_unlisted += 1
+                session.flush()
+                for day_type, hours in item.hours.items():
+                    current = existing.get(day_type)
+                    if current is None:
+                        current = PlaceHourRow(place_id=place.id, day_type=day_type)
+                        session.add(current)
+                        dirty = True
+                    hour_values = {
+                        "open_time": hours.open_time,
+                        "close_time": hours.close_time,
+                        "break_start": hours.break_start,
+                        "break_end": hours.break_end,
+                        "is_closed": hours.is_closed,
+                        "origin": item.hours_origin.get(day_type, DEFAULT_HOURS_ORIGIN),
+                    }
+                    dirty = _assign(current, hour_values) or dirty
+                if dirty:
+                    row.updated_at = at
+                    changed += 1
+                count += 1
+        if kept_invalid or kept_unlisted:
+            logger.warning(
+                "place_seed kept_hours invalid_in_csv=%d not_in_csv=%d (prune=%s)", kept_invalid, kept_unlisted, prune
+            )
+        return SeedResult(count, changed, kept_invalid, kept_unlisted, pruned)
 
     def update_collected(self, records: Iterable[PublicPlaceRecord], at: datetime) -> int:
         """배치 수집 결과로 이미 있는 장소의 이름·좌표·주소·collected_at 만 바꾼다. 갱신한 장소 수를 돌려준다."""
@@ -101,8 +164,12 @@ class SqlPlaceStore:
             for hour in session.scalars(select(PlaceHourRow)):
                 hour_rows.setdefault(hour.place_id, []).append(hour)
         result = []
+        unknown = 0
         for row in rows:
-            days = sorted(hour_rows.get(row.id, []), key=lambda hour: DAY_TYPES.index(hour.day_type))
+            # HOLIDAY 등 요일이 아닌 행은 아직 엔진이 쓰지 않으므로 읽지 않는다.
+            known = [hour for hour in hour_rows.get(row.id, []) if hour.day_type in DAY_TYPES]
+            unknown += len(hour_rows.get(row.id, [])) - len(known)
+            days = sorted(known, key=lambda hour: DAY_TYPES.index(hour.day_type))
             hours = {
                 hour.day_type: OpeningHours(
                     is_closed=hour.is_closed,
@@ -143,4 +210,6 @@ class SqlPlaceStore:
                     hours_origin={hour.day_type: hour.origin for hour in days},
                 )
             )
+        if unknown:
+            logger.warning("place_store skipped_hours day_type_not_weekday=%d", unknown)
         return result
