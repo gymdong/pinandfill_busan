@@ -10,7 +10,7 @@
   CSV 에서 읽지 못한 행(예: 초가 붙은 시각)의 요일은 `prune` 이어도 DB 행을 그대로 둔다.
 - 값이 바뀐 장소만 updated_at 을 바꾼다.
 
-앱 읽기 경로는 아직 CSV 다. `load()` 는 DB 읽기 경로(U5)가 쓸 `SamplePlace` 목록을 만든다.
+`load()` 는 DB 읽기 경로(`PLACE_DATA_SOURCE=db`, places/source.py)가 쓸 `SamplePlace` 목록을 만든다.
 """
 
 import logging

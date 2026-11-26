@@ -4,6 +4,7 @@ SD-03 순서대로 두 번 부른다: 문장을 보내면 태그·피할 조건�
 태그를 보내면 그 태그로 공공 DB 장소를 추천한다.
 """
 
+import logging
 from datetime import date
 from typing import Annotated, Literal, Self
 
@@ -14,10 +15,12 @@ from app.modules.ai.sanitizer import InvalidInputError
 from app.modules.engine.schemas import ContractModel
 from app.modules.places.api_schemas import PlaceDetailPhoto, SourceInfo
 from app.modules.places.router import PlaceAPIError
-from app.modules.places.samples import load_sample_places
+from app.modules.places.samples import SamplePlaceData, load_sample_places
 
 from .mood import MoodService, UnknownMoodValueError, build_mood_service
 from .mood_data import ThemeTag, load_mood_data
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recommend", tags=["recommend"])
 
@@ -80,10 +83,18 @@ class MoodResponse(ContractModel):
 
 
 def mood_service(request: Request) -> MoodService:
-    """주입한 서비스가 없으면 표본 데이터와 환경 설정(GEMINI_*)으로 한 번 만들어 재사용한다."""
+    """주입한 서비스가 없으면 앱의 장소 데이터(PLACE_DATA_SOURCE)와 환경 설정(GEMINI_*)으로 한 번 만들어 재사용한다.
+
+    앱에 장소 데이터가 없으면(서비스를 모두 주입한 시험 앱) 표본 CSV 를 읽는다.
+    """
     service = getattr(request.app.state, "mood_service", None)
     if not isinstance(service, MoodService):
-        service = build_mood_service(load_mood_data(load_sample_places()))
+        places = getattr(request.app.state, "places", None)
+        if not isinstance(places, SamplePlaceData):
+            # 서비스를 모두 주입한 앱(시험)만 여기로 온다. PLACE_DATA_SOURCE 와 상관없이 표본 CSV 를 읽는다.
+            logger.warning("mood_service places=csv_fallback (app has no place data)")
+            places = load_sample_places()
+        service = build_mood_service(load_mood_data(places))
         request.app.state.mood_service = service
     return service
 
