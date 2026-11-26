@@ -21,7 +21,10 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 class DatabaseSettings(BaseSettings):
     """환경변수 `DATABASE_URL` 또는 backend/.env 에서 읽는다. 값(비밀번호 포함)은 로그·오류에 내지 않는다."""
 
-    model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", extra="ignore", hide_input_in_errors=True)
+    # env_ignore_empty: `DB_POOL_SIZE=` 처럼 빈 값은 없는 것으로 보고 기본값을 쓴다(시작 실패 대신).
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env", extra="ignore", hide_input_in_errors=True, env_ignore_empty=True
+    )
 
     database_url: SecretStr | None = None
     # 연결 풀. 비워 두면 SQLAlchemy 기본값(pool_size=5, max_overflow=10)이다. SQLite 에는 넘기지 않는다.
@@ -98,12 +101,24 @@ class Database:
         self._current: ContextVar[Session | None] = ContextVar("pinandfill_db_session", default=None)
 
     @contextmanager
-    def transaction(self) -> Iterator[Session]:
+    def transaction(self, *, snapshot: bool = False) -> Iterator[Session]:
+        """`snapshot=True` 는 잠금 없는 읽기 전용 트랜잭션이다. 여러 SELECT 가 한 시점의 데이터를 본다.
+
+        PostgreSQL 기본(READ COMMITTED)은 SELECT 마다 새 시점을 보므로, trips·blocks·legs 를 따로 읽는 사이에
+        다른 편집이 커밋되면 옛 블록과 새 구간이 섞인다. 그래서 REPEATABLE READ READ ONLY 로 연다.
+        SQLite 는 한 트랜잭션 안의 읽기가 이미 한 시점(첫 읽기에서 잡은 공유 잠금·스냅샷)을 본다.
+        바깥 트랜잭션이 있으면 그것을 그대로 쓴다(격리 수준을 바꾸지 않는다).
+        """
         current = self._current.get()
         if current is not None:
             yield current
             return
         with self._sessions() as session, session.begin():
+            if snapshot and self.engine.dialect.name == "postgresql":
+                # 세션이 연결을 처음 잡을 때만 적용된다. 연결을 풀에 돌려줄 때 원래 격리 수준으로 되돌린다.
+                session.connection(
+                    execution_options={"isolation_level": "REPEATABLE READ", "postgresql_readonly": True}
+                )
             token = self._current.set(session)
             try:
                 yield session

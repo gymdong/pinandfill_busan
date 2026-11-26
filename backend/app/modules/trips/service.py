@@ -93,9 +93,11 @@ class TripService:
         self.history = history if history is not None else EditHistory(InMemorySnapshotRepository())
         # Guards only the short commit step (re-read, compare, record history, save) and undo, never
         # engine/route calls. With DB repositories, `transaction` (Database.transaction) wraps that step:
-        # schedule and history writes commit or roll back together, and `get_for_update` (row lock)
-        # serializes the step across workers; this lock serializes it within the process (memory store).
-        self._lock = RLock()
+        # schedule and history writes commit or roll back together, and `get_for_update` (row lock, per
+        # trip) serializes it across threads and workers. A process-wide lock there would make unrelated
+        # trips wait behind one waiting for a pool connection or a row lock, so it is only used without a
+        # DB transaction (memory store), where it is the only serialization.
+        self._lock: AbstractContextManager[object] = RLock() if transaction is nullcontext else nullcontext()
         self.transaction = transaction
 
     def suggest(self, trip_id: str, request: SuggestWaypointsRequest) -> SuggestWaypointsResponse:
@@ -133,9 +135,9 @@ class TripService:
         return record
 
     def _read(self, trip_id: str) -> TripRecord:
-        """잠금 없는 짧은 읽기 트랜잭션. 돌아오면 트랜잭션·DB 연결을 쥐고 있지 않다."""
-        with self.transaction():
-            return self._get(trip_id)
+        """잠금 없는 읽기. 서비스 트랜잭션 밖에서 저장소를 부르므로, DB 저장소는 스냅샷 읽기 트랜잭션을
+        스스로 열고 닫는다(`SqlTripRepository.get`). 돌아오면 트랜잭션·DB 연결을 쥐고 있지 않다."""
+        return self._get(trip_id)
 
     def _edit(self, trip_id: str, compute: Callable[[TripRecord], Callable[[TripRecord], R]]) -> R:
         """읽기 → 계산 → 비교-저장. 엔진(경로 HTTP)은 잠금·트랜잭션 밖에서 돈다.
@@ -145,10 +147,16 @@ class TripService:
         다르면(계산 중 다른 편집이 저장됨) 1)부터 다시 한다. `MAX_EDIT_ATTEMPTS` 번 모두 겹치면
         `ConcurrentEditError` 이고 아무것도 저장·기록하지 않는다. 내용 비교라 같은 내용으로 되돌아온
         경우(ABA)도 같은 상태 위의 계산이므로 그대로 유효하다.
+        계산이 실패해도, 그동안 다른 편집이 저장되었다면 그 오류는 옛 일정에 대한 것이므로 다시 한다.
         """
         for _ in range(MAX_EDIT_ATTEMPTS):
             record = self._read(trip_id)
-            commit = compute(record)
+            try:
+                commit = compute(record)
+            except Exception:
+                if self._read(trip_id) != record:
+                    continue
+                raise
             with self._lock, self.transaction():
                 current = self.repository.get_for_update(trip_id)
                 if current is None:
@@ -270,8 +278,9 @@ class TripService:
     def _commit_generation(self, trip_id: str, record: TripRecord, result: EngineResult) -> None:
         """Reuse generation acceptance and EDIT compensation for both API-009 paths.
 
-        Runs only inside `_edit`'s commit step (process lock + transaction, trip row locked), so the
-        compensation below is for the memory repositories; DB repositories roll back the whole step.
+        Runs only inside `_edit`'s commit step (transaction with the trip row locked, or the process
+        lock for memory stores), so the compensation below is for the memory repositories; DB
+        repositories roll back the whole step.
         """
         self._accept(result)
         previous = self.history.latest_edit(trip_id)

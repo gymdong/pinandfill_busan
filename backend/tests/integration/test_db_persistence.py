@@ -14,6 +14,8 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from pathlib import Path
+from threading import Thread, get_ident
+from time import sleep
 from typing import Any
 
 import pytest
@@ -22,7 +24,7 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, StaticPool, event, inspect, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from alembic import command
 from app.db.models import Base, BlockRow, ScheduleSnapshotRow
@@ -36,6 +38,7 @@ from app.modules.engine.schemas import (
     SessionCoordinate,
     StoredLeg,
 )
+from app.modules.engine.service import EngineInputError
 from app.modules.trips.edit_history import (
     EditHistory,
     InMemorySnapshotRepository,
@@ -45,6 +48,7 @@ from app.modules.trips.edit_history import (
     SnapshotRepository,
 )
 from app.modules.trips.repository import FakeTripRepository, TripRecord, TripRepository
+from app.modules.trips.router import translate_error
 from app.modules.trips.schemas import DeleteBlockRequest, UndoRequest, UpdateBlockRequest
 from app.modules.trips.service import TripService
 from app.modules.trips.sql_repository import SqlSnapshotRepository, SqlTripRepository
@@ -411,6 +415,194 @@ def test_postgres_connections_get_pool_and_timeout_settings(monkeypatch: pytest.
             assert session.execute(text("SHOW lock_timeout")).scalar_one() == "1234ms"
             assert session.execute(text("SHOW statement_timeout")).scalar_one() == "5678ms"
         assert database.engine.pool.size() == 2  # type: ignore[attr-defined]
+    finally:
+        database.dispose()
+
+
+def test_empty_env_values_fall_back_to_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    names = ("DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT", "DB_LOCK_TIMEOUT_MS", "DB_STATEMENT_TIMEOUT_MS")
+    env_file = tmp_path / ".env"
+    env_file.write_text("".join(f"{name}=\n" for name in names), encoding="utf-8")
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    from_file = DatabaseSettings(_env_file=env_file)  # type: ignore[call-arg]
+    for name in names:
+        monkeypatch.setenv(name, "")
+    from_env = DatabaseSettings(_env_file=None)  # type: ignore[call-arg]
+    defaults = {"pool_timeout": 10, "lock_timeout_ms": 5000, "statement_timeout_ms": 15000}
+    assert from_file.engine_options() == from_env.engine_options() == defaults
+
+
+# ---- 잠금 없는 읽기는 한 시점의 일정을 본다(#59 리뷰) ----
+
+
+def read_with_concurrent_delete(database: Database, service: TripService) -> tuple[Any, list[BaseException]]:
+    """detail 이 blocks 를 읽은 뒤 legs 를 읽기 직전에, 다른 스레드에서 블록 삭제를 끝까지 커밋한다."""
+    reader = get_ident()
+    writer_errors: list[BaseException] = []
+
+    def interleave(connection: Any, cursor: Any, statement: str, *args: Any) -> None:
+        if get_ident() != reader or "FROM legs" not in statement or writer_errors or fired:
+            return
+        fired.append(True)
+        try:
+            in_thread(lambda: service.delete_block(TRIP, "k", DeleteBlockRequest()))
+        except Exception as error:
+            writer_errors.append(error)
+
+    fired: list[bool] = []
+    event.listen(database.engine, "before_cursor_execute", interleave)
+    try:
+        detail = service.detail(TRIP)
+    finally:
+        event.remove(database.engine, "before_cursor_execute", interleave)
+    assert fired == [True]
+    return detail, writer_errors
+
+
+@needs_postgres
+def test_detail_sees_one_snapshot_while_another_edit_commits_between_selects():
+    database = open_database("postgres")
+    upgrade(database)
+    try:
+        service, repository = db_service(database)
+        before = repository.get(TRIP)
+        assert before is not None
+
+        detail, writer_errors = read_with_concurrent_delete(database, service)
+
+        # READ COMMITTED 였다면 옛 블록 4개 + 새 구간이 섞여 EngineInputError(400) 였다.
+        assert writer_errors == []
+        assert [block.id for day in detail.schedule.days for block in day.blocks] == [
+            b.id for b in before.schedule.blocks
+        ]
+        after = repository.get(TRIP)
+        assert after is not None and "k" not in {block.id for block in after.schedule.blocks}
+    finally:
+        database.dispose()
+
+
+def test_sqlite_read_transaction_also_sees_one_snapshot(tmp_path: Path):
+    # SQLite 는 시험용이다. 읽기 트랜잭션이 첫 읽기에서 공유 잠금을 잡아, 끝날 때까지 다른 쓰기가 커밋되지 못한다.
+    database = Database(f"sqlite:///{tmp_path / 'app.db'}", connect_args={"timeout": 0.2})
+    upgrade(database)
+    try:
+        service, repository = db_service(database)
+        before = repository.get(TRIP)
+        assert before is not None
+
+        detail, writer_errors = read_with_concurrent_delete(database, service)
+
+        assert [type(error).__name__ for error in writer_errors] == ["OperationalError"]
+        assert [block.id for day in detail.schedule.days for block in day.blocks] == [
+            b.id for b in before.schedule.blocks
+        ]
+        assert repository.get(TRIP) == before
+    finally:
+        database.dispose()
+
+
+@needs_postgres
+def test_snapshot_transaction_is_repeatable_read_only_and_pool_connection_is_reset():
+    database = Database(POSTGRES_URL)
+    try:
+        with database.transaction(snapshot=True) as session:
+            assert session.execute(text("SHOW transaction_isolation")).scalar_one() == "repeatable read"
+            assert session.execute(text("SHOW transaction_read_only")).scalar_one() == "on"
+        with database.transaction() as session:
+            assert session.execute(text("SHOW transaction_isolation")).scalar_one() == "read committed"
+            assert session.execute(text("SHOW transaction_read_only")).scalar_one() == "off"
+    finally:
+        database.dispose()
+
+
+def test_edit_retries_when_compute_failed_on_a_record_that_changed_meanwhile(database: Database):
+    service, repository = db_service(database)
+
+    def edit_b_then_fail() -> None:
+        if service.engine.calls == 1:
+            in_thread(lambda: service.update_block(TRIP, "h", UpdateBlockRequest(stay_min=45)))
+            raise EngineInputError("computed on a record that is no longer current")
+
+    service.engine = InterferingEngine(service.engine, edit_b_then_fail)
+    service.update_block(TRIP, "e", UpdateBlockRequest(stay_min=60, session_coords=COORDS))
+
+    assert service.engine.calls == 2
+    edited = repository.get(TRIP)
+    assert (stay_of(edited, "h"), stay_of(edited, "e")) == (45, 60)
+
+
+# ---- 한 여행의 커밋 대기가 다른 여행을 막지 않는다(#59 리뷰) ----
+
+
+@contextmanager
+def trip_row_held(database: Database, trip_id: str) -> Iterator[None]:
+    """서비스 밖의 다른 연결이 trips 행을 잠그고 있다."""
+    with database.engine.connect() as holder:
+        holder.execute(text("SELECT id FROM trips WHERE id = :id FOR UPDATE"), {"id": uuid.UUID(trip_id)})
+        yield
+        holder.rollback()
+
+
+def wait_for_lock_waiter(database: Database) -> None:
+    for _ in range(200):
+        with database.engine.connect() as connection:
+            query = text("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
+            if connection.execute(query).scalar_one():
+                return
+        sleep(0.05)
+    pytest.fail("the edit never waited for the trip row lock")
+
+
+@needs_postgres
+def test_commit_waiting_for_one_trip_does_not_block_another_trip():
+    database = open_database("postgres")
+    upgrade(database)
+    try:
+        service, repository = db_service(database)
+        other = str(uuid.uuid4())
+        record = repository.get(TRIP)
+        assert record is not None
+        repository.save(other, record)
+        results: list[object] = []
+
+        def edit_locked_trip() -> None:
+            try:
+                results.append(service.update_block(TRIP, "e", UpdateBlockRequest(stay_min=60, session_coords=COORDS)))
+            except BaseException as error:  # noqa: BLE001 - 시험 스레드의 예외를 넘긴다
+                results.append(error)
+
+        with trip_row_held(database, TRIP):
+            waiting = Thread(target=edit_locked_trip)
+            waiting.start()
+            wait_for_lock_waiter(database)
+            # TRIP 의 커밋 단계가 행 잠금을 기다리는 동안에도 다른 여행의 편집은 끝난다(프로세스 락을 쥐지 않는다).
+            in_thread(lambda: service.update_block(other, "h", UpdateBlockRequest(stay_min=45)))
+            assert waiting.is_alive()
+        waiting.join(timeout=10)
+
+        assert not waiting.is_alive() and not isinstance(results[0], BaseException)
+        assert stay_of(repository.get(other), "h") == 45
+        assert stay_of(repository.get(TRIP), "e") == 60
+    finally:
+        database.dispose()
+
+
+@needs_postgres
+def test_lock_timeout_is_reported_as_retry_later_with_a_typed_log(caplog: pytest.LogCaptureFixture):
+    setup = open_database("postgres")
+    upgrade(setup)
+    setup.dispose()
+    database = Database(POSTGRES_URL, lock_timeout_ms=200)
+    try:
+        service, _ = db_service(database)
+        with trip_row_held(database, TRIP), pytest.raises(OperationalError) as raised:
+            service.update_block(TRIP, "e", UpdateBlockRequest(stay_min=60, session_coords=COORDS))
+        error = translate_error(raised.value)
+        assert (error.status, error.error_id) == (503, "ERR-017")
+        assert "잠시 후 다시 시도" in error.message
+        assert "trip_db_unavailable kind=lock_timeout cause=LockNotAvailable sqlstate=55P03" in caplog.text
+        assert "SELECT" not in caplog.text and TRIP not in caplog.text
     finally:
         database.dispose()
 

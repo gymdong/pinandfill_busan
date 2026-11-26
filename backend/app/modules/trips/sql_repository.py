@@ -83,10 +83,16 @@ class SqlTripRepository:
         self.database = database
 
     def get(self, trip_id: str) -> TripRecord | None:
+        """잠그지 않고 읽는다. 바깥 트랜잭션이 없으면 스냅샷 읽기 트랜잭션(`snapshot=True`)을 열어,
+        trips·blocks·legs 를 따로 읽는 사이에 다른 편집이 커밋되어도 한 시점의 일정을 돌려준다."""
         return self._load(trip_id, lock=False)
 
     def get_for_update(self, trip_id: str) -> TripRecord | None:
-        """trips 행을 트랜잭션 끝까지 잠그고 읽는다. 바깥 트랜잭션 안에서만 의미가 있다."""
+        """trips 행을 트랜잭션 끝까지 잠그고 읽는다. 바깥 트랜잭션 안에서만 의미가 있다.
+
+        일정을 쓰는 쪽(서비스 커밋 단계·되돌리기)은 모두 이 잠금을 먼저 잡으므로, 잠근 뒤의 blocks·legs
+        읽기는 READ COMMITTED 에서도 섞이지 않는다.
+        """
         if not self.database.in_transaction():
             raise RuntimeError("get_for_update needs an open transaction")
         return self._load(trip_id, lock=True)
@@ -95,7 +101,7 @@ class SqlTripRepository:
         key = _trip_key(trip_id)
         if key is None:
             return None
-        with self.database.transaction() as session:
+        with self.database.transaction(snapshot=not lock) as session:
             trip = session.get(TripRow, key, with_for_update=True if lock else None, populate_existing=True)
             if trip is None:
                 return None

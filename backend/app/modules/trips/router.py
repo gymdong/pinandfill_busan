@@ -10,9 +10,12 @@ DELETE·undo 본문은 선택이며 카카오 좌표(`sessionCoords`)만 담는�
 오류 메시지에는 요청 값을 넣지 않는다.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.concurrency import run_in_threadpool
 
 from app.modules.ai.waypoint_reason import WaypointReasonService, build_waypoint_reason_service
@@ -48,6 +51,9 @@ from app.modules.trips.service import (
 )
 
 router = APIRouter(prefix="/trips", tags=["trips"])
+logger = logging.getLogger(__name__)
+# PostgreSQL SQLSTATE: lock_timeout 초과(lock_not_available), statement_timeout 초과(query_canceled).
+DB_TIMEOUT_KINDS = {"55P03": "lock_timeout", "57014": "statement_timeout"}
 
 
 class TripAPIError(Exception):
@@ -104,6 +110,17 @@ def translate_error(exc: Exception) -> TripAPIError:
         return TripAPIError(503, "ERR-017", "다른 편집과 겹쳤습니다. 잠시 후 다시 시도해 주세요.")
     if isinstance(exc, NeedsConfirmationError):
         return TripAPIError(503, "ERR-017", "일정 계산에 필요한 장소·경로 정보를 확인해 주세요.")
+    if isinstance(exc, OperationalError | PoolTimeoutError):
+        # 종류만 남긴다. str(exc) 에는 SQL 문과 바인드 값(일정 데이터)이 들어 있다.
+        sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+        kind = (
+            "pool_timeout"
+            if isinstance(exc, PoolTimeoutError)
+            else DB_TIMEOUT_KINDS.get(sqlstate or "", "operational_error")
+        )
+        cause = type(getattr(exc, "orig", None) or exc).__name__
+        logger.warning("trip_db_unavailable kind=%s cause=%s sqlstate=%s", kind, cause, sqlstate)
+        return TripAPIError(503, "ERR-017", "저장소가 바빠 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.")
     return TripAPIError(503, "ERR-017", "일정 계산을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.")
 
 
