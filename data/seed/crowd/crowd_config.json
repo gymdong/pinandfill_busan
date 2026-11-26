@@ -1,6 +1,6 @@
 {
-  "description": "FR-008 예상 혼잡 설정. grade_percentiles 는 여유|보통|붐빔|매우 붐빔 을 가르는 백분위 경계(오름차순 3개), b_weights 는 1단계 신호 가중치. 값은 AC-009 검증으로 보정한다. avoidance 는 FR-009 혼잡 회피 배치 기준: min_confidence 미만 신뢰도의 혼잡 정보로는 위치를 바꾸지 않고, 첫 수락 위치보다 체류 구간 평균 score 가 min_gain 이상 낮을 때만 다른 위치를 고른다.",
+  "description": "FR-008 예상 혼잡 설정. grade_percentiles 는 여유|보통|붐빔|매우 붐빔 을 가르는 백분위 경계(오름차순 3개), b_weights 는 1단계 신호 가중치. 값은 AC-009 검증으로 보정한다. avoidance 는 FR-009 혼잡 회피 배치 기준: min_confidence 미만 신뢰도의 혼잡 정보로는 위치를 바꾸지 않고, 첫 수락 위치보다 체류 구간 평균 score 가 min_gain 이상 낮고 그 날 이동시간이 max_extra_travel_min(분) 이하로만 늘 때 다른 위치를 고른다. max_positions 는 첫 수락 위치 뒤로 비교할 위치 수다.",
   "grade_percentiles": [0.4, 0.7, 0.9],
   "b_weights": {"DATA-04": 1, "DATA-05": 1},
-  "avoidance": {"min_confidence": "중간", "min_gain": 0.1}
+  "avoidance": {"min_confidence": "중간", "min_gain": 0.1, "max_extra_travel_min": 15, "max_positions": 3}
 }

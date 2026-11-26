@@ -142,11 +142,12 @@ class InitialSchedulePlanner:
 
     Flexible selections are processed in caller order.  Days and insertion gaps
     are tried in ascending order.  With an injected crowd lookup whose data for
-    the place/date meets ``avoidance.min_confidence`` (FR-009, decision D1), all
-    acceptable gaps of the first workable day are compared and a gap whose stay
-    window is at least ``min_gain`` less crowded than the first one may win; no
-    waiting time is added and day assignment is unchanged.  The effect on
-    blocks shifted by the insertion is not scored (v1 limit).  An unplaced result only means this bounded
+    the place/date meets ``avoidance.min_confidence`` (FR-009, decision D1), a
+    second pass compares a few acceptable gaps of the first workable day and a
+    gap whose stay window is at least ``min_gain`` less crowded than the first
+    one may win; no waiting time is added and day assignment is unchanged.  The
+    second pass is used only if it is not worse than the first-feasible plan
+    (placed blocks, conflicts, violations).  An unplaced result only means this bounded
     policy could not verify a slot; it is not a proof that no global solution
     exists.
     """
@@ -172,10 +173,66 @@ class InitialSchedulePlanner:
         *,
         context: CalculationContext | None = None,
     ) -> InitialScheduleResult:
+        request_context = context or CalculationContext()
+        # Shared per-request memos: the crowd-adjusted pass reuses every place
+        # detail and route the first-feasible pass already fetched, and both
+        # passes draw from one lookup budget (MAX_ROUTE_LOOKUPS_PER_PLAN total).
+        details_cache: dict[tuple[str, date], TransientPlaceDetails] = {}
+        route_cache: dict[tuple[str, str, datetime, str], RouteEstimate | None] = {}
+        budget = _RouteBudget(MAX_ROUTE_LOOKUPS_PER_PLAN)
+        baseline = self._plan(command, request_context, details_cache, route_cache, budget, {})
+        crowd_by = self._usable_crowds(command)
+        if not crowd_by:
+            return baseline
+        try:
+            adjusted = self._plan(command, request_context, details_cache, route_cache, budget, crowd_by)
+        except NeedsConfirmationError:
+            adjusted = None
+        # FR-009 invariant: crowd avoidance may reorder flexible visits but never
+        # yields a plan with fewer placed blocks or more conflicts/violations
+        # than the first-feasible plan for the same input.
+        applied = adjusted is not None and self._not_worse(adjusted, baseline)
+        logger.info("initial_crowd_avoidance usable=%d applied=%s", len(crowd_by), applied)
+        return adjusted if adjusted is not None and applied else baseline
+
+    def _usable_crowds(self, command: InitialScheduleCommand) -> dict[tuple[str, int], PlaceCrowdResponse]:
+        """(block_id, day_no) → crowd data that may move that flexible block (min_confidence met)."""
+        if self.crowd is None:
+            return {}
+        day_count = (command.trip.end_date - command.trip.start_date).days + 1
+        usable: dict[tuple[str, int], PlaceCrowdResponse] = {}
+        for item in command.selections:
+            if item.fixed_window is not None:
+                continue
+            for day_no in sorted(set(item.allowed_days or range(1, day_count + 1))):
+                crowd = self._usable_crowd(item, command.trip.start_date + timedelta(days=day_no - 1))
+                if crowd is not None:
+                    usable[(item.block_id, day_no)] = crowd
+        return usable
+
+    @staticmethod
+    def _not_worse(adjusted: InitialScheduleResult, baseline: InitialScheduleResult) -> bool:
+        return (
+            len(adjusted.state.blocks) >= len(baseline.state.blocks)
+            and len(adjusted.unplaced) <= len(baseline.unplaced)
+            and len(adjusted.conflicts) <= len(baseline.conflicts)
+            and len(adjusted.violations) <= len(baseline.violations)
+            and (adjusted.confirmed or not baseline.confirmed)
+            and (adjusted.schedule is not None or baseline.schedule is None)
+        )
+
+    def _plan(
+        self,
+        command: InitialScheduleCommand,
+        request_context: CalculationContext,
+        details_cache: dict[tuple[str, date], TransientPlaceDetails],
+        route_cache: dict[tuple[str, str, datetime, str], RouteEstimate | None],
+        budget: _RouteBudget,
+        crowd_by: dict[tuple[str, int], PlaceCrowdResponse],
+    ) -> InitialScheduleResult:
         if command.trip.day_end <= command.trip.day_start:
             raise EngineInputError("Overnight trip windows need an agreed policy")
         day_count = (command.trip.end_date - command.trip.start_date).days + 1
-        request_context = context or CalculationContext()
         resolved: dict[str, _Resolved] = {}
         unplaced: list[UnplacedSelection] = []
 
@@ -196,10 +253,7 @@ class InitialSchedulePlanner:
         flexible: list[InitialSelection] = []
         extra_violations: list[Violation] = []
         extra_conflicts: list[ScheduleConflict] = []
-        details_cache: dict[tuple[str, date], TransientPlaceDetails] = {}
         accepted: dict[int, _Day] = {}
-        route_cache: dict[tuple[str, str, datetime, str], RouteEstimate | None] = {}
-        budget = _RouteBudget(MAX_ROUTE_LOOKUPS_PER_PLAN)
         exhausted = False
         previous_fixed_position: tuple[int, time] | None = None
 
@@ -228,7 +282,7 @@ class InitialSchedulePlanner:
                 raise NeedsConfirmationError("Route lookup budget exhausted by fixed selections") from None
             accepted[day_no] = checked
 
-        for selection in flexible:
+        for index, selection in enumerate(flexible):
             if exhausted:
                 unplaced.append(self._budget_unplaced(selection))
                 continue
@@ -249,12 +303,20 @@ class InitialSchedulePlanner:
                     )
                     continue
                 candidate = _Resolved(selection, duration)
-                # FR-009: with usable crowd data every acceptable gap of this day is
-                # collected and the least crowded one is chosen; otherwise the
-                # first acceptable gap wins exactly as before.
-                crowd = self._usable_crowd(selection, command.trip.start_date + timedelta(days=day_no - 1))
+                # FR-009: with usable crowd data up to `max_positions` acceptable
+                # gaps after the first one are collected and a clearly less
+                # crowded one may win; otherwise the first acceptable gap wins.
+                crowd = crowd_by.get((selection.block_id, day_no))
+                # Heuristic reserve so extra comparisons do not starve later
+                # selections: about two new legs per gap they may try.
+                reserve = (len(flexible) - index - 1) * 2 * (len(by_day[day_no]) + 2)
                 options: list[tuple[list[_Resolved], _Day]] = []
+                first_at = 0
                 for position in range(len(by_day[day_no]) + 1):
+                    if options and (
+                        position - first_at > self.avoidance.max_positions or budget.limit - budget.used < reserve
+                    ):
+                        break
                     trial = list(by_day[day_no])
                     trial.insert(position, candidate)
                     try:
@@ -271,6 +333,8 @@ class InitialSchedulePlanner:
                         amount <= baseline.get((block_id, code), -1) for block_id, code, amount in checked.failures
                     )
                     if len(checked.blocks) == len(trial) and (checked.feasible or preserves_conflicts):
+                        if not options:
+                            first_at = position
                         options.append((trial, checked))
                         if crowd is None:
                             break
@@ -370,6 +434,12 @@ class InitialSchedulePlanner:
             return None
         return duration if type(duration) is int and duration > 0 else None
 
+    @staticmethod
+    def _travel(checked: _Day) -> tuple[int, int]:
+        """(legs without a duration, total known travel minutes) of a day."""
+        durations = [leg.duration_min for leg in checked.legs]
+        return sum(value is None for value in durations), sum(value for value in durations if value is not None)
+
     def _usable_crowd(self, item: InitialSelection, on_date: date) -> PlaceCrowdResponse | None:
         """Crowd data for this place/date only when it may move a block (FR-009, min_confidence)."""
         if self.crowd is None:
@@ -387,20 +457,35 @@ class InitialSchedulePlanner:
         block_id: str,
         options: list[tuple[list[_Resolved], _Day]],
     ) -> int:
-        """Index of the chosen accepted gap; 0 (first acceptable gap) unless clearly less crowded."""
+        """Index of the chosen accepted gap; 0 (first acceptable gap) unless clearly less crowded.
+
+        A later gap is only eligible when it is feasible whenever the first one
+        is (not merely conflict-preserving), adds no unknown legs and adds at
+        most `max_extra_travel_min` of day travel.
+        """
+        first = options[0][1]
+        first_unknown, first_travel = self._travel(first)
+        eligible = [0]
+        for index, (_, checked) in enumerate(options[1:], start=1):
+            unknown, travel = self._travel(checked)
+            if first.feasible and not checked.feasible:
+                continue
+            if unknown > first_unknown or travel - first_travel > self.avoidance.max_extra_travel_min:
+                continue
+            eligible.append(index)
         windows: list[tuple[time, time]] = []
-        for _, checked in options:
-            block = next(block for block in checked.blocks if block.id == block_id)
+        for index in eligible:
+            block = next(block for block in options[index][1].blocks if block.id == block_id)
             if block.arrive_at is None or block.depart_at is None:
                 return 0
             windows.append((block.arrive_at, block.depart_at))
-        index = pick_less_crowded(
+        chosen = pick_less_crowded(
             crowd,
             windows,
             min_gain=self.avoidance.min_gain,
             min_confidence=self.avoidance.min_confidence,
         )
-        return 0 if index is None else index
+        return 0 if chosen is None else eligible[chosen]
 
     def _details(self, ref: PlaceRef, on_date: date, context: CalculationContext) -> TransientPlaceDetails:
         if isinstance(ref, KakaoPlaceRef):

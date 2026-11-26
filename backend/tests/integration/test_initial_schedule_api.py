@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app, default_crowd_service, default_trip_service
+from app.modules.crowd.avoidance import AvoidanceSettings
 from app.modules.crowd.engine_lookup import CrowdServiceLookup
 from app.modules.crowd.service import CrowdService
 from app.modules.engine.initial import InitialSchedulePlanner
@@ -347,9 +348,15 @@ def test_default_app_shares_crowd_service_with_initial_planner():
     planner = application.state.trip_service.initial_planner
     assert isinstance(planner.crowd, CrowdServiceLookup)
     assert planner.crowd._service is application.state.crowd_service
-    assert (planner.avoidance.min_confidence, planner.avoidance.min_gain) == ("중간", 0.1)
-    injected = CrowdService()
-    assert create_app(crowd_service=injected).state.trip_service.initial_planner.crowd._service is injected
+    assert planner.avoidance is application.state.crowd_service.avoidance
+    assert planner.avoidance == AvoidanceSettings(
+        min_confidence="중간", min_gain=0.1, max_extra_travel_min=15, max_positions=3
+    )
+    # 주입한 혼잡 서비스의 배치 기준을 그대로 쓴다(서로 어긋나지 않는다).
+    injected = CrowdService(avoidance=AvoidanceSettings(min_gain=0.3))
+    injected_planner = create_app(crowd_service=injected).state.trip_service.initial_planner
+    assert injected_planner.crowd._service is injected
+    assert injected_planner.avoidance.min_gain == 0.3
 
 
 def test_default_crowd_without_files_keeps_initial_response(monkeypatch, tmp_path):

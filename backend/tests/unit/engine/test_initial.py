@@ -24,6 +24,7 @@ from app.modules.engine.schemas import (
     OpeningHours,
     PublicPlaceRef,
     SessionCoordinate,
+    StoredBlock,
     TransientPlaceDetails,
     TripWindow,
 )
@@ -817,28 +818,150 @@ def test_low_confidence_moves_only_when_configured():
 
 
 def test_budget_exhausted_mid_evaluation_places_with_collected_gaps(monkeypatch):
-    # 조회 순서: y 위치 0·1 → 2건, x 위치 0 → 1건, 위치 1 → 2건(누적 5). x 위치 2(y→x) 에서 한도에 닿는다.
+    # 첫 통과(혼잡 없음)가 5건을 쓴다: y 위치 0·1 → 2건, x 위치 0 → 1건, 위치 1 → 2건.
+    # 혼잡 통과는 캐시를 재사용하고, x 위치 2(y→x) 의 새 조회에서 한도에 닿는다.
     monkeypatch.setattr(initial, "MAX_ROUTE_LOOKUPS_PER_PLAN", 5)
     planner, _, routes = crowd_setup(FakeCrowd({"x": crowd_of(X_MORNING_BUSY)}))
-    request = pin_then_two().model_copy(
-        update={"selections": (*pin_then_two().selections, selection("z", stay_min=30))}
-    )
-    result = planner.plan(request)
+    result = planner.plan(pin_then_two())
 
     assert len(routes.departures) == 5
-    # 이미 수락된 위치(a 와 y 사이)로 배치하고, 뒤 선택은 지금처럼 예산 미배치다.
+    # 이미 모은 위치(a 와 y 사이)로 배치한다. 배치 가능한 블록을 버리지 않는다.
     assert times(result)["x"] == (time(10, 45), time(12, 45))
-    assert [(item.block_id, item.reason.type) for item in result.unplaced] == [("z", "PLACEMENT_NEEDS_CHECK")]
+    assert not result.unplaced
 
 
-def test_route_lookup_cap_holds_with_full_gap_evaluation():
+def placed_count(result):
+    return len(result.state.blocks)
+
+
+@pytest.mark.parametrize("limit", [3, 5, 6, 8, 10, 12])
+def test_near_exhausted_budget_places_as_many_blocks_as_without_crowd(monkeypatch, limit):
+    monkeypatch.setattr(initial, "MAX_ROUTE_LOOKUPS_PER_PLAN", limit)
+    request = pin_then_two().model_copy(
+        update={"selections": (*pin_then_two().selections, selection("z", stay_min=30), selection("w", stay_min=30))}
+    )
+    crowd = FakeCrowd({key: crowd_of(X_MORNING_BUSY) for key in ("x", "y", "z", "w")})
+    planner, _, routes = crowd_setup(crowd)
+    result = planner.plan(request)
+    expected = crowd_setup()[0].plan(request)
+
+    assert len(routes.departures) <= limit
+    assert placed_count(result) == placed_count(expected)
+    assert len(result.unplaced) == len(expected.unplaced)
+
+
+def test_route_lookup_cap_holds_with_crowd_comparison():
     routes = CountingRoutes()
     everyone = {f"s{i}": crowd_of({h: 0.5 for h in range(9, 23)}) for i in range(MAX_INITIAL_SELECTIONS)}
     planner = InitialSchedulePlanner(BasicItineraryEngine(Places(), routes), Stays(10), crowd=FakeCrowd(everyone))
-    result = planner.plan(command(*[selection(f"s{i}") for i in range(MAX_INITIAL_SELECTIONS)], end=time(23)))
+    request = command(*[selection(f"s{i}") for i in range(MAX_INITIAL_SELECTIONS)], end=time(23))
+    result = planner.plan(request)
 
     assert routes.calls == MAX_ROUTE_LOOKUPS_PER_PLAN
+    expected = counting_setup()[0].plan(request)
+    assert placed_count(result) == placed_count(expected)
     placed = [block.id for block in result.state.blocks]
     unplaced = [item.block_id for item in result.unplaced]
     assert sorted(placed + unplaced) == sorted(f"s{i}" for i in range(MAX_INITIAL_SELECTIONS))
-    assert len(placed) == len(set(placed))
+
+
+def review_repro():
+    # #63 리뷰 재현: y(60분), x(120분, 13:15 마감, 오전 붐빔), z(60분, 10:30 마감) 순서로 넣는다.
+    return command(selection("y", stay_min=60), selection("x", stay_min=120), selection("z", stay_min=60))
+
+
+def repro_setup(crowd=None):
+    planner, places, routes = crowd_setup(crowd)
+    places.hours[("x", DAY1)] = OpeningHours(open_time=time(8), close_time=time(13, 15))
+    places.hours[("z", DAY1)] = OpeningHours(open_time=time(8), close_time=time(10, 30))
+    return planner, routes
+
+
+def test_crowd_never_makes_a_placeable_block_unplaced(caplog):
+    caplog.set_level("INFO", logger="app.modules.engine.initial")
+    planner, routes = repro_setup()
+    expected = planner.plan(review_repro())
+    assert [block.id for block in expected.state.blocks] == ["z", "x", "y"] and not expected.unplaced
+    assert len(routes.departures) == 3
+
+    # x 만 보면 y 뒤(10:15~)가 덜 붐비지만, 그러면 z 를 넣을 수 없다 → 첫 수락 결과를 쓴다.
+    crowd = FakeCrowd({"x": crowd_of({9: 0.9, 10: 0.9, 11: 0.2, 12: 0.2, 13: 0.2})})
+    planner, routes = repro_setup(crowd)
+    result = planner.plan(review_repro())
+    assert result == expected
+    # 첫 통과 3건 + 혼잡 통과의 새 조합 5건. 이미 조회한 구간은 다시 조회하지 않는다.
+    assert len(routes.departures) == 8
+    assert "initial_crowd_avoidance usable=1 applied=False" in caplog.text
+
+
+def test_crowd_result_is_never_worse_than_first_feasible():
+    for request in (pin_then_two(), review_repro()):
+        expected = repro_setup()[0].plan(request)
+        crowd = FakeCrowd({key: crowd_of(X_MORNING_BUSY) for key in ("x", "y", "z")})
+        result = repro_setup(crowd)[0].plan(request)
+        assert placed_count(result) >= placed_count(expected)
+        assert len(result.unplaced) <= len(expected.unplaced)
+        assert len(result.conflicts) <= len(expected.conflicts)
+        assert len(result.violations) <= len(expected.violations)
+        assert result.confirmed or not expected.confirmed
+
+
+class PairRoutes(Routes):
+    def __init__(self, slow):
+        super().__init__()
+        self.slow = slow
+
+    def estimate_at(self, origin, destination, *, mode, departure_at):
+        self.departures.append(departure_at)
+        pair = (origin.place_ref.place_id, destination.place_ref.place_id)
+        return RouteEstimate(self.slow.get(pair, 15), "TMAP", datetime(2026, 11, 1, tzinfo=UTC), "prediction")
+
+
+@pytest.mark.parametrize(("limit", "expected_x"), [(15, time(10, 45)), (30, time(13, 25))])
+def test_crowd_gap_with_too_much_extra_travel_is_not_chosen(limit, expected_x):
+    # y→x 가 40분이면 오후 위치의 그 날 이동시간이 25분 늘어난다.
+    routes = PairRoutes({("y", "x"): 40})
+    planner = InitialSchedulePlanner(
+        BasicItineraryEngine(Places(), routes),
+        Stays(),
+        crowd=FakeCrowd({"x": crowd_of(X_MORNING_BUSY)}),
+        avoidance=AvoidanceSettings(max_extra_travel_min=limit),
+    )
+    assert times(planner.plan(pin_then_two()))["x"][0] == expected_x
+
+
+def test_max_positions_limits_compared_gaps():
+    crowd = FakeCrowd({"x": crowd_of(X_MORNING_BUSY)})
+    planner, _, routes = crowd_setup(crowd, AvoidanceSettings(max_positions=0))
+    assert times(planner.plan(pin_then_two()))["x"] == (time(10, 45), time(12, 45))
+    expected_planner, _, expected_routes = crowd_setup()
+    expected_planner.plan(pin_then_two())
+    # 첫 수락 위치 뒤를 보지 않으므로 새 경로 조회가 없다.
+    assert routes.departures == expected_routes.departures
+
+
+def day_option(arrive, *, feasible, block_id="x"):
+    block = StoredBlock(
+        id=block_id,
+        day_no=1,
+        seq=1,
+        place_ref=PublicPlaceRef(place_id=block_id),
+        is_fixed=False,
+        stay_min=60,
+        arrive_at=arrive,
+        depart_at=time(arrive.hour + 1, arrive.minute),
+        origin="USER",
+    )
+    return [], initial._Day((block,), (), feasible, feasible)
+
+
+def test_conflict_preserving_gap_does_not_beat_a_feasible_first_gap():
+    planner = crowd_setup()[0]
+    crowd = crowd_of(X_MORNING_BUSY)
+    options = [day_option(time(10), feasible=True), day_option(time(13), feasible=False)]
+    assert planner._less_crowded(crowd, "x", options) == 0
+    # 첫 위치도 충돌을 안고 있으면(둘 다 불가능) 혼잡으로 고를 수 있다.
+    options = [day_option(time(10), feasible=False), day_option(time(13), feasible=False)]
+    assert planner._less_crowded(crowd, "x", options) == 1
+    options = [day_option(time(10), feasible=True), day_option(time(13), feasible=True)]
+    assert planner._less_crowded(crowd, "x", options) == 1

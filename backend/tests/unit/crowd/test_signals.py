@@ -68,6 +68,7 @@ def test_repo_config_file_values():
     assert config.grade_percentiles == (0.4, 0.7, 0.9)
     assert config.b_weights == {"DATA-04": 1, "DATA-05": 1}
     assert (config.avoidance.min_confidence, config.avoidance.min_gain) == ("중간", 0.1)
+    assert (config.avoidance.max_extra_travel_min, config.avoidance.max_positions) == (15, 3)
 
 
 def test_avoidance_config_values_are_used_and_validated(tmp_path):

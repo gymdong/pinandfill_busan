@@ -169,3 +169,4 @@ def test_pick_less_crowded_without_data_or_candidates():
 def test_avoidance_defaults_follow_spec():
     settings = AvoidanceSettings()
     assert (settings.min_confidence, settings.min_gain) == ("중간", 0.1)
+    assert (settings.max_extra_travel_min, settings.max_positions) == (15, 3)

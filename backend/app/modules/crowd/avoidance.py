@@ -25,6 +25,10 @@ class AvoidanceSettings(BaseModel):
     min_confidence: CrowdConfidence = "중간"
     # 첫 수락 위치보다 체류 구간 평균 score(백분위)가 이만큼 이상 낮아야 다른 위치를 고른다.
     min_gain: float = Field(default=0.1, ge=0, le=1)
+    # 첫 수락 위치보다 그 날 총 이동시간이 이만큼(분)을 넘게 늘면 고르지 않는다(경유지 우회 기본값 D5 와 같은 15분).
+    max_extra_travel_min: int = Field(default=15, ge=0)
+    # 첫 수락 위치 뒤로 비교해 볼 위치 수(경로 조회 예산 보호).
+    max_positions: int = Field(default=3, ge=0)
 
 
 def meets_confidence(crowd: PlaceCrowdResponse | None, min_confidence: CrowdConfidence) -> bool:
