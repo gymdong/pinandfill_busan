@@ -1,0 +1,167 @@
+"""DATA-06·07 날짜 배수 수집 잡(FR-008, FR-016). `BatchCollector` 의 `SourceJob` 구현.
+
+- `Data06Job`(data06): 최근 기준 기간(DATA06_BASELINE_DAYS 일, 오늘 KST − DATA06_LAG_DAYS 까지)을 하루 1회씩 받아
+  과거 날짜 배수를 만든다. 호출 수 = 기준 기간 일수.
+- `Data07Job`(data07): 대응표에 DATA-07 코드가 있는 구·군마다 1회 받아 향후 30일 날짜 배수를 만든다.
+  호출 수 = 그 구·군 수. 미래 날짜의 M 은 이 잡만 만든다.
+
+결과는 CROWD_DATA_DIR(기본 data/crowd)/crowd_multipliers.csv 에 합쳐 쓴다(`multipliers.write_multipliers`).
+쓰기는 수집기가 성공으로 판정한 뒤에만 불리므로, 한 번이라도 전송 오류가 나면 기존 파일이 그대로 남는다.
+앱은 시작 때 파일을 읽으므로 새 배수는 앱을 다시 시작해야 보인다.
+"""
+
+from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Literal
+
+import httpx
+
+from app.adapters.public_data.regions import RegionCodeError, RegionCodes, load_region_codes
+from app.adapters.public_data.settings import VisitorDataSettings
+from app.adapters.public_data.visitors import (
+    ConcentrationForecastAdapter,
+    Fetched,
+    VisitorCountAdapter,
+    VisitorTransportError,
+)
+from app.core.logging import quiet_http_client_logs
+from app.db.session import Database
+from app.modules.crowd.multipliers import day_type_ratios, write_multipliers
+from app.modules.crowd.signals import KST
+
+from ..collector import INTERRUPTED, JobOutcome
+
+Clock = Callable[[], datetime]
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class _VisitorJob:
+    source = ""
+    key_name = ""
+
+    def __init__(
+        self,
+        settings: VisitorDataSettings,
+        output_dir: Path,
+        *,
+        clock: Clock = _now,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._settings = settings
+        self._output_dir = output_dir
+        self._clock = clock
+        self._client = client
+        # 요청 URL 에 serviceKey 가 들어가므로 httpx 가 URL 을 로그에 남기지 않게 한다.
+        quiet_http_client_logs()
+
+    def _api_key(self) -> str | None:
+        raise NotImplementedError
+
+    def _regions(self) -> RegionCodes:
+        return load_region_codes(self._settings.crowd_region_codes_path)
+
+    def _http(self) -> httpx.Client:
+        return self._client or httpx.Client(timeout=self._settings.public_data_timeout_s)
+
+    def _outcome(
+        self, fetched: Fetched, calls: int, combine: Literal["sum", "mean"], as_of: datetime | None
+    ) -> JobOutcome:
+        ratios = day_type_ratios(fetched.values, combine=combine)
+
+        def write(at: datetime) -> int:
+            return write_multipliers(self._output_dir, self.source, ratios, at)
+
+        return JobOutcome(call_count=calls, rejected_count=fetched.rejected, as_of=as_of, write=write)
+
+    def _precheck(self) -> tuple[str, RegionCodes] | JobOutcome:
+        key = self._api_key()
+        if not key:
+            # 키가 없으면 호출하지 않는다(BatchSettings 와 같이 설정으로만 받는다).
+            return JobOutcome(call_count=0, error=f"{self.key_name}가 설정되지 않았습니다.")
+        try:
+            return key, self._regions()
+        except RegionCodeError as exc:
+            return JobOutcome(call_count=0, error=str(exc))
+
+
+class Data06Job(_VisitorJob):
+    source = "DATA-06"
+    key_name = "DATA06_SERVICE_KEY"
+
+    def _api_key(self) -> str | None:
+        return self._settings.data06_key()
+
+    def days(self) -> list[date]:
+        end = self._clock().astimezone(KST).date() - timedelta(days=self._settings.data06_lag_days)
+        count = self._settings.data06_baseline_days
+        return [end - timedelta(days=offset) for offset in range(count - 1, -1, -1)]
+
+    def planned_calls(self, database: Database) -> int:
+        return self._settings.data06_baseline_days
+
+    def collect(self, database: Database, should_stop: Callable[[], bool]) -> JobOutcome:
+        checked = self._precheck()
+        if isinstance(checked, JobOutcome):
+            return checked
+        key, regions = checked
+        if not regions.data06:
+            return JobOutcome(call_count=0, error="지역 코드 대응표에 DATA-06 코드가 없습니다.")
+        fetched, calls = Fetched(), 0
+        client = self._http()
+        try:
+            adapter = VisitorCountAdapter(key, regions, client, page_size=self._settings.public_data_page_size)
+            for day in self.days():
+                if should_stop():
+                    return JobOutcome(call_count=calls, rejected_count=fetched.rejected, error=INTERRUPTED)
+                calls += 1
+                fetched.add(adapter.fetch_day(day))
+        except VisitorTransportError as exc:
+            return JobOutcome(call_count=calls, rejected_count=fetched.rejected, error=str(exc))
+        finally:
+            if self._client is None:
+                client.close()
+        latest = max((day for day, _ in fetched.values), default=None)
+        as_of = datetime(latest.year, latest.month, latest.day, tzinfo=KST) if latest else None
+        return self._outcome(fetched, calls, "sum", as_of)
+
+
+class Data07Job(_VisitorJob):
+    source = "DATA-07"
+    key_name = "DATA07_SERVICE_KEY"
+
+    def _api_key(self) -> str | None:
+        return self._settings.data07_key()
+
+    def planned_calls(self, database: Database) -> int:
+        try:
+            return len(self._regions().data07)
+        except RegionCodeError:
+            return 0
+
+    def collect(self, database: Database, should_stop: Callable[[], bool]) -> JobOutcome:
+        checked = self._precheck()
+        if isinstance(checked, JobOutcome):
+            return checked
+        key, regions = checked
+        if not regions.data07:
+            return JobOutcome(call_count=0, error="지역 코드 대응표에 DATA-07 코드가 없습니다.")
+        fetched, calls = Fetched(), 0
+        client = self._http()
+        try:
+            adapter = ConcentrationForecastAdapter(key, regions, client, page_size=self._settings.public_data_page_size)
+            for region in regions.data07:
+                if should_stop():
+                    return JobOutcome(call_count=calls, rejected_count=fetched.rejected, error=INTERRUPTED)
+                calls += 1
+                fetched.add(adapter.fetch_region(region))
+        except VisitorTransportError as exc:
+            return JobOutcome(call_count=calls, rejected_count=fetched.rejected, error=str(exc))
+        finally:
+            if self._client is None:
+                client.close()
+        # 예측은 실행 시각 기준이다(as_of=None → 수집기가 실행 시각을 쓴다).
+        return self._outcome(fetched, calls, "mean", None)

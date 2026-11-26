@@ -9,11 +9,12 @@ from collections.abc import Iterator
 
 import pytest
 
+from app.adapters.public_data.settings import VisitorDataSettings
 from app.batch.settings import BatchSettings
 from app.db.session import DatabaseSettings
 from app.modules.places.source import PlaceSourceSettings
 
-# 개발자 backend/.env·셸에 있어도 시험에 새지 않게 지우는 DB·장소 출처·배치 수집(키·웹훅) 환경변수
+# 개발자 backend/.env·셸에 있어도 시험에 새지 않게 지우는 DB·장소 출처·배치 수집(키·웹훅·DATA-06/07) 환경변수
 DB_ENV_NAMES = (
     "DATABASE_URL",
     "DB_POOL_SIZE",
@@ -25,9 +26,16 @@ DB_ENV_NAMES = (
     "TOURAPI_SERVICE_KEY",
     "ADMIN_ALERT_WEBHOOK_URL",
     "BATCH_BACKOFF_BASE_MIN",
+    "DATA06_SERVICE_KEY",
+    "DATA07_SERVICE_KEY",
+    "PUBLIC_DATA_TIMEOUT_S",
+    "PUBLIC_DATA_PAGE_SIZE",
+    "DATA06_BASELINE_DAYS",
+    "DATA06_LAG_DAYS",
+    "CROWD_REGION_CODES_PATH",
 )
 # 모두 env_ignore_empty 라 빈 환경변수로는 .env 값을 막을 수 없어 .env 읽기를 끈다.
-DB_SETTINGS_CLASSES = (DatabaseSettings, PlaceSourceSettings, BatchSettings)
+DB_SETTINGS_CLASSES = (DatabaseSettings, PlaceSourceSettings, BatchSettings, VisitorDataSettings)
 
 # 수집 단계 격리: 개발자 .env 에 PLACE_DATA_SOURCE=db 가 있어도 app.main import 가 개발 DB 를 읽거나 실패하지 않는다.
 for _settings_class in DB_SETTINGS_CLASSES:
