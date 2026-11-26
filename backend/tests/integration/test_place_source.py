@@ -3,6 +3,9 @@
 SQLite(alembic)는 항상, PostgreSQL 은 TEST_DATABASE_URL 이 있을 때 돈다. 외부 API 는 부르지 않는다(카카오는 가짜).
 """
 
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from datetime import date, timedelta
 from pathlib import Path
@@ -25,6 +28,7 @@ from app.modules.trips.schemas import KakaoPlaceKey, PublicPlaceInput
 from tests.conftest import isolate_db_settings
 from tests.integration.test_db_persistence import DB_KINDS, open_database, upgrade
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 CROWD_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "crowd"
 # 월요일부터 7일: 요일별 영업시간을 모두 본다.
 WEEK = [date(2026, 11, 23) + timedelta(days=offset) for offset in range(7)]
@@ -231,3 +235,46 @@ def test_tests_do_not_read_database_settings_from_the_env_file(tmp_path: Path, m
     assert not (tmp_path / "leak.db").exists()
     # 파일을 직접 넘기는 .env 읽기 시험은 그대로 된다.
     assert DatabaseSettings(_env_file=env_file).url() is not None  # type: ignore[call-arg]
+
+
+# backend/.env 자리(설정의 env_file)를 임시 .env 로 바꾼 뒤 argv[2:] 를 실행한다. 실제 backend/.env 는 읽지 않는다.
+DEV_ENV_RUNNER = """
+import runpy, sys
+from app.db.session import DatabaseSettings
+from app.modules.places.source import PlaceSourceSettings
+for settings_class in (DatabaseSettings, PlaceSourceSettings):
+    settings_class.model_config["env_file"] = sys.argv[1]
+assert PlaceSourceSettings().place_data_source == "db" and DatabaseSettings().url()
+if sys.argv[2] == "pytest":
+    import pytest
+    sys.exit(pytest.main(sys.argv[3:]))
+import app.main
+"""
+
+
+def run_with_dev_env(env_file: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {name: value for name, value in os.environ.items() if name not in ("DATABASE_URL", "PLACE_DATA_SOURCE")}
+    return subprocess.run(
+        [sys.executable, "-c", DEV_ENV_RUNNER, str(env_file), *args],
+        cwd=BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def test_collection_ignores_a_developer_env_with_db_source(tmp_path: Path):
+    # 개발자 .env: PLACE_DATA_SOURCE=db + 장소가 없는 DB. app.main 의 모듈 수준 create_app() 이 실패하는 구성이다.
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DATABASE_URL=sqlite:///{tmp_path / 'dev.db'}\nPLACE_DATA_SOURCE=db\n", encoding="utf-8")
+
+    # 대조: 격리 없이 app.main 을 import 하면 실패한다.
+    control = run_with_dev_env(env_file, "import")
+    assert control.returncode != 0 and "no such table: places" in control.stderr
+
+    collected = run_with_dev_env(
+        env_file, "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", "tests/test_project_setup.py"
+    )
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    assert "tests/test_project_setup.py" in collected.stdout
