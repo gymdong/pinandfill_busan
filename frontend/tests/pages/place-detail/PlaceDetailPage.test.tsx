@@ -3,11 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, placesApi } from '@/api';
-import { PLACE_IDS, placeSummaries, sparseDetail, taejongdaeDetail } from '@/api/mock/fixtures/places';
+import { PLACE_IDS, placeSummaries, sparseDetail, taejongdaeCrowd, taejongdaeDetail } from '@/api/mock/fixtures/places';
 import { dayTypeOf, describeHours } from '@/features/place-detail/hours';
 import PlaceDetailPage from '@/pages/place-detail';
 import { useTripDraft } from '@/store/tripDraft';
-import type { PlaceDetailResponse } from '@/types/api';
+import type { PlaceCrowdResponse, PlaceDetailResponse } from '@/types/api';
 
 function renderAt(path: string | string[], initialIndex?: number) {
   render(
@@ -27,8 +27,13 @@ function mockDetail(detail: PlaceDetailResponse) {
 
 const PATH = `/places/${PLACE_IDS.taejongdae}`;
 
+const NO_CROWD: PlaceCrowdResponse = { hours: [], confidence: '없음', asOf: null, sources: [], signals: [] };
+
 describe('UI-04 장소 상세', () => {
-  beforeEach(() => useTripDraft.getState().reset());
+  beforeEach(() => {
+    useTripDraft.getState().reset();
+    vi.spyOn(placesApi, 'getCrowd').mockResolvedValue(taejongdaeCrowd);
+  });
 
   it('장소 ID와 날짜로 상세를 불러와 이름·분류·그날 영업시간을 보여 준다', async () => {
     const get = mockDetail(taejongdaeDetail);
@@ -40,7 +45,34 @@ describe('UI-04 장소 상세', () => {
     const info = screen.getByRole('region', { name: '운영 정보' });
     expect(within(info).getByText('10월 17일 (토)')).toBeInTheDocument();
     expect(within(info).getAllByText('09:00 – 18:00').length).toBeGreaterThan(0);
-    expect(within(info).getByText('예상 붐빔')).toBeInTheDocument();
+  });
+
+  it('API-012 시간대별 예상 혼잡을 같은 장소·날짜로 불러와 그래프 하나로만 보여 준다(FR-008, AC-008)', async () => {
+    mockDetail(taejongdaeDetail);
+    const getCrowd = vi.mocked(placesApi.getCrowd);
+    renderAt(`${PATH}?date=2026-10-17`);
+
+    const chart = await screen.findByRole('region', { name: '시간대별 예상 혼잡' });
+    expect(getCrowd.mock.calls[0]!.slice(0, 2)).toEqual([PLACE_IDS.taejongdae, '2026-10-17']);
+    expect(within(chart).getByText('13시')).toBeInTheDocument();
+    expect(within(chart).getAllByText('예상 붐빔').length).toBeGreaterThan(0);
+    // API-005 의 혼잡 요약 행은 그래프와 엇갈리지 않도록 없앴다.
+    expect(within(screen.getByRole('region', { name: '운영 정보' })).queryByText(/예상/)).not.toBeInTheDocument();
+  });
+
+  it('예상 혼잡을 불러오지 못해도 장소 상세는 보이고 그래프 자리는 정보 부족·다시 시도로 둔다', async () => {
+    mockDetail(taejongdaeDetail);
+    const getCrowd = vi
+      .mocked(placesApi.getCrowd)
+      .mockRejectedValueOnce(new ApiError({ id: 'ERR-011', status: 503 }));
+    renderAt(PATH);
+
+    const chart = await screen.findByRole('region', { name: '시간대별 예상 혼잡' });
+    expect(screen.getByRole('heading', { name: '태종대' })).toBeInTheDocument();
+    expect(within(chart).getByText('정보 부족')).toBeInTheDocument();
+    await userEvent.click(within(chart).getByRole('button', { name: '다시 시도' }));
+    expect(await screen.findByText('13시')).toBeInTheDocument();
+    expect(getCrowd).toHaveBeenCalledTimes(2);
   });
 
   it('실내외 정보가 없으면 분류만 보여 준다(NFR-012)', async () => {
@@ -72,12 +104,13 @@ describe('UI-04 장소 상세', () => {
 
   it('영업시간·사진·혼잡 근거가 없으면 값을 만들지 않고 확인 필요·사진 없음·정보 부족으로 표시한다(NFR-012)', async () => {
     mockDetail(sparseDetail(placeSummaries.millakPark));
+    vi.mocked(placesApi.getCrowd).mockResolvedValue(NO_CROWD);
     renderAt(`/places/${PLACE_IDS.millakPark}?date=2026-10-17`);
 
     await screen.findByRole('heading', { name: '민락수변공원' });
     expect(screen.getByText('영업시간 확인 필요')).toBeInTheDocument();
     expect(screen.getByText('사진 없음')).toBeInTheDocument();
-    expect(screen.getByText('정보 부족')).toBeInTheDocument();
+    expect(await screen.findByText('정보 부족')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.queryByText('요일별 운영시간')).not.toBeInTheDocument();
   });
@@ -132,12 +165,13 @@ describe('UI-04 장소 상세', () => {
     expect(await screen.findByText('여행 시작 화면')).toBeInTheDocument();
   });
 
-  it('장소 정보의 출처와 기준일, 혼잡 근거를 표시한다(NFR-007)', async () => {
+  it('장소 정보의 출처와 기준일, 예상 혼잡의 출처를 표시한다(NFR-007)', async () => {
     mockDetail(taejongdaeDetail);
     renderAt(PATH);
     const sources = await screen.findByRole('region', { name: '출처' });
     expect(sources).toHaveTextContent('장소 정보 한국관광공사 · 10월 13일 (화) 기준');
-    expect(sources).toHaveTextContent('혼잡 근거 행정동 생활인구, 도시철도 승하차');
+    const chart = await screen.findByRole('region', { name: '시간대별 예상 혼잡' });
+    expect(chart).toHaveTextContent('예시 데이터 · 행정동 생활인구, 예시 데이터 · 도시철도 승하차');
   });
 
   it('출처 기준일이 없으면 기관명은 두고 기준일을 확인 필요로 표시한다(NFR-007·012)', async () => {

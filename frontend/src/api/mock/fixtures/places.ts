@@ -168,10 +168,16 @@ export const taejongdaeCrowd: PlaceCrowdResponse = {
   ],
   confidence: '중간',
   asOf: AS_OF,
-  sources: ['행정동 생활인구', '도시철도 승하차'],
+  // 화면 확인용 예시 값이다. 실제 공공 자료로 계산한 결과가 아님을 문구에 드러낸다.
+  sources: ['예시 데이터 · 행정동 생활인구', '예시 데이터 · 도시철도 승하차'],
   signals: [
-    { source: 'DATA-04', label: '예시 데이터 · 행정동 생활인구(시간대)', refPeriod: null, detail: null },
-    { source: 'DATA-05', label: '예시 데이터 · 도시철도 시간대별 승하차', refPeriod: null, detail: null },
+    {
+      source: 'DATA-04',
+      label: '예시 데이터 · 행정동 생활인구(시간대)',
+      refPeriod: '2026-09',
+      detail: '예시 값 · 주말 시간대별 상대값',
+    },
+    { source: 'DATA-05', label: '예시 데이터 · 도시철도 시간대별 승하차', refPeriod: '2026-09', detail: null },
   ],
 };
 

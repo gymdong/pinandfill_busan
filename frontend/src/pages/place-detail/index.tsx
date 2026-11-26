@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { placesApi } from '@/api';
 import { paths } from '@/app/paths';
 import { Badge, Button, ErrorState, LoadingState } from '@/components';
-import { CrowdBadge } from '@/features/crowd';
+import { CrowdHourlyChart } from '@/features/crowd';
 import { DAY_LABEL, WEEK_ORDER, dayTypeOf, describeHours, hoursFor } from '@/features/place-detail/hours';
 import { useApi } from '@/hooks/useApi';
 import { PINNED_LIMIT, PINNED_LIMIT_MESSAGE, pinnedKey, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
@@ -11,7 +11,7 @@ import type { PlaceDetailResponse, PlacePhoto } from '@/types/api';
 import { formatDate } from '@/utils/format';
 import styles from './PlaceDetailPage.module.css';
 
-/** UI-04 장소 상세: 영업시간 확인(FR-001), 사진과 출처·저작권(FR-014), 출처·기준일(NFR-007) */
+/** UI-04 장소 상세: 영업시간 확인(FR-001), 시간대별 예상 혼잡(FR-008), 사진과 출처·저작권(FR-014), 출처·기준일(NFR-007) */
 export default function PlaceDetailPage() {
   const { placeId = '' } = useParams();
   const [searchParams] = useSearchParams();
@@ -45,7 +45,7 @@ export default function PlaceDetailPage() {
 }
 
 function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: string | null }) {
-  const { place, hours, photos, crowd, sources } = detail;
+  const { place, hours, photos, sources } = detail;
   const { pinned, addPinned, removePinned } = useTripDraft();
   const asPinned: PinnedPlace = {
     kind: 'PUBLIC',
@@ -110,13 +110,11 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
             <span className={styles.rowValue}>{place.closedDaysText}</span>
           </div>
         )}
-        <div className={styles.row}>
-          <span className={styles.rowLabel}>예상 혼잡</span>
-          <span className={styles.rowValue}>
-            <CrowdBadge grade={crowd?.grade ?? null} confidence={crowd?.confidence} />
-          </span>
-        </div>
       </section>
+
+      <div className={styles.crowd}>
+        <PlaceCrowd placeId={place.id} date={date} />
+      </div>
 
       <section className={styles.sources} aria-label="출처">
         {sources.length > 0 ? (
@@ -131,7 +129,6 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
         ) : (
           <p>출처 정보 없음</p>
         )}
-        {crowd?.grade && crowd.sources.length > 0 && <p>혼잡 근거 {crowd.sources.join(', ')}</p>}
       </section>
 
       <div className={styles.actions}>
@@ -147,6 +144,18 @@ function PlaceDetail({ detail, date }: { detail: PlaceDetailResponse; date: stri
       </div>
     </>
   );
+}
+
+/** API-012 시간대별 예상 혼잡. 불러오지 못해도 장소 상세는 그대로 두고 그래프 자리만 '정보 부족'으로 둔다. */
+function PlaceCrowd({ placeId, date }: { placeId: string; date: string | null }) {
+  const load = useCallback(
+    (signal: AbortSignal) => placesApi.getCrowd(placeId, date ?? undefined, { signal }),
+    [placeId, date],
+  );
+  const { status, data, reload } = useApi(load);
+
+  if (status === 'loading') return <p className={styles.crowdLoading}>예상 혼잡을 불러오는 중이에요</p>;
+  return status === 'success' ? <CrowdHourlyChart crowd={data} /> : <CrowdHourlyChart crowd={null} onRetry={reload} />;
 }
 
 /** 대표 사진을 먼저 보여 주고 사진마다 출처와 저작권 유형을 표시한다. 없으면 다른 출처에서 가져오지 않는다(FR-014). */
