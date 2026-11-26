@@ -5,7 +5,9 @@ from __future__ import annotations
 import http.client
 import json
 import math
+import os
 import ssl
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -19,9 +21,23 @@ from app.adapters.route.quota import MAX_PAUSE_SECONDS
 _ALLOWED_HOSTS = frozenset({"apis.openapi.sk.com", "api.odsay.com"})
 _TMAP_VERSIONED_PATHS = frozenset({"/tmap/routes", "/tmap/routes/pedestrian", "/tmap/routes/prediction"})
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-# Python 기본 인증서 저장소는 배포판마다 달라(uv 가 설치한 macOS Python 은 TMAP 체인을 검증하지 못했다)
-# 카카오 어댑터(httpx)와 같은 certifi 저장소로 검증한다. 검증 자체는 끄지 않는다.
-_TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
+
+def build_tls_context(environ: Mapping[str, str] | None = None) -> ssl.SSLContext:
+    """카카오·Gemini 가 쓰는 httpx 와 같은 순서로 신뢰 저장소를 고른다. 검증 자체는 끄지 않는다.
+
+    Python 기본 저장소는 배포판마다 달라(uv 가 설치한 macOS Python 은 TMAP 체인을 검증하지 못했다)
+    기본은 certifi 를 쓰고, 사내 프록시처럼 SSL_CERT_FILE·SSL_CERT_DIR 을 둔 환경은 그 값을 따른다.
+    """
+    env = os.environ if environ is None else environ
+    if env.get("SSL_CERT_FILE"):
+        return ssl.create_default_context(cafile=env["SSL_CERT_FILE"])
+    if env.get("SSL_CERT_DIR"):
+        return ssl.create_default_context(capath=env["SSL_CERT_DIR"])
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+_TLS_CONTEXT = build_tls_context()
 
 
 class TransportError(Exception):

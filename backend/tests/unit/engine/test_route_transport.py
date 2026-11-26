@@ -246,3 +246,24 @@ def test_https_uses_certifi_store_with_verification_on():
     assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
     expected = ssl.create_default_context(cafile=certifi.where())
     assert context.cert_store_stats()["x509_ca"] == expected.cert_store_stats()["x509_ca"]
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({}, "certifi"),
+        ({"SSL_CERT_FILE": "", "SSL_CERT_DIR": ""}, "certifi"),
+        ({"SSL_CERT_FILE": "/etc/corp.pem"}, {"cafile": "/etc/corp.pem"}),
+        ({"SSL_CERT_DIR": "/etc/corp-certs"}, {"capath": "/etc/corp-certs"}),
+        ({"SSL_CERT_FILE": "/etc/corp.pem", "SSL_CERT_DIR": "/etc/corp-certs"}, {"cafile": "/etc/corp.pem"}),
+    ],
+)
+def test_tls_store_follows_httpx_env_precedence(environ, expected):
+    import certifi
+
+    from app.adapters.route import transport
+
+    calls = []
+    with patch.object(transport.ssl, "create_default_context", lambda **kw: calls.append(kw) or object()):
+        transport.build_tls_context(environ)
+    assert calls == [{"cafile": certifi.where()} if expected == "certifi" else expected]
