@@ -1,0 +1,6 @@
+# 시험용 가짜 값(TEST FIXTURE). 실제 공공데이터가 아니다. 운영 경로 data/crowd/ 에 복사하지 않는다.
+ref_month,station_code,station_name,day_type,hour,boardings,alightings
+2026-05,TEST-STN-P,시험역,WEEKEND,10,30,20
+2026-05,TEST-STN-P,시험역,WEEKEND,11,33,22
+2026-05,TEST-STN-P,시험역,WEEKEND,12,36,24
+2026-05,TEST-STN-P,시험역,WEEKEND,13,39,26

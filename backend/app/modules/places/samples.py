@@ -37,6 +37,8 @@ class SamplePlace:
     source_org: str | None = None
     # 공공 데이터의 장소 설명(description 열, 있으면). 분위기 추천의 근거 문장은 여기서 원문 그대로 발췌한다.
     description: str | None = None
+    # 표본 CSV 의 주소(address 열). 예상 혼잡의 날짜 배수 지역(구·군)을 고를 때 쓴다.
+    address: str | None = None
 
 
 class SamplePlaceData:
@@ -166,6 +168,7 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
                 closed_days_text=row.get("closed_days_raw") or None,
                 source_org=row.get("source_label_original") or None,
                 description=row.get("description") or None,
+                address=row.get("address") or None,
             )
         )
     if skipped:

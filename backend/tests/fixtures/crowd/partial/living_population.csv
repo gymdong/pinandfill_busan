@@ -1,0 +1,6 @@
+# 시험용 가짜 값(TEST FIXTURE). 실제 공공데이터가 아니다. 운영 경로 data/crowd/ 에 복사하지 않는다.
+ref_month,adm_dong_code,day_type,hour,population
+2026-10,TEST-DONG-P,WEEKDAY,10,100
+2026-10,TEST-DONG-P,WEEKDAY,11,110
+2026-10,TEST-DONG-P,WEEKDAY,12,120
+2026-10,TEST-DONG-P,WEEKDAY,13,130

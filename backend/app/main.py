@@ -15,6 +15,13 @@ from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
 from app.db.session import Database, DatabaseSettings
+from app.modules.crowd.file_provider import (
+    FileCrowdProvider,
+    crowd_config_from_env,
+    crowd_dir_from_env,
+    district,
+)
+from app.modules.crowd.service import CrowdService
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
@@ -59,6 +66,19 @@ def default_trip_service(places: SamplePlaceData) -> TripService:
     )
 
 
+def default_crowd_service(places: SamplePlaceData) -> CrowdService:
+    """data/crowd/(또는 CROWD_DATA_DIR)의 정규화 CSV 로 예상 혼잡을 계산한다. 파일이 없으면 정보 부족이다.
+
+    설정은 data/seed/crowd/crowd_config.json(또는 CROWD_CONFIG_PATH). 설정이 없거나 잘못되면 앱 시작이 실패한다.
+    """
+
+    def region_of(place_id: str) -> str | None:
+        item = places.place(place_id)
+        return district(item.address) if item is not None else None
+
+    return CrowdService(FileCrowdProvider.from_dir(crowd_dir_from_env(), region_of, crowd_config_from_env()))
+
+
 def kakao_settings() -> KakaoSettings | None:
     """KAKAO_REST_API_KEY 가 없거나 비어 있으면(공백뿐인 값 포함) None. 장소 검색은 그때 지금처럼 503(ERR-017)이다.
 
@@ -84,6 +104,7 @@ def create_app(
     trip_service: TripService | None = None,
     place_search_service: PlaceSearchService | None = None,
     place_detail_service: PlaceDetailService | None = None,
+    crowd_service: CrowdService | None = None,
 ) -> FastAPI:
     """주입하지 않은 서비스는 기본 구성으로 만든다.
 
@@ -92,13 +113,17 @@ def create_app(
     """
     config = settings if settings is not None else Settings.from_env()
     # 주입하지 않은 서비스만 기본 구성으로 만든다. 만들 때 외부 API 를 호출하지 않는다.
-    needs_places = trip_service is None or place_search_service is None or place_detail_service is None
+    needs_places = (
+        trip_service is None or place_search_service is None or place_detail_service is None or crowd_service is None
+    )
     places = load_sample_places() if needs_places else None
     if trip_service is None and places is not None:
         trip_service = default_trip_service(places)
     # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
     if place_detail_service is None and places is not None:
         place_detail_service = PlaceDetailService(SamplePlaceDetails(places, load_place_photos()))
+    if crowd_service is None and places is not None:
+        crowd_service = default_crowd_service(places)
     kakao = kakao_settings() if place_search_service is None else None
 
     @asynccontextmanager
@@ -120,6 +145,7 @@ def create_app(
     application.state.trip_service = trip_service
     application.state.place_search_service = place_search_service
     application.state.place_detail_service = place_detail_service
+    application.state.crowd_service = crowd_service
 
     @application.exception_handler(TripAPIError)
     async def trip_error(request: Request, exc: TripAPIError) -> JSONResponse:

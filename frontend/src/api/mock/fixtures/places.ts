@@ -169,6 +169,10 @@ export const taejongdaeCrowd: PlaceCrowdResponse = {
   confidence: '중간',
   asOf: AS_OF,
   sources: ['행정동 생활인구', '도시철도 승하차'],
+  signals: [
+    { source: 'DATA-04', label: '예시 데이터 · 행정동 생활인구(시간대)', refPeriod: null, detail: null },
+    { source: 'DATA-05', label: '예시 데이터 · 도시철도 시간대별 승하차', refPeriod: null, detail: null },
+  ],
 };
 
 export const waypointCandidates: WaypointCandidate[] = [

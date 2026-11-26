@@ -1,0 +1,3 @@
+# 시험용 가짜 값(TEST FIXTURE). 실제 공공데이터가 아니다. 운영 경로 data/crowd/ 에 복사하지 않는다.
+date,region,multiplier,source,computed_at
+2026-11-28,영도구,1.5,DATA-06,2026-11-24T06:00:00+09:00

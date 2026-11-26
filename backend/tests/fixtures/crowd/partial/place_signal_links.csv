@@ -1,0 +1,4 @@
+# 시험용 가짜 값(TEST FIXTURE). 실제 공공데이터가 아니다. 운영 경로 data/crowd/ 에 복사하지 않는다.
+place_id,signal,key,note
+126658,DATA-04,TEST-DONG-P,시험용 연결
+126658,DATA-05,TEST-STN-P,시험용 연결
