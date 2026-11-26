@@ -61,7 +61,7 @@ class KakaoPlaceRef(ContractModel):
     """The complete set of Kakao search data allowed in persistent state."""
 
     kind: Literal["KAKAO"] = "KAKAO"
-    kakao_place_id: str = Field(pattern=r"^[0-9]+$")
+    kakao_place_id: str = Field(pattern=r"^[0-9]+$", max_length=32)
     kakao_place_url: HttpUrl = Field(
         alias="placeUrl",
         validation_alias=AliasChoices("placeUrl", "kakaoPlaceUrl", "kakao_place_url"),
