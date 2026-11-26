@@ -15,6 +15,10 @@ class TripRecord:
 class TripRepository(Protocol):
     def get(self, trip_id: str) -> TripRecord | None: ...
 
+    def get_for_update(self, trip_id: str) -> TripRecord | None:
+        """Read for the short commit step. DB implementations lock the trip row until the transaction ends."""
+        ...
+
     def save(self, trip_id: str, record: TripRecord) -> None: ...
 
 
@@ -26,6 +30,10 @@ class FakeTripRepository:
 
     def get(self, trip_id: str) -> TripRecord | None:
         return self._records.get(trip_id)
+
+    def get_for_update(self, trip_id: str) -> TripRecord | None:
+        # TripService's process lock already serializes the commit step for this local store.
+        return self.get(trip_id)
 
     def save(self, trip_id: str, record: TripRecord) -> None:
         self._records[trip_id] = record

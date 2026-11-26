@@ -4,8 +4,9 @@
   실패하면 함께 롤백되므로 `EditHistory` 의 보상 동작(`restore`)이 남긴 쓰기도 커밋되지 않는다.
 - 쓰기는 SAVEPOINT 안에서 한다. 쓰기가 DB 오류로 실패해도 세션이 계속 쓸 수 있는 상태로 남아,
   서비스의 보상 코드가 원래 예외를 가리지 않는다.
-- 트랜잭션 안의 `get` 은 trips 행을 잠근다(SELECT ... FOR UPDATE). 워커가 여러 개여도 한 여행의
-  읽기-계산-저장이 직렬화된다. 서비스의 RLock 은 같은 프로세스 안에서만 유효하다.
+- `get` 은 잠그지 않는다. `get_for_update` 는 trips 행을 잠근다(SELECT ... FOR UPDATE) — 서비스의
+  짧은 커밋 단계(다시 읽어 비교 → 저장)에서만, 트랜잭션 안에서 부른다. 경로 조회(HTTP)는 그 밖에서 하므로
+  잠금·연결을 오래 쥐지 않는다. 워커가 여러 개여도 한 여행의 비교-저장은 행 잠금으로 직렬화된다.
 - 장소 참조(공공 장소 ID, 카카오 ID·URL)만 저장한다. 카카오 장소명·좌표는 도메인 상태에 없으므로 저장되지 않는다.
   근거: SDD 출처 구분 USER_SELECTED("일정에 필요한 최소 필드만 저장", D6). 카카오 응답 본문은 저장하지 않는다.
   D6(카카오 문의) 결과 ID·URL 도 저장할 수 없게 되면 이 두 열과 메모리 저장소를 함께 바꾼다.
@@ -82,11 +83,25 @@ class SqlTripRepository:
         self.database = database
 
     def get(self, trip_id: str) -> TripRecord | None:
+        """잠그지 않고 읽는다. 바깥 트랜잭션이 없으면 스냅샷 읽기 트랜잭션(`snapshot=True`)을 열어,
+        trips·blocks·legs 를 따로 읽는 사이에 다른 편집이 커밋되어도 한 시점의 일정을 돌려준다."""
+        return self._load(trip_id, lock=False)
+
+    def get_for_update(self, trip_id: str) -> TripRecord | None:
+        """trips 행을 트랜잭션 끝까지 잠그고 읽는다. 바깥 트랜잭션 안에서만 의미가 있다.
+
+        일정을 쓰는 쪽(서비스 커밋 단계·되돌리기)은 모두 이 잠금을 먼저 잡으므로, 잠근 뒤의 blocks·legs
+        읽기는 READ COMMITTED 에서도 섞이지 않는다.
+        """
+        if not self.database.in_transaction():
+            raise RuntimeError("get_for_update needs an open transaction")
+        return self._load(trip_id, lock=True)
+
+    def _load(self, trip_id: str, *, lock: bool) -> TripRecord | None:
         key = _trip_key(trip_id)
         if key is None:
             return None
-        lock = self.database.in_transaction()
-        with self.database.transaction() as session:
+        with self.database.transaction(snapshot=not lock) as session:
             trip = session.get(TripRow, key, with_for_update=True if lock else None, populate_existing=True)
             if trip is None:
                 return None

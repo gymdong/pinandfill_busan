@@ -23,7 +23,7 @@ from app.modules.crowd.file_provider import (
     district,
 )
 from app.modules.crowd.service import CrowdService
-from app.modules.crowd.signals import load_config
+from app.modules.crowd.signals import load_config, load_inputs
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
@@ -58,14 +58,16 @@ def default_trip_service(places: SamplePlaceData, *, crowd_service: CrowdService
         engine,
         PublicStayDurations(places.stay_min),
         crowd=CrowdServiceLookup(crowd_service) if crowd_service is not None else None,
-        avoidance=load_config(crowd_config_from_env()).avoidance if crowd_service is not None else None,
+        # 혼잡 계산과 같은 설정 파일에서 읽은 값을 서비스가 들고 있다(둘이 어긋나지 않게).
+        avoidance=crowd_service.avoidance if crowd_service is not None else None,
     )
-    url = DatabaseSettings().url()
+    settings = DatabaseSettings()
+    url = settings.url()
     if url is None:
         # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포에는 DATABASE_URL 을 설정한다.
         logger.warning("trip storage is in-memory (DATABASE_URL unset): trips and undo history are lost on restart")
         return TripService(FakeTripRepository({}), engine, places.stay_min, initial_planner=initial_planner)
-    database = Database(url)
+    database = Database(url, **settings.engine_options())
     return TripService(
         SqlTripRepository(database),
         engine,
@@ -86,7 +88,9 @@ def default_crowd_service(places: SamplePlaceData) -> CrowdService:
         item = places.place(place_id)
         return district(item.address) if item is not None else None
 
-    return CrowdService(FileCrowdProvider.from_dir(crowd_dir_from_env(), region_of, crowd_config_from_env()))
+    config = load_config(crowd_config_from_env())
+    provider = FileCrowdProvider(load_inputs(crowd_dir_from_env()), config, region_of)
+    return CrowdService(provider, avoidance=config.avoidance)
 
 
 def kakao_settings() -> KakaoSettings | None:

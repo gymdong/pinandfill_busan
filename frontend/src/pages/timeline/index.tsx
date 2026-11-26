@@ -10,7 +10,7 @@ import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
 import { blockRole, formatDayDate, formatDuration, legBetween, legLabel, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
 import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, UndoIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
-import type { Block, BlockCrowd, Schedule, ScheduleDay, Violation } from '@/types/api';
+import type { Block, BlockCrowd, IsoDate, Schedule, ScheduleDay, Violation } from '@/types/api';
 import styles from './TimelinePage.module.css';
 
 export default function TimelinePage() {
@@ -137,7 +137,7 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
     const next = blocks[index + 1];
     const leg = legBetween(day.legs, block, next);
     return <li key={block.id}>
-      <BlockCard block={block} crowd={day.crowd.find((item) => item.blockId === block.id)} selected={selected === block.id} onSelect={() => onSelect(block.id)}>
+      <BlockCard block={block} date={day.date} crowd={day.crowd.find((item) => item.blockId === block.id)} selected={selected === block.id} onSelect={() => onSelect(block.id)}>
         {selected === block.id && <BlockEditor key={block.id} tripId={tripId} block={block} disabled={pending} onChange={onChange} />}
       </BlockCard>
       {next && <div className={styles.between}>
@@ -168,8 +168,10 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
   })}</ol>;
 }
 
-function BlockCard({ block, crowd, selected, onSelect, children }: {
+function BlockCard({ block, date, crowd, selected, onSelect, children }: {
   block: Block;
+  /** 그 블록이 있는 날. 장소 상세가 이 날의 영업시간·예상 혼잡을 보이게 넘긴다. */
+  date: IsoDate;
   crowd: BlockCrowd | undefined;
   selected: boolean;
   onSelect(): void;
@@ -195,6 +197,7 @@ function BlockCard({ block, crowd, selected, onSelect, children }: {
       {/* 화면을 열 때 모든 칩을 읽지 않도록 알림(role=alert)은 위 요약 카드에만 둔다. */}
       {block.warnings.map((item, i) => <span className={styles.warnChip} key={i}>{item.cause}</span>)}
       {/* D6: 이번 접속에서 고르지 않은 카카오 장소는 place_url을 외부 브라우저로 연다. */}
+      {block.place.source === 'PUBLIC' && <Link className={styles.placeLink} to={paths.placeDetail(block.place.id, date)} aria-label={`${block.place.name} 장소 상세 보기`}>장소 상세 보기</Link>}
       {kakaoLink && <a className={styles.placeLink} href={kakaoLink} target="_blank" rel="noopener noreferrer">카카오맵에서 장소 확인 (새 창)</a>}
     </div>
     {children}
