@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from threading import RLock
+from typing import TypeVar
 
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.interfaces import EngineResult, ItineraryEngine
@@ -37,6 +38,11 @@ from app.modules.trips.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# 편집 한 번이 다른 편집과 겹쳤을 때 처음(읽기)부터 다시 하는 최대 횟수. 재시도마다 경로 조회를 다시 한다.
+MAX_EDIT_ATTEMPTS = 3
+
+R = TypeVar("R")
+
 
 class TripNotFoundError(Exception):
     pass
@@ -61,6 +67,10 @@ class InitialScheduleExistsError(PolicyRequiredError):
     """Initial generation cannot overwrite existing blocks or legs."""
 
 
+class ConcurrentEditError(Exception):
+    """같은 여행의 다른 편집이 계산 도중 저장되기를 `MAX_EDIT_ATTEMPTS` 번 되풀이했다. 아무것도 저장하지 않았다."""
+
+
 class TripService:
     def __init__(
         self,
@@ -81,43 +91,79 @@ class TripService:
         # 기본값은 로컬 Fake 저장소(FakeTripRepository)와 짝을 이루는 메모리 이력이다.
         # DB 저장소를 붙일 때 schedule_snapshots 를 쓰는 SnapshotRepository 구현으로 바꿔 주입해야 한다.
         self.history = history if history is not None else EditHistory(InMemorySnapshotRepository())
-        # Serializes edits of this local Fake service, including read/compute/save.
-        # With DB repositories, `transaction` (Database.transaction) wraps each call: schedule and
-        # history writes commit together or roll back together, and the trip row lock serializes workers.
-        self._lock = RLock()
+        # Guards only the short commit step (re-read, compare, record history, save) and undo, never
+        # engine/route calls. With DB repositories, `transaction` (Database.transaction) wraps that step:
+        # schedule and history writes commit or roll back together, and `get_for_update` (row lock, per
+        # trip) serializes it across threads and workers. A process-wide lock there would make unrelated
+        # trips wait behind one waiting for a pool connection or a row lock, so it is only used without a
+        # DB transaction (memory store), where it is the only serialization.
+        self._lock: AbstractContextManager[object] = RLock() if transaction is nullcontext else nullcontext()
         self.transaction = transaction
 
     def suggest(self, trip_id: str, request: SuggestWaypointsRequest) -> SuggestWaypointsResponse:
-        with self._lock, self.transaction():
-            record = self._get(trip_id)
-            if self.recommender is None:
-                raise NeedsConfirmationError("Waypoint providers are not configured")
-            return self.recommender.suggest(record, request, calculation_context(request))
+        """쓰지 않으므로 잠금 없이 읽고, 후보 계산(경로 조회 포함)은 트랜잭션 밖에서 한다."""
+        record = self._read(trip_id)
+        if self.recommender is None:
+            raise NeedsConfirmationError("Waypoint providers are not configured")
+        return self.recommender.suggest(record, request, calculation_context(request))
 
     def detail(self, trip_id: str) -> TripDetailResponse:
-        """API-026. 저장된 일정을 다시 계산하지 않고 투영한다(경로 조회 없음). GET 이라 카카오 좌표는 받지 않는다."""
-        with self._lock, self.transaction():
-            record = self._get(trip_id)
-            result = self.engine.project(
-                ValidateInput(trip=record.trip, schedule=record.schedule), context=CalculationContext()
-            )
-            trip = record.trip
-            return TripDetailResponse(
-                trip=TripDetail(
-                    id=trip_id,
-                    dates=TripDates(start=trip.start_date, end=trip.end_date),
-                    day_start=trip.day_start,
-                    day_end=trip.day_end,
-                    mode=trip.transport_mode,
-                ),
-                schedule=result.schedule,
-            )
+        """API-026. 저장된 일정을 다시 계산하지 않고 투영한다(경로 조회 없음). GET 이라 카카오 좌표는 받지 않는다.
+
+        잠그지 않는다(FOR UPDATE·프로세스 락 없음). 짧은 읽기 트랜잭션 하나만 연다.
+        """
+        record = self._read(trip_id)
+        result = self.engine.project(
+            ValidateInput(trip=record.trip, schedule=record.schedule), context=CalculationContext()
+        )
+        trip = record.trip
+        return TripDetailResponse(
+            trip=TripDetail(
+                id=trip_id,
+                dates=TripDates(start=trip.start_date, end=trip.end_date),
+                day_start=trip.day_start,
+                day_end=trip.day_end,
+                mode=trip.transport_mode,
+            ),
+            schedule=result.schedule,
+        )
 
     def _get(self, trip_id: str) -> TripRecord:
         record = self.repository.get(trip_id)
         if record is None:
             raise TripNotFoundError
         return record
+
+    def _read(self, trip_id: str) -> TripRecord:
+        """잠금 없는 읽기. 서비스 트랜잭션 밖에서 저장소를 부르므로, DB 저장소는 스냅샷 읽기 트랜잭션을
+        스스로 열고 닫는다(`SqlTripRepository.get`). 돌아오면 트랜잭션·DB 연결을 쥐고 있지 않다."""
+        return self._get(trip_id)
+
+    def _edit(self, trip_id: str, compute: Callable[[TripRecord], Callable[[TripRecord], R]]) -> R:
+        """읽기 → 계산 → 비교-저장. 엔진(경로 HTTP)은 잠금·트랜잭션 밖에서 돈다.
+
+        1) 잠금 없이 읽는다. 2) `compute(record)` 가 엔진을 불러 커밋 함수를 돌려준다(락·트랜잭션 밖).
+        3) 짧은 커밋 트랜잭션에서 `get_for_update` 로 다시 읽어 1)과 같을 때만 커밋 함수를 부른다.
+        다르면(계산 중 다른 편집이 저장됨) 1)부터 다시 한다. `MAX_EDIT_ATTEMPTS` 번 모두 겹치면
+        `ConcurrentEditError` 이고 아무것도 저장·기록하지 않는다. 내용 비교라 같은 내용으로 되돌아온
+        경우(ABA)도 같은 상태 위의 계산이므로 그대로 유효하다.
+        계산이 실패해도, 그동안 다른 편집이 저장되었다면 그 오류는 옛 일정에 대한 것이므로 다시 한다.
+        """
+        for _ in range(MAX_EDIT_ATTEMPTS):
+            record = self._read(trip_id)
+            try:
+                commit = compute(record)
+            except Exception:
+                if self._read(trip_id) != record:
+                    continue
+                raise
+            with self._lock, self.transaction():
+                current = self.repository.get_for_update(trip_id)
+                if current is None:
+                    raise TripNotFoundError
+                if current == record:
+                    return commit(current)
+        raise ConcurrentEditError
 
     def _accept(self, result: EngineResult, *, days: set[int] | None = None) -> None:
         """저장 전 수락 검사: 고정 블록의 시각을 지킬 수 없는 결과는 거절한다.
@@ -173,33 +219,49 @@ class TripService:
             return self.engine.recompute(command, context=context)
         return self.engine.project(command, context=context)
 
+    def _edit_blocks(self, trip_id: str, compute: Callable[[TripRecord], EngineResult]) -> ScheduleMutationResponse:
+        """블록 편집(API-006~008): 락 밖에서 낸 엔진 결과를 커밋 단계에서 `_commit_edit` 으로 확정한다."""
+
+        def prepare(record: TripRecord) -> Callable[[TripRecord], ScheduleMutationResponse]:
+            result = compute(record)
+            return lambda current: self._commit_edit(trip_id, current, result)
+
+        return self._edit(trip_id, prepare)
+
     def insert(self, trip_id: str, request: AddBlockRequest) -> ScheduleMutationResponse:
-        with self._lock, self.transaction():
-            record = self._get(trip_id)
+        def compute(record: TripRecord) -> EngineResult:
             # 사용자 지정 → 공공 장소 값 순서. 둘 다 없으면 기본값을 만들지 않는다(#18 PM 결정 4).
             stay = request.stay_min if request.stay_min is not None else self.stay_duration(request.place)
             if stay is None:
                 raise StayDurationRequiredError("Stay duration needs a user value or a public place value")
             command = insert_command(request, record.trip, record.schedule, stay_min=stay)
-            result = self.engine.insert(command, context=calculation_context(request))
-            return self._commit_edit(trip_id, record, result)
+            return self.engine.insert(command, context=calculation_context(request))
+
+        return self._edit_blocks(trip_id, compute)
 
     def update_block(self, trip_id: str, block_id: str, request: UpdateBlockRequest) -> ScheduleMutationResponse:
-        with self._lock, self.transaction():
-            record = self._get(trip_id)
+        def compute(record: TripRecord) -> EngineResult:
             command = update_command(request, record.trip, record.schedule, block_id)
-            return self._commit_edit(trip_id, record, self._run(command, calculation_context(request)))
+            return self._run(command, calculation_context(request))
+
+        return self._edit_blocks(trip_id, compute)
 
     def delete_block(self, trip_id: str, block_id: str, request: DeleteBlockRequest) -> ScheduleMutationResponse:
-        with self._lock, self.transaction():
-            record = self._get(trip_id)
+        def compute(record: TripRecord) -> EngineResult:
             command = delete_command(record.trip, record.schedule, block_id)
-            return self._commit_edit(trip_id, record, self._run(command, calculation_context(request)))
+            return self._run(command, calculation_context(request))
+
+        return self._edit_blocks(trip_id, compute)
 
     def undo(self, trip_id: str, request: UndoRequest) -> UndoResponse:
-        """직전 편집 전 상태를 다시 계산하지 않고 그대로 저장한다. 되돌리기 자체는 스냅샷을 남기지 않는다."""
+        """직전 편집 전 상태를 다시 계산하지 않고 그대로 저장한다. 되돌리기 자체는 스냅샷을 남기지 않는다.
+
+        경로를 조회하지 않으므로 한 트랜잭션에서 행을 잠그고(`get_for_update`) 읽기·복원·저장을 한다.
+        """
         with self._lock, self.transaction():
-            record = self._get(trip_id)
+            record = self.repository.get_for_update(trip_id)
+            if record is None:
+                raise TripNotFoundError
             snapshot = self.history.latest_edit(trip_id)
             state = self.history.undo(trip_id)
             try:
@@ -216,8 +278,9 @@ class TripService:
     def _commit_generation(self, trip_id: str, record: TripRecord, result: EngineResult) -> None:
         """Reuse generation acceptance and EDIT compensation for both API-009 paths.
 
-        This lock-scoped compensation is for the current memory repositories.
-        Persistent repositories must commit schedule/history in one transaction.
+        Runs only inside `_edit`'s commit step (transaction with the trip row locked, or the process
+        lock for memory stores), so the compensation below is for the memory repositories; DB
+        repositories roll back the whole step.
         """
         self._accept(result)
         previous = self.history.latest_edit(trip_id)
@@ -245,7 +308,8 @@ class TripService:
 
     def _generate_initial(
         self, trip_id: str, record: TripRecord, request: GenerateScheduleRequest
-    ) -> InitialScheduleResponse:
+    ) -> Callable[[TripRecord], InitialScheduleResponse]:
+        """계산(락 밖)만 하고, 저장은 돌려준 커밋 함수가 `_edit` 의 커밋 단계에서 한다."""
         if record.schedule.blocks or record.schedule.legs:
             raise InitialScheduleExistsError
         if self.initial_planner is None:
@@ -256,8 +320,8 @@ class TripService:
         if planned.schedule is None:
             raise NeedsConfirmationError("Initial schedule presentation is unavailable")
         saved = not planned.unplaced
+        result = EngineResult(planned.state, planned.schedule)
         if saved:
-            result = EngineResult(planned.state, planned.schedule)
             # Includes global fixed-order conflicts, which have no block warning.
             conflicted = {block_id for conflict in planned.conflicts for block_id in conflict.block_ids}
             conflicted |= self._timing_conflicts(result)
@@ -277,8 +341,7 @@ class TripService:
             if planned.conflicts or conflicted:
                 # Request-local mapping only, in request order; server UUIDs never leave as error data.
                 raise FixedScheduleConflictError(tuple(cid for bid, cid in client_ids.items() if bid in conflicted))
-            self._commit_generation(trip_id, record, result)
-        return InitialScheduleResponse(
+        response = InitialScheduleResponse(
             days=planned.schedule.days,
             violations=planned.schedule.violations,
             conflicts=planned.schedule.conflicts,
@@ -293,9 +356,16 @@ class TripService:
             ),
         )
 
+        def commit(current: TripRecord) -> InitialScheduleResponse:
+            # 미리보기(saved=False)는 저장하지 않는다. 비교 단계만 지나 빈 일정 위의 계산이었음을 확인한다.
+            if saved:
+                self._commit_generation(trip_id, current, result)
+            return response
+
+        return commit
+
     def generate(self, trip_id: str, request: GenerateScheduleRequest) -> Schedule | InitialScheduleResponse:
-        with self._lock, self.transaction():
-            record = self._get(trip_id)
+        def compute(record: TripRecord) -> Callable[[TripRecord], Schedule | InitialScheduleResponse]:
             if request.initial is not None:
                 return self._generate_initial(trip_id, record, request)
             if request.options:
@@ -322,5 +392,11 @@ class TripService:
                     context=context,
                 )
                 state = result.state
-            self._commit_generation(trip_id, record, result)
-            return result.schedule
+
+            def commit(current: TripRecord) -> Schedule:
+                self._commit_generation(trip_id, current, result)
+                return result.schedule
+
+            return commit
+
+        return self._edit(trip_id, compute)
