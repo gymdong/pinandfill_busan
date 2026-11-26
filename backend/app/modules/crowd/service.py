@@ -1,9 +1,12 @@
 """FR-008 장소별 예상 혼잡도 조회 서비스."""
 
+import logging
 from datetime import date
 from typing import Protocol
 
 from .schemas import PlaceCrowdResponse
+
+logger = logging.getLogger(__name__)
 
 
 class CrowdDataProvider(Protocol):
@@ -35,7 +38,8 @@ class CrowdService:
             if result is not None:
                 return result
 
-        # 검증된 혼잡 데이터가 없으면 임의의 예측값을 만들지 않는다.
+        # 검증된 혼잡 데이터가 없으면 임의의 예측값을 만들지 않는다. 신호 0건은 로그로 남긴다(ERR-011).
+        logger.info("crowd_no_signal place=%r", place_id)
         return PlaceCrowdResponse(
             hours=[],
             confidence="없음",

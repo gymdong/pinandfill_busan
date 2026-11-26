@@ -168,12 +168,24 @@ export interface PlaceDetailResponse {
   sources: SourceInfo[];
 }
 
+/** API-012 '근거 보기'의 근거 신호 하나. @provisional SDD API-012 응답에 없는 추가 필드(spec A-6). */
+export interface CrowdSignal {
+  /** 자료 코드. 예: 'DATA-04' */
+  source: string;
+  label: string;
+  /** 자료 기준 기간. 예: '2026-10'(월), '2026-11-28'(일) */
+  refPeriod: string | null;
+  detail: string | null;
+}
+
 /** API-012 */
 export interface PlaceCrowdResponse {
   hours: { h: number; grade: CrowdGrade | null; score: number | null }[];
   confidence: CrowdConfidence;
   asOf: IsoDateTime | null;
   sources: string[];
+  /** 정보 부족이면 빈 배열 */
+  signals: CrowdSignal[];
 }
 
 /* ---------- 여행 조건 ---------- */

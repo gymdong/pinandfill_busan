@@ -1,0 +1,7 @@
+# 시험용 가짜 값(TEST FIXTURE). 실제 공공데이터가 아니다. 운영 경로 data/crowd/ 에 복사하지 않는다.
+place_id,signal,key,note
+126658,DATA-04,TEST-DONG-1,시험용 연결(태종대)
+126658,DATA-05,TEST-STN-1,시험용 연결(태종대)
+2684712,DATA-04,TEST-DONG-1,시험용 연결(흰여울문화마을)
+126078,DATA-04,TEST-DONG-2,시험용 연결(광안리해수욕장)
+126078,DATA-99,TEST-X,모르는 신호 → 건너뜀

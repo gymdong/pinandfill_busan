@@ -1,0 +1,5 @@
+{
+  "description": "FR-008 예상 혼잡 설정. grade_percentiles 는 여유|보통|붐빔|매우 붐빔 을 가르는 백분위 경계(오름차순 3개), b_weights 는 1단계 신호 가중치. 값은 AC-009 검증으로 보정한다.",
+  "grade_percentiles": [0.4, 0.7, 0.9],
+  "b_weights": {"DATA-04": 1, "DATA-05": 1}
+}

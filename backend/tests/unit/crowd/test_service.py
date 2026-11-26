@@ -61,3 +61,10 @@ def test_service_returns_unknown_without_provider():
     assert result.confidence == "없음"
     assert result.as_of is None
     assert result.sources == []
+
+
+def test_service_logs_no_signal(caplog):
+    """신호 0건은 로그로 남긴다(ERR-011)."""
+    with caplog.at_level("INFO", logger="app.modules.crowd.service"):
+        CrowdService(provider=FakeCrowdProvider(None)).get("126078")
+    assert "crowd_no_signal place='126078'" in caplog.text
