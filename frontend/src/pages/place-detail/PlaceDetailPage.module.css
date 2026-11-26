@@ -93,6 +93,7 @@
 /* ---------- 본문 ---------- */
 .header,
 .card,
+.crowd,
 .sources,
 .actions {
   margin: 0 var(--space-4);
@@ -176,6 +177,11 @@
 /* 보는 날은 색만이 아니라 굵기로도 구분한다(NFR-008). */
 .weekToday {
   font-weight: 800;
+}
+
+.crowdLoading {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
 }
 
 .sources {

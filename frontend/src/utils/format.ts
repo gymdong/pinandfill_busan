@@ -14,3 +14,21 @@ export function formatDate(isoDate: string): string {
   const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
   return `${month}월 ${day}일 (${weekday})`;
 }
+
+const KST_PARTS = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  month: 'numeric',
+  day: 'numeric',
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** ISO 일시 → 한국 시각 '10월 17일 (토) 05:00'. 보는 기기의 시간대와 관계없이 KST로 고정한다. */
+export function formatDateTime(isoDateTime: string): string {
+  const parts = Object.fromEntries(
+    KST_PARTS.formatToParts(new Date(isoDateTime)).map((part) => [part.type, part.value]),
+  ) as Partial<Record<Intl.DateTimeFormatPartTypes, string>>;
+  return `${parts.month}월 ${parts.day}일 (${parts.weekday}) ${parts.hour}:${parts.minute}`;
+}
