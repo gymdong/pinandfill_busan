@@ -14,7 +14,9 @@ from app.modules.engine.initial import (
     MAX_ROUTE_LOOKUPS_PER_PLAN,
     InitialScheduleCommand,
     InitialSchedulePlanner,
+    InitialScheduleResult,
     InitialSelection,
+    UnplacedSelection,
 )
 from app.modules.engine.interfaces import RouteEstimate
 from app.modules.engine.schemas import (
@@ -23,10 +25,13 @@ from app.modules.engine.schemas import (
     KakaoPlaceRef,
     OpeningHours,
     PublicPlaceRef,
+    ScheduleConflict,
+    ScheduleState,
     SessionCoordinate,
     StoredBlock,
     TransientPlaceDetails,
     TripWindow,
+    Violation,
 )
 from app.modules.engine.service import BasicItineraryEngine, NeedsConfirmationError
 from app.modules.trips.schemas import MAX_INITIAL_SELECTIONS, Schedule
@@ -892,6 +897,31 @@ def test_crowd_never_makes_a_placeable_block_unplaced(caplog):
     # 첫 통과 3건 + 혼잡 통과의 새 조합 5건. 이미 조회한 구간은 다시 조회하지 않는다.
     assert len(routes.departures) == 8
     assert "initial_crowd_avoidance usable=1 applied=False" in caplog.text
+
+
+def outcome(placed, unplaced=(), conflict_ids=()):
+    blocks = tuple(day_option(time(10), feasible=True, block_id=key)[1].blocks[0] for key in placed)
+    reason = Violation(type="PLACEMENT_NEEDS_CHECK", cause="synthetic")
+    return InitialScheduleResult(
+        state=ScheduleState(blocks=blocks),
+        unplaced=tuple(UnplacedSelection(block_id=key, reason=reason) for key in unplaced),
+        violations=tuple(reason for _ in unplaced),
+        conflicts=(ScheduleConflict(cause="synthetic", block_ids=conflict_ids),) if conflict_ids else (),
+    )
+
+
+def test_crowd_plan_must_not_swap_which_selection_is_unplaced():
+    baseline = outcome(["a", "b"], unplaced=["c"])
+    # 같은 수(배치 2·미배치 1)라도 사용자가 고른 a 를 빼고 c 를 넣으면 쓰지 않는다.
+    assert not InitialSchedulePlanner._not_worse(outcome(["b", "c"], unplaced=["a"]), baseline)
+    assert InitialSchedulePlanner._not_worse(outcome(["b", "a"], unplaced=["c"]), baseline)
+    assert InitialSchedulePlanner._not_worse(outcome(["a", "b", "c"]), baseline)
+
+
+def test_crowd_plan_must_not_move_a_conflict_onto_another_block():
+    baseline = outcome(["a", "b"], conflict_ids=("a",))
+    assert not InitialSchedulePlanner._not_worse(outcome(["a", "b"], conflict_ids=("b",)), baseline)
+    assert InitialSchedulePlanner._not_worse(outcome(["b", "a"], conflict_ids=("a",)), baseline)
 
 
 def test_crowd_result_is_never_worse_than_first_feasible():

@@ -212,8 +212,14 @@ class InitialSchedulePlanner:
 
     @staticmethod
     def _not_worse(adjusted: InitialScheduleResult, baseline: InitialScheduleResult) -> bool:
+        # Same counts are not enough: a selection the first-feasible plan placed
+        # (or kept conflict-free) must not be swapped for another one.
+        unplaced_ids = {item.block_id for item in adjusted.unplaced}
+        conflict_ids = {block_id for conflict in adjusted.conflicts for block_id in conflict.block_ids}
         return (
-            len(adjusted.state.blocks) >= len(baseline.state.blocks)
+            unplaced_ids <= {item.block_id for item in baseline.unplaced}
+            and conflict_ids <= {block_id for conflict in baseline.conflicts for block_id in conflict.block_ids}
+            and len(adjusted.state.blocks) >= len(baseline.state.blocks)
             and len(adjusted.unplaced) <= len(baseline.unplaced)
             and len(adjusted.conflicts) <= len(baseline.conflicts)
             and len(adjusted.violations) <= len(baseline.violations)
