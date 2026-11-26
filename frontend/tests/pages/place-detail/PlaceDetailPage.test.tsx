@@ -169,6 +169,19 @@ describe('UI-04 장소 상세', () => {
     expect(useTripDraft.getState().pinned).toEqual([]);
   });
 
+  it('꼭 갈 곳이 30곳이면 담기를 막고 이유를 알린다', async () => {
+    mockDetail(taejongdaeDetail);
+    useTripDraft.setState({ pinned: Array.from({ length: 30 }, (_, index) => ({
+      kind: 'PUBLIC' as const,
+      placeId: `p${index}`,
+      name: `장소 ${index}`,
+      coords: { lat: 35.1, lng: 129.1 },
+    })) });
+    renderAt(PATH);
+    expect(await screen.findByRole('button', { name: '꼭 갈 곳에 담기' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('꼭 갈 곳은 30곳까지 담을 수 있어요.');
+  });
+
   it('없는 장소(ERR-016)는 다시 시도 대신 처음으로 돌아가게 한다', async () => {
     vi.spyOn(placesApi, 'get').mockRejectedValue(new ApiError({ id: 'ERR-016', status: 404 }));
     renderAt('/places/unknown');

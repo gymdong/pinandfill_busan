@@ -1,6 +1,6 @@
 """FR-008 혼잡도 조회 서비스 단위 테스트."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 from app.modules.crowd.schemas import CrowdHour, PlaceCrowdResponse
 from app.modules.crowd.service import CrowdService
@@ -25,6 +25,7 @@ def test_service_returns_provider_data():
             CrowdHour(h=12, grade="보통", score=0.5),
         ],
         confidence="높음",
+        as_of=datetime(2026, 11, 26, tzinfo=UTC),
         sources=["test-provider"],
     )
     provider = FakeCrowdProvider(expected)

@@ -372,6 +372,11 @@ export interface InitialGeneration {
   /** 경고 없이 엔진이 확정했는지. 저장 여부와 별개다(경로·영업시간 미확인이면 false여도 저장된다). */
   confirmed: boolean;
   unplaced: { clientId: string; reason: Violation }[];
+  /**
+   * 저장되지 않았을 때(`saved=false`)만 채운다. 미리보기의 서버 블록 ID → 요청 `clientId`(#39). 저장됐으면 `{}`.
+   * UI-01은 미리보기를 그리지 않아 쓰지 않는다.
+   */
+  previewClientIds: Record<string, string>;
 }
 
 export type InitialScheduleResponse = Schedule & { generation: InitialGeneration };

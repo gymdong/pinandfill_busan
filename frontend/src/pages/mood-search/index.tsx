@@ -4,7 +4,7 @@ import { recommendApi, toApiError } from '@/api';
 import { paths } from '@/app/paths';
 import { Banner, Button, Chip, LoadingState } from '@/components';
 import { CrowdBadge } from '@/features/crowd';
-import { pinnedKey, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
+import { PINNED_LIMIT, PINNED_LIMIT_MESSAGE, pinnedKey, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
 import type { IsoDate, MoodPlace, ThemeTag } from '@/types/api';
 import { formatDate } from '@/utils/format';
 import styles from './MoodSearchPage.module.css';
@@ -35,6 +35,8 @@ function toPinned({ place }: MoodPlace): PinnedPlace {
 export default function MoodSearchPage() {
   const navigate = useNavigate();
   const { conditions, pinned, mood: savedMood, addPinned, removePinned, setMood } = useTripDraft();
+  // 꼭 갈 곳이 다 찼으면 담기지 않은 추천은 담을 수 없다(최초 생성 상한, #39).
+  const full = pinned.length >= PINNED_LIMIT;
   const date = referenceDate(conditions.dates?.start);
 
   // 전에 고른 분위기가 있으면 그 칩을 켠 채로 시작한다(UI-01에서 돌아와 고칠 수 있게).
@@ -140,7 +142,7 @@ export default function MoodSearchPage() {
     if (pinned.some((entry) => pinnedKey(entry) === key)) {
       removePinned(key);
       setPickedHere((keys) => keys.filter((value) => value !== key));
-    } else {
+    } else if (pinned.length < PINNED_LIMIT) {
       addPinned(place);
       setPickedHere((keys) => [...keys, key]);
     }
@@ -214,6 +216,7 @@ export default function MoodSearchPage() {
       {status === 'done' && places.length > 0 && (
         <>
           <p className={styles.basis}>{formatDate(date)} 기준 예상 혼잡을 함께 보여 드려요</p>
+          {full && <Banner>{PINNED_LIMIT_MESSAGE}</Banner>}
           <ul className={styles.results} aria-label="추천 장소">
             {places.map((item) => {
               const isPinned = pinned.some((entry) => pinnedKey(entry) === pinnedKey(toPinned(item)));
@@ -252,6 +255,7 @@ export default function MoodSearchPage() {
                       variant={isPinned ? 'outline' : 'accent'}
                       aria-pressed={isPinned}
                       aria-label={`${item.place.name} ${isPinned ? '빼기' : '담기'}`}
+                      disabled={!isPinned && full}
                       onClick={() => togglePin(item)}
                     >
                       {isPinned ? '✓ 담김' : '담기'}

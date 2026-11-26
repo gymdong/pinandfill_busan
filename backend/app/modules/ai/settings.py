@@ -25,7 +25,11 @@ class AISettings(BaseSettings):
     # 모델이 바뀌면 환경변수 GEMINI_MODEL 로 교체한다.
     model: str = "gemini-3.5-flash-lite"
     base_url: str = "https://generativelanguage.googleapis.com"
-    timeout_seconds: float = Field(default=5.0, gt=0)
+    # 호출 한 번의 시간 제한(초). 2026-11-21 P0 검증 때 실제 키로 잰 한 줄 해석 응답이 약 10초까지 걸려
+    # 5초에서 시간 초과가 났다(2026-11-25 재측정은 1.6초). 느린 응답을 위한 여유값이다.
+    # 재시도는 대기 없이 바로 다시 부르므로 최악은 12초 × max_attempts(2) = 24초다. 화면의 요청 제한
+    # (frontend `pages/trip-start` 한 줄 해석·`pages/mood-search` 분위기 해석의 `timeoutMs: 30_000`) 안이어야 한다.
+    timeout_seconds: float = Field(default=12.0, gt=0)
     temperature: float = Field(default=0.0, ge=0, le=2)
     # NFR-005: 요청당 호출 횟수(재시도 포함)와 출력 토큰 상한
     max_attempts: int = Field(default=2, ge=1, le=3)

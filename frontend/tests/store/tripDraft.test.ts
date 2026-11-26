@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { clearKakaoSession, getKakaoPlace } from '@/api/kakaoSession';
-import { pinnedKey, planOf, toBlockPlaceInput, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
+import { PINNED_LIMIT, pinnedKey, planOf, toBlockPlaceInput, useTripDraft, type PinnedPlace } from '@/store/tripDraft';
 
 const taejongdae: PinnedPlace = { kind: 'PUBLIC', placeId: 'p1', name: '태종대', coords: { lat: 35, lng: 129 } };
 const cafe: PinnedPlace = {
@@ -36,6 +36,15 @@ describe('useTripDraft', () => {
     addPinned(cafe);
     addPinned({ ...cafe, name: '다른 이름' });
     expect(useTripDraft.getState().pinned).toHaveLength(2);
+  });
+
+  it('꼭 갈 곳은 30곳까지만 담는다(최초 생성 상한, #39)', () => {
+    const { addPinned } = useTripDraft.getState();
+    for (let index = 0; index < 31; index += 1) {
+      addPinned({ kind: 'PUBLIC', placeId: `p${index}`, name: `장소 ${index}`, coords: { lat: 35, lng: 129 } });
+    }
+    expect(useTripDraft.getState().pinned).toHaveLength(PINNED_LIMIT);
+    expect(useTripDraft.getState().pinned.at(-1)).toMatchObject({ placeId: 'p29' });
   });
 
   it('담은 장소를 키로 뺀다', () => {

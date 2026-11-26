@@ -56,6 +56,29 @@ describe('장소 검색', () => {
     expect(onUnpick).toHaveBeenCalledExactlyOnceWith(cafe);
   });
 
+  it('더 담을 수 없으면(pickBlocked) 안내를 보여 주고 담기지 않은 결과만 막는다. 담긴 결과는 뺄 수 있다', async () => {
+    vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [park, cafe] });
+    const onPick = vi.fn();
+    const onUnpick = vi.fn();
+    render(
+      <PlaceSearch
+        pickedKeys={new Set([pinnedKey(toPinnedPlace(park))])}
+        onPick={onPick}
+        onUnpick={onUnpick}
+        pickBlocked="꼭 갈 곳은 30곳까지 담을 수 있어요."
+      />,
+    );
+    await searchFor('민락');
+
+    expect(await screen.findByRole('status')).toHaveTextContent('꼭 갈 곳은 30곳까지 담을 수 있어요.');
+    const [picked, unpicked] = within(screen.getByRole('list', { name: '검색 결과' })).getAllByRole('button');
+    expect(unpicked).toBeDisabled();
+    expect(picked).toBeEnabled();
+    await userEvent.click(picked!);
+    expect(onUnpick).toHaveBeenCalledWith(park);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
   it('결과가 없으면 검색어와 다른 방법 안내를 보여 준다', async () => {
     vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [] });
     render(<PlaceSearch pickedKeys={new Set()} onPick={() => {}} fallbackHint="지도에서 골라 주세요" />);

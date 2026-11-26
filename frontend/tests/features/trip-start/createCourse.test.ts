@@ -3,6 +3,7 @@ import { ApiError, tripsApi } from '@/api';
 import { schedule, trip } from '@/api/mock/fixtures/schedule';
 import {
   CourseFailedError,
+  conflictsOf,
   createCourse,
   stayRequired,
   toInitialSelection,
@@ -28,7 +29,7 @@ const cafe: PinnedPlace = {
 const EMPTY: Schedule = { days: [], violations: [], conflicts: [] };
 
 function generated(saved: boolean, unplaced: InitialScheduleResponse['generation']['unplaced'] = []): InitialScheduleResponse {
-  return { ...schedule, generation: { saved, confirmed: false, unplaced } };
+  return { ...schedule, generation: { saved, confirmed: false, unplaced, previewClientIds: {} } };
 }
 
 function mockApis() {
@@ -197,6 +198,22 @@ describe('코스 만들기 (API-002 → API-009 최초 생성)', () => {
     const message = '기존 일정이 있어 최초 자동 생성으로 덮어쓸 수 없습니다.';
     initial.mockRejectedValue(new ApiError({ id: 'ERR-001', status: 400, message, fields: { initial: message } }));
     await expect(createCourse(conditions, [park], {})).rejects.toMatchObject({ tripId: 't9', apiError: { fields: { initial: message } } });
+  });
+});
+
+describe('고정 시각 충돌의 장소별 문구(409 ERR-009 fields, #39)', () => {
+  it('`selections.<clientId>` 키만 골라 clientId 별 문구로 돌려준다', () => {
+    const error = new ApiError({
+      id: 'ERR-009',
+      status: 409,
+      fields: { 'selections.public:p1': '지킬 수 없음', 'selections.': '빈 키', other: '다른 값' },
+    });
+    expect(conflictsOf(error)).toEqual({ 'public:p1': '지킬 수 없음' });
+  });
+
+  it('ERR-009 가 아니거나 fields 가 없으면 비어 있다', () => {
+    expect(conflictsOf(new ApiError({ id: 'ERR-001', status: 400, fields: { 'selections.public:p1': 'x' } }))).toEqual({});
+    expect(conflictsOf(new ApiError({ id: 'ERR-009', status: 409 }))).toEqual({});
   });
 });
 
