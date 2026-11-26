@@ -5,8 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from app.modules.crowd.estimator import GRADES
+from app.modules.crowd.file_provider import FileCrowdProvider
 from app.modules.crowd.validation import (
     AgreementResult,
+    Criteria,
+    InputError,
     Observation,
     PlaceRho,
     WifiRow,
@@ -15,10 +19,13 @@ from app.modules.crowd.validation import (
     load_observations,
     load_wifi,
     main,
+    provider_lookup,
+    region_lookup,
     spearman,
     verdict,
     within_place_rho,
 )
+from app.modules.places.samples import load_sample_places
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "crowd"
 DAY = date(2026, 11, 25)  # 수요일
@@ -114,37 +121,67 @@ def obs(place_id: str, hour: int, grade: str) -> Observation:
     return Observation(place_id, DAY, hour, grade)
 
 
-def test_grade_agreement_counts_unavailable_separately() -> None:
+def agree(compared: int, matched: int, unavailable: int = 0) -> AgreementResult:
+    total = compared + unavailable
+    return AgreementResult(
+        compared,
+        matched,
+        ["정보 부족"] * unavailable,
+        matched / compared if compared else None,
+        matched / total if total else None,
+    )
+
+
+def test_grade_agreement_counts_unavailable_separately_and_strictly() -> None:
     lookup = estimate_of({10: 0.5}, grade="붐빔")
     result = grade_agreement(
         [obs("A", 10, "붐빔"), obs("A", 10, "여유"), obs("A", 11, "붐빔"), obs("NONE", 10, "붐빔")], lookup
     )
     assert (result.compared, result.matched, result.rate) == (2, 1, 0.5)
     assert len(result.unavailable) == 2
+    assert result.strict_rate == 0.25  # 정보 부족 2건도 분모에 넣는다
 
 
 def test_grade_agreement_empty() -> None:
     result = grade_agreement([], estimate_of({}))
-    assert result == AgreementResult(0, 0, [], None)
+    assert result == AgreementResult(0, 0, [], None, None)
 
 
-def within_with(mean: float | None, computed: int) -> WithinPlaceResult:
-    places = [PlaceRho(f"P{i}", 9, mean) for i in range(computed)]
-    return WithinPlaceResult(places, mean, 0, [])
+def within_with(rhos: list[float | None]) -> WithinPlaceResult:
+    places = [PlaceRho(f"P{i}", 9, rho) for i, rho in enumerate(rhos)]
+    values = [rho for rho in rhos if rho is not None]
+    return WithinPlaceResult(places, sum(values) / len(values) if values else None, 0, [])
 
 
 def test_verdict_passes_only_with_enough_data_and_both_criteria() -> None:
-    assert verdict(within_with(0.6, 3), AgreementResult(30, 21, [], 0.7)).overall == "통과"
-    assert verdict(within_with(0.4, 3), AgreementResult(30, 25, [], 25 / 30)).overall == "미달"
-    assert verdict(within_with(0.9, 3), AgreementResult(30, 10, [], 1 / 3)).overall == "미달"
+    assert verdict(within_with([0.6, 0.6, 0.6]), agree(30, 21)).overall == "통과"
+    assert verdict(within_with([0.4, 0.4, 0.4]), agree(30, 25)).overall == "미달"
+    assert verdict(within_with([0.9, 0.9, 0.9]), agree(30, 10)).overall == "미달"
+
+
+def test_verdict_one_negative_place_fails_even_if_mean_passes() -> None:
+    within = within_with([0.9, 0.9, -0.1])
+    assert within.mean_rho == pytest.approx(17 / 30)
+    assert verdict(within, agree(30, 30)).overall == "미달"
+
+
+def test_verdict_uses_strict_agreement_rate() -> None:
+    # 비교한 20건은 모두 일치(느슨 100%)지만 정보 부족 10건을 불일치로 세면 20/30 = 66.7% 라 미달
+    result = verdict(within_with([0.9, 0.9, 0.9]), agree(20, 20, unavailable=10))
+    assert (result.agreement_pass, result.overall) == (False, "미달")
 
 
 def test_verdict_refuses_pass_below_30_observations_or_3_places() -> None:
-    few_obs = verdict(within_with(0.9, 3), AgreementResult(29, 29, [], 1.0))
+    few_obs = verdict(within_with([0.9, 0.9, 0.9]), agree(29, 29))
     assert (few_obs.agreement_pass, few_obs.overall) == (None, "판정 불가")
-    few_places = verdict(within_with(0.9, 2), AgreementResult(30, 30, [], 1.0))
+    few_places = verdict(within_with([0.9, 0.9]), agree(30, 30))
     assert (few_places.rho_pass, few_places.overall) == (None, "판정 불가")
-    assert verdict(within_with(None, 0), AgreementResult(0, 0, [], None)).overall == "판정 불가"
+    assert verdict(within_with([]), agree(0, 0)).overall == "판정 불가"
+
+
+def test_verdict_criteria_are_adjustable() -> None:
+    relaxed = Criteria(min_observations=10, min_places=2, min_points=5)
+    assert verdict(within_with([0.9, 0.9]), agree(10, 10), relaxed).overall == "통과"
 
 
 def test_load_csv_rejects_bad_rows_and_allows_empty_date_hour(tmp_path: Path) -> None:
@@ -175,41 +212,107 @@ def test_load_csv_rejects_bad_rows_and_allows_empty_date_hour(tmp_path: Path) ->
     assert len(rejected_obs) == 2
 
 
-def test_header_only_templates_load_empty(tmp_path: Path) -> None:
+def test_rejected_rows_report_actual_file_line_numbers(tmp_path: Path) -> None:
+    wifi = tmp_path / "wifi.csv"
+    wifi.write_text(
+        "# 주석\n\nplace_id,date,hour,visitors\nA,2026-11-25,10,120\n\nA,2026-11-25,10,abc\n\nA,2026-11-25,10,1,9\n",
+        encoding="utf-8",
+    )
+    rows_, rejected = load_wifi(wifi)
+    assert len(rows_) == 1
+    assert rejected[0].startswith("wifi.csv 6행: ")  # 빈 줄·주석 줄도 센 실제 줄 번호
+    assert rejected[1].startswith("wifi.csv 8행: 열이 머리줄보다 많음")
+
+
+def test_header_errors_are_reported(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.csv"
+    missing.write_text("place_id,date,hour\nA,2026-11-25,10\n", encoding="utf-8")
+    with pytest.raises(InputError, match="없는 열 \\['visitors'\\]"):
+        load_wifi(missing)
+    unknown = tmp_path / "unknown.csv"
+    unknown.write_text("place_id,date,hour,visitors,extra\n", encoding="utf-8")
+    with pytest.raises(InputError, match="모르는 열 \\['extra'\\]"):
+        load_wifi(unknown)
+    empty = tmp_path / "empty.csv"
+    empty.write_text("# 주석만\n", encoding="utf-8")
+    with pytest.raises(InputError, match="머리줄이 없습니다"):
+        load_wifi(empty)
+    with pytest.raises(InputError, match="열 수 없습니다"):
+        load_wifi(tmp_path / "nope.csv")
+
+
+def test_header_only_templates_load_empty() -> None:
     template_dir = Path(__file__).resolve().parents[4] / "data" / "eval" / "crowd"
     assert load_observations(template_dir / "observations_template.csv") == ([], [])
     assert load_wifi(template_dir / "wifi_visitors_template.csv") == ([], [])
 
 
-def test_cli_end_to_end_with_fake_fixture(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    # 2684712 는 시험용 DONG-1 에만 연결됐다. 와이파이 방문자를 같은 모양(×10)으로 두면 ρ = 1.
-    population = [500, 600, 700, 800, 900, 1000, 900, 800, 700]
-    wifi = tmp_path / "wifi.csv"
-    wifi.write_text(
-        "place_id,date,hour,visitors\n"
-        + "".join(f"2684712,2026-11-25,{hour},{value * 10}\n" for hour, value in zip(HOURS, population, strict=True))
-        + "2684712,,,99999\n",
-        encoding="utf-8",
-    )
+def test_multiplier_is_applied_like_production() -> None:
+    # 흰여울문화마을(2684712)은 표본 주소가 영도구라, 가짜 M 파일(2026-11-25 영도구 0.8)이 적용돼야 한다.
+    places = load_sample_places()
+    region_of = region_lookup(places)
+    assert region_of("2684712") == "영도구"
+    with_m = provider_lookup(FileCrowdProvider.from_dir(FIXTURES, region_of))("2684712", DAY)
+    without_m = provider_lookup(FileCrowdProvider.from_dir(FIXTURES, lambda _id: None))("2684712", DAY)
+    assert with_m is not None
+    assert without_m is not None
+    assert {h: v[0] for h, v in with_m.items()} != {h: v[0] for h, v in without_m.items()}
+
+
+def run_cli(tmp_path: Path, *extra: str, obs_rows: str = "", wifi_rows: str = "") -> int:
     observations = tmp_path / "obs.csv"
-    observations.write_text(
-        "place_id,date,hour,observed_grade,observer,note\n2684712,2026-11-25,14,매우 붐빔,가짜,\n", encoding="utf-8"
+    observations.write_text("place_id,date,hour,observed_grade,observer,note\n" + obs_rows, encoding="utf-8")
+    wifi = tmp_path / "wifi.csv"
+    wifi.write_text("place_id,date,hour,visitors\n" + wifi_rows, encoding="utf-8")
+    return main(["--observations", str(observations), "--wifi", str(wifi), "--crowd-dir", str(FIXTURES), *extra])
+
+
+def test_cli_end_to_end_with_fake_fixture(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # 2684712 는 시험용 DONG-1 에만 연결됐다. 와이파이 방문자를 같은 모양(×10)으로 두면 ρ 가 거의 1.
+    population = [500, 600, 700, 800, 900, 1000, 900, 800, 700]
+    wifi_rows = "".join(
+        f"2684712,2026-11-25,{hour},{value * 10}\n" for hour, value in zip(HOURS, population, strict=True)
     )
-    code = main(
-        [
-            "--observations",
-            str(observations),
-            "--wifi",
-            str(wifi),
-            "--crowd-dir",
-            str(FIXTURES),
-            "--config",
-            str(Path(__file__).resolve().parents[4] / "data" / "seed" / "crowd" / "crowd_config.json"),
-        ]
+    code = run_cli(
+        tmp_path,
+        "--places",
+        "2684712",
+        obs_rows="2684712,2026-11-25,14,매우 붐빔,가짜,\n",
+        wifi_rows=wifi_rows + "2684712,,,99999\n9999,2026-11-25,10,5\n",
     )
     out = capsys.readouterr().out
-    assert code == 1  # 관측 1건·장소 1곳이라 통과를 주장하지 않는다
-    assert "2684712: 쌍 9개, ρ = 1.000" in out
+    assert code == 2  # 관측 1건·장소 1곳이라 통과를 주장하지 않는다(판정 불가)
+    assert "2684712: 쌍 9개, ρ = 0.99" in out  # M=0.8 이 일부 시간대를 백분위 0 으로 눌러 1 에서 약간 벗어난다
+    assert "9999" not in out  # --places 밖 장소는 걸러진다
     assert "날짜·시각이 비어 ρ 에서 뺀 와이파이 행: 1개" in out
-    assert "비교 관측이 30건 미만" in out
+    assert "관측이 30건 미만" in out
     assert "종합: 판정 불가" in out
+
+
+def test_cli_exit_codes_for_pass_and_fail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    population = [500, 600, 700, 800, 900, 1000, 900, 800, 700]
+    wifi_rows = "".join(f"2684712,2026-11-25,{h},{v}\n" for h, v in zip(HOURS, population, strict=True))
+    estimate = provider_lookup(FileCrowdProvider.from_dir(FIXTURES, region_lookup(load_sample_places())))
+    hours = estimate("2684712", DAY)
+    assert hours is not None
+    actual = hours[14][1]
+    other = next(grade for grade in GRADES if grade != actual)
+    options = ("--places", "2684712", "--min-observations", "1", "--min-places", "1")
+    assert run_cli(tmp_path, *options, obs_rows=f"2684712,2026-11-25,14,{actual},가짜,\n", wifi_rows=wifi_rows) == 0
+    assert "종합: 통과" in capsys.readouterr().out
+    assert run_cli(tmp_path, *options, obs_rows=f"2684712,2026-11-25,14,{other},가짜,\n", wifi_rows=wifi_rows) == 1
+    assert "종합: 미달" in capsys.readouterr().out
+
+
+def test_cli_input_errors_exit_3_without_traceback(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # 기본 장소(봉래물양장·감지해변)가 표본에 없으면 --places 가 필요하다.
+    assert run_cli(tmp_path) == 3
+    assert "--places" in capsys.readouterr().err
+    (tmp_path / "bad.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    code = main(["--observations", str(tmp_path / "bad.csv"), "--wifi", str(tmp_path / "bad.csv"), "--places", "x"])
+    assert code == 3
+    assert "입력 오류" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as exited:  # 필수 옵션 누락
+        main(["--wifi", "x"])
+    assert exited.value.code == 3
+    capsys.readouterr()
