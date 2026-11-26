@@ -36,7 +36,17 @@ uv run alembic check                  # 모델과 DB 스키마가 같은지 확�
 
 공공 장소·수집 기록 테이블(places·place_hours·data_sources·ingestion_runs, FR-016)도 같은 마이그레이션으로 만든다.
 data_sources 의 tourapi·data06·data07 행은 마이그레이션이 넣는다. 표본 CSV(`data/samples/`)는 시드 명령으로 넣는다.
-앱은 아직 CSV 에서 장소를 읽는다(DB 읽기 경로는 별도 작업).
+앱이 장소를 어디서 읽을지는 `PLACE_DATA_SOURCE` 로 정한다.
+
+- `csv`(기본, 비어 있거나 없을 때): `data/samples/` CSV. 테스트와 로컬 기본이다.
+- `db`: places·place_hours 를 읽는다. `DATABASE_URL` 이 필요하고 trips 와 같은 DB 연결(풀)을 쓴다.
+  검색·장소 상세(API-005)·일정 엔진·체류시간·분위기 추천·예상 혼잡의 구·군 조회가 모두 같은 데이터를 본다.
+- 장소는 앱 시작 때 한 번만 읽는다. 시드·배치로 DB 를 바꾸면 앱을 다시 시작해야 반영된다.
+- `db` 인데 `DATABASE_URL` 이 없거나 places 가 비어 있으면(시드 전) 빈 데이터로 돌지 않고 앱 시작이 실패한다.
+- 카카오 매칭표(`kakao_id_mapping.csv`)와 장소 사진(`place_photos.csv`)은 `db` 에서도 CSV 를 읽는다.
+- 혼잡 검증 도구(`python -m app.modules.crowd.validation`)는 앱이 아니라 따로 도는 명령이라 `db` 에서도
+  표본 CSV 의 장소를 읽는다.
+- 앱이 끝나면(lifespan 종료) 함께 쓰던 DB 연결 풀을 닫고, 시작이 실패해도 닫은 뒤 예외를 낸다.
 
 ```bash
 uv run alembic upgrade head

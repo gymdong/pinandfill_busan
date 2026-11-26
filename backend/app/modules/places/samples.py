@@ -1,4 +1,4 @@
-"""data/samples 의 공공 장소 표본(CSV). places·place_hours 테이블이 생기기 전 로컬 기본 구성에서만 쓴다.
+"""data/samples 의 공공 장소 표본(CSV). 앱 기본 읽기 경로(`PLACE_DATA_SOURCE=csv`)이자 DB 시드의 원본이다.
 
 값이 비어 있거나 읽을 수 없으면 지어내지 않고 비워 둔다. 엔진이 '확인 필요' 경고로 알린다.
 카카오는 매칭표의 장소 ID 만 읽는다(이름·좌표 등 카카오 장소 정보는 저장하지 않는다).
@@ -92,7 +92,7 @@ class SamplePlaceData:
         return list(self._places.values())
 
     def repository(self) -> InMemoryPublicPlaceRepository:
-        # 원래 테스트용 메모리 저장소다. places 테이블 저장소가 생기면 기본 구성(app.main)에서 그쪽으로 바꾼다.
+        # 시작 때 읽은 장소(CSV 또는 DB, PLACE_DATA_SOURCE)를 메모리에서 찾는다.
         return InMemoryPublicPlaceRepository((item.place for item in self._places.values()), self._kakao_overrides)
 
 
@@ -197,11 +197,15 @@ def load_sample_places(directory: Path = SAMPLE_DIR) -> SamplePlaceData:
     if skipped:
         logger.warning("place_samples skipped=%d", skipped)
 
-    overrides = {
+    return SamplePlaceData(places, load_kakao_overrides(directory), invalid_hours)
+
+
+def load_kakao_overrides(directory: Path = SAMPLE_DIR) -> dict[str, str]:
+    """카카오 장소 ID → 공공 장소 ID 수동 매칭표(kakao_id_mapping.csv). 장소를 DB 에서 읽을 때도 이 CSV 를 쓴다."""
+    return {
         row["kakao_place_id"]: row["tourapi_contentid"]
         for row in _rows(directory / "kakao_id_mapping.csv")
         if row.get("match_status") == "MATCHED"
         and row.get("kakao_place_id", "").isdigit()
         and row.get("tourapi_contentid")
     }
-    return SamplePlaceData(places, overrides, invalid_hours)
