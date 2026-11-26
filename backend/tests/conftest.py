@@ -9,10 +9,11 @@ from collections.abc import Iterator
 
 import pytest
 
+from app.batch.settings import BatchSettings
 from app.db.session import DatabaseSettings
 from app.modules.places.source import PlaceSourceSettings
 
-# 개발자 backend/.env·셸에 있어도 시험에 새지 않게 지우는 DB·장소 출처 환경변수
+# 개발자 backend/.env·셸에 있어도 시험에 새지 않게 지우는 DB·장소 출처·배치 수집(키·웹훅) 환경변수
 DB_ENV_NAMES = (
     "DATABASE_URL",
     "DB_POOL_SIZE",
@@ -21,8 +22,12 @@ DB_ENV_NAMES = (
     "DB_LOCK_TIMEOUT_MS",
     "DB_STATEMENT_TIMEOUT_MS",
     "PLACE_DATA_SOURCE",
+    "TOURAPI_SERVICE_KEY",
+    "ADMIN_ALERT_WEBHOOK_URL",
+    "BATCH_BACKOFF_BASE_MIN",
 )
-DB_SETTINGS_CLASSES = (DatabaseSettings, PlaceSourceSettings)
+# 모두 env_ignore_empty 라 빈 환경변수로는 .env 값을 막을 수 없어 .env 읽기를 끈다.
+DB_SETTINGS_CLASSES = (DatabaseSettings, PlaceSourceSettings, BatchSettings)
 
 # 수집 단계 격리: 개발자 .env 에 PLACE_DATA_SOURCE=db 가 있어도 app.main import 가 개발 DB 를 읽거나 실패하지 않는다.
 for _settings_class in DB_SETTINGS_CLASSES:
@@ -83,7 +88,11 @@ def no_real_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
     환경변수가 .env 보다 우선하므로 빈 값으로 두면 기본 구성은 키가 없는 것으로 본다.
     """
-    for name in ("KAKAO_REST_API_KEY", "TMAP_API_KEY", "ODSAY_API_KEY"):
+    for name in (
+        "KAKAO_REST_API_KEY",
+        "TMAP_API_KEY",
+        "ODSAY_API_KEY",
+    ):
         monkeypatch.setenv(name, "")
     isolate_db_settings(monkeypatch)
     # 혼잡 입력·설정 위치와 관리자 알림은 개발자 환경이 아니라 저장소 기본값을 쓴다(os.environ 만 읽는다).

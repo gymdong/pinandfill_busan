@@ -72,6 +72,36 @@ docker run -d --rm --name pinandfill-test-db -p 55432:5432 \
 TEST_DATABASE_URL=postgresql://pinandfill:pinandfill@localhost:55432/pinandfill_test uv run pytest
 ```
 
+### 배치 수집(FR-016)
+
+```bash
+uv run python -m app.batch.cli run --source tourapi   # 지금 수집(주기·백오프 무시, 한도·잠금은 지킨다)
+uv run python -m app.batch.cli run-due                # 주기가 돌아온 소스만 한 번
+uv run python -m app.batch.cli loop --tick 300        # 300초마다 run-due (SIGTERM 이면 지금 tick 을 마치고 끝)
+docker compose up -d batch                            # 저장소 루트에서. loop 를 도는 로컬 개발용 서비스
+```
+
+- 주기는 `data_sources.refresh_cycle`(MONTH·DAY·MINUTE)이고 KST 달력 기준이다. MONTH 는 마지막 성공과 달이 다를 때,
+  DAY 는 날짜가 다를 때, MINUTE 는 60초가 지났을 때 돈다. 꺼진(`enabled=false`) 소스는 돌지 않는다.
+- 실행마다 `ingestion_runs` 에 RUNNING → SUCCESS/FAILED/SKIPPED, record_count·rejected_count·call_count·as_of·
+  error_message(키·URL 없음)를 남긴다.
+- 전송 오류(키 없음·HTTP·네트워크·응답 틀)가 1건이라도 나면 FAILED 이고 places 에 아무것도 쓰지 않는다(이전 수집본 유지).
+  검증 거절(항목 없음·ID 불일치 등)은 그 장소만 건너뛰고 rejected_count 로 센다. 수집은 이름·좌표·주소·collected_at 만 바꾼다.
+- 호출 한도: 오늘(KST 0시부터) call_count 합 + 이번 예정 호출 수가 `daily_call_limit` 를 넘으면 호출 없이 SKIPPED.
+- 백오프: 마지막 성공과 이번 주기 시작(KST) 중 늦은 쪽 뒤로 FAILED·한도 SKIPPED 가 n 회면
+  마지막 실패 + min(`BATCH_BACKOFF_BASE_MIN`(15)분 × 2^(n-1), 주기, 24시간) 전에는 `run-due` 가 건너뛴다.
+  꺼진 소스를 직접 돌린 SKIPPED 는 세지 않는다.
+- 같은 소스를 동시에 돌리지 않는다. PostgreSQL 은 advisory lock 을 못 잡으면 기록 없이 끝낸다.
+  잠금을 잡았는데 RUNNING 행이 남아 있으면(이전 프로세스가 죽음) FAILED('abandoned') 로 닫고 알림 규칙을 탄다.
+- SIGTERM·SIGINT 를 받으면 지금 호출을 마친 뒤 그 실행을 쓰기 없이 FAILED('interrupted') 로 끝낸다
+  (compose `stop_grace_period: 60s`). 한 소스의 예외는 FAILED 로 남기고 같은 tick 의 다른 소스는 계속 돈다.
+- 알림: FAILED·한도 SKIPPED 이면 `ingestion_alert source=… run_id=… status=… reason=…` 오류 로그,
+  `ADMIN_ALERT_WEBHOOK_URL` 이 있으면 JSON POST(5초). 실패가 시작될 때 1회, 계속되면 24시간마다 1회, 복구되면
+  `ingestion_recovered` 1회(`ingestion_runs.alerted_at` 으로 판정).
+- 수집 대상은 DB places 의 PUBLIC 장소 중 contentid(숫자)인 것이다. 수집이 장소를 새로 만들지 않으므로, 장소를 늘리려면
+  `data/samples/places_sample.csv` 에 실제 TourAPI contentid 로 행을 넣고 `seed-places` 를 다시 돌린다.
+- data06·data07 은 잡이 아직 없고 data_sources 에서도 꺼져 있다.
+
 ## 규칙
 
 - 테스트와 CI에서는 실제 외부 API(카카오, Gemini, 경로 API 등)를 호출하지 않는다. 외부 호출은 respx 등으로 목킹한다.

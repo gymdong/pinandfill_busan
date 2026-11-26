@@ -19,5 +19,32 @@ services:
       timeout: 5s
       retries: 10
 
+  # 공공데이터 배치 수집(FR-016). 로컬 개발용이다. backend Dockerfile 이 생기면 build 로 바꾼다.
+  #   docker compose up -d batch   (먼저 alembic upgrade head·seed-places 를 해 둔다)
+  # 키(TOURAPI_SERVICE_KEY)·ADMIN_ALERT_WEBHOOK_URL 은 backend/.env 에서 읽는다. DB 접속은 아래 값이 .env 보다 우선한다.
+  batch:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    # data/samples 를 ../data 로 찾으므로 저장소 전체를 올린다.
+    volumes:
+      - .:/workspace
+      - pinandfill-batch-venv:/opt/venv
+    working_dir: /workspace/backend
+    environment:
+      # 호스트의 backend/.venv(다른 OS)를 쓰지 않게 컨테이너 안에 따로 만든다.
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      DATABASE_URL: postgresql://pinandfill:pinandfill@db:5432/pinandfill
+    env_file:
+      - path: backend/.env
+        required: false
+    command: ["uv", "run", "--frozen", "--no-dev", "python", "-m", "app.batch.cli", "loop", "--tick", "300"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    # SIGTERM 뒤 지금 TourAPI 호출(타임아웃 10초)을 마치고 실행을 FAILED('interrupted') 로 닫을 시간.
+    # 그래도 죽으면 남은 RUNNING 행은 다음 실행이 FAILED('abandoned') 로 닫는다.
+    stop_grace_period: 60s
+
 volumes:
   pinandfill-db:
+  pinandfill-batch-venv:

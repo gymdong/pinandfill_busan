@@ -14,6 +14,7 @@ from app.adapters.kakao import KakaoLocalAdapter, KakaoSettings
 from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
+from app.core.logging import quiet_http_client_logs
 from app.db.session import Database, DatabaseSettings
 from app.modules.crowd.engine_lookup import CrowdServiceLookup
 from app.modules.crowd.file_provider import (
@@ -133,6 +134,7 @@ def create_app(
     카카오 장소 검색은 lifespan 이 시작될 때 붙는다. uvicorn 이나 `with TestClient(...)` 없이 만든 앱에서는
     키가 있어도 장소 검색이 503(ERR-017)이다.
     """
+    quiet_http_client_logs()
     config = settings if settings is not None else Settings.from_env()
     # 주입하지 않은 서비스만 기본 구성으로 만든다. 만들 때 외부 API 를 호출하지 않는다.
     needs_places = (

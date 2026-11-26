@@ -6,6 +6,8 @@ import pytest
 from app.batch.jobs.tourapi_client import (
     TOURAPI_DETAIL_URL,
     TourAPIError,
+    TourAPIRejectedError,
+    TourAPITransportError,
     fetch_public_place,
 )
 
@@ -74,9 +76,15 @@ def test_missing_api_key(monkeypatch):
         fetch_public_place("1997221")
 
 
+def test_empty_item_is_rejected():
+    with make_client(payload={"response": {"body": {"items": {"item": []}}}}) as client:
+        with pytest.raises(TourAPIRejectedError):
+            fetch_public_place("1997221", api_key="test-key", client=client)
+
+
 def test_http_error():
     with make_client(status_code=500) as client:
-        with pytest.raises(TourAPIError):
+        with pytest.raises(TourAPITransportError):
             fetch_public_place("1997221", api_key="test-key", client=client)
 
 
@@ -88,7 +96,7 @@ def test_invalid_response():
 
 def test_mismatched_content_id():
     with make_client(payload=sample_payload("999999")) as client:
-        with pytest.raises(TourAPIError):
+        with pytest.raises(TourAPIRejectedError):
             fetch_public_place("1997221", api_key="test-key", client=client)
 
 
@@ -131,9 +139,9 @@ def test_http_error_does_not_expose_service_key():
     ],
 )
 def test_malformed_nested_response(payload):
-    """잘못된 중첩 응답은 TourAPIError로 처리한다."""
+    """잘못된 중첩 응답은 전송 오류(TourAPITransportError)로 처리한다."""
     with make_client(payload=payload) as client:
-        with pytest.raises(TourAPIError):
+        with pytest.raises(TourAPITransportError):
             fetch_public_place(
                 "1997221",
                 api_key="test-key",
