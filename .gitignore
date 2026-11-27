@@ -37,3 +37,6 @@ npm-debug.log*
 
 # 임베딩 모델 캐시
 /models/
+
+# 혼잡 원본(공공데이터 내려받기). 정규화 CSV 만 커밋한다
+data/crowd/raw/

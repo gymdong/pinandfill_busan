@@ -5,6 +5,7 @@
 """
 
 import os
+import tempfile
 from collections.abc import Iterator
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from app.adapters.public_data.settings import VisitorDataSettings
 from app.batch.settings import BatchSettings
 from app.db.session import DatabaseSettings
+from app.modules.crowd.importers import Data04Settings
 from app.modules.places.source import PlaceSourceSettings
 
 # 개발자 backend/.env·셸에 있어도 시험에 새지 않게 지우는 DB·장소 출처·배치 수집(키·웹훅·DATA-06/07) 환경변수
@@ -28,6 +30,7 @@ DB_ENV_NAMES = (
     "BATCH_BACKOFF_BASE_MIN",
     "DATA06_SERVICE_KEY",
     "DATA07_SERVICE_KEY",
+    "DATA04_SERVICE_KEY",
     "PUBLIC_DATA_TIMEOUT_S",
     "PUBLIC_DATA_PAGE_SIZE",
     "DATA06_BASELINE_DAYS",
@@ -36,13 +39,17 @@ DB_ENV_NAMES = (
     "CROWD_REGION_CODES_PATH",
 )
 # 모두 env_ignore_empty 라 빈 환경변수로는 .env 값을 막을 수 없어 .env 읽기를 끈다.
-DB_SETTINGS_CLASSES = (DatabaseSettings, PlaceSourceSettings, BatchSettings, VisitorDataSettings)
+DB_SETTINGS_CLASSES = (DatabaseSettings, PlaceSourceSettings, BatchSettings, VisitorDataSettings, Data04Settings)
+# 저장소 data/crowd/ 에는 실제 혼잡 자료가 있다. 시험은 빈 디렉터리를 기본으로 보고(→ 정보 부족),
+# 혼잡 값이 필요한 시험은 tests/fixtures/crowd/ 를 CROWD_DATA_DIR 로 직접 넘긴다.
+EMPTY_CROWD_DIR = tempfile.mkdtemp(prefix="crowd-empty-")
 
 # 수집 단계 격리: 개발자 .env 에 PLACE_DATA_SOURCE=db 가 있어도 app.main import 가 개발 DB 를 읽거나 실패하지 않는다.
 for _settings_class in DB_SETTINGS_CLASSES:
     _settings_class.model_config["env_file"] = None
 for _name in DB_ENV_NAMES:
     os.environ.pop(_name, None)
+os.environ["CROWD_DATA_DIR"] = EMPTY_CROWD_DIR
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -104,9 +111,10 @@ def no_real_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     ):
         monkeypatch.setenv(name, "")
     isolate_db_settings(monkeypatch)
-    # 혼잡 입력·설정 위치와 관리자 알림은 개발자 환경이 아니라 저장소 기본값을 쓴다(os.environ 만 읽는다).
-    for name in ("CROWD_DATA_DIR", "CROWD_CONFIG_PATH", "ADMIN_ALERT_WEBHOOK_URL"):
+    # 혼잡 설정 위치와 관리자 알림은 저장소 기본값을, 혼잡 입력은 빈 디렉터리를 쓴다(os.environ 만 읽는다).
+    for name in ("CROWD_CONFIG_PATH", "ADMIN_ALERT_WEBHOOK_URL"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CROWD_DATA_DIR", EMPTY_CROWD_DIR)
 
 
 @pytest.fixture
