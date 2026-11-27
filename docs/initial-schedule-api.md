@@ -75,7 +75,7 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 | `generation.unplaced` | 미배치 선택의 `clientId`와 `reason`(기존 Violation 구조). |
 | `generation.previewClientIds` | `saved=false`일 때만 채운다. 미리보기의 서버 블록 ID(`days[].blocks[].id`, `conflicts[].blockIds`) → 요청 `clientId`. 같은 장소를 여러 번 고른 선택을 구분하는 응답 전용 매핑이며 저장하지 않는다. `saved=true`이면 `{}`. 추가 필드라 무시해도 된다. |
 
-모두 배치되면 `unplaced: []`이다. 경로 또는 운영시간 미확인 때문에 `confirmed=false`여도 저장할 수 있다.
+모두 배치되면 `unplaced: []`이다. 경로 또는 운영시간 미확인(추정 구간 포함) 때문에 `confirmed=false`여도 저장할 수 있다.
 고정 시각 충돌은 기존 `409 / ERR-009`로 거절하며 저장하지 않는다.
 경로가 미확인이어도 이전 방문 종료가 다음 고정 시작보다 늦으면 그 후보 구간은 알려진 시간 충돌이다.
 엔진은 다음 구간을 계속 시도하고, 가능한 구간이 없으면 해당 선택을 미배치로 반환한다.
@@ -83,8 +83,10 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 하나라도 미배치면 HTTP 200 / `saved=false`로 부분 결과를 반환하고 기존 일정과 EDIT 이력을 건드리지 않는다.
 부분 결과를 수락하거나 저장하는 별도 API는 없다.
 
-이동시간이 확인되지 않은 구간은 기존 계약처럼 외부 `legs`에서 생략하고 확인 필요 경고를 남긴다.
-가짜 0분·거리·ESTIMATED 구간을 만들지 않는다. 후속 유연 장소의 시각을 정할 수 없으면 미배치될 수 있다.
+기본 구성에서 경로 API(TMAP → ODsay)를 쓸 수 없으면(키 없음·실패·한도 초과) 두 장소 좌표로 추정한
+`ESTIMATED`(화면 '추정') 구간을 쓰고 `confirmed=false`로 둔다(#69, `backend/app/adapters/route/estimated.py`).
+좌표가 없어 추정도 할 수 없는 구간만 외부 `legs`에서 생략하고 확인 필요 경고를 남긴다. 가짜 0분 구간은 만들지 않는다.
+후속 유연 장소의 시각을 정할 수 없으면 미배치될 수 있다.
 영업시간이 미확인인 PUBLIC/KAKAO 장소는 체류시간 등 배치 근거가 있다면 배치하고 `HOURS_NEEDS_CHECK`를 남긴다.
 
 ## 계산 상한(잠정)
@@ -152,11 +154,13 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 ## 조립·저장·보안 경계
 
 `default_trip_service`는 앱이 선택한 공공 장소 공급자와 동일한 일정 엔진으로 planner를 구성한다.
+경로 공급자는 TMAP → ODsay → 추정 순서이고, 같은 공급자로 경유지 제안(`WaypointRecommender`)도 만든다.
+혼잡 서비스가 있으면 planner 에 혼잡 조회와 회피 기준(`avoidance`)을 넘긴다(FR-009).
 시험에서는 Fake 장소·경로 공급자를 사용할 수 있다. 저장소는 `DATABASE_URL`이 비어 있으면 메모리,
 설정돼 있으면 PostgreSQL을 사용한다. DB와 장소 출처의 설정 방법은 [백엔드 README](../backend/README.md)를 참조한다.
 
 경로를 포함한 일정 계산은 DB 트랜잭션 밖에서 수행한다. 저장 시 여행 상태가 계산 시작 때와 같은지 다시 확인하고,
-달라졌으면 최신 상태로 재시도한다. 변경된 계획을 수락하면 EDIT 이력을 폐기하고 일정을 저장한다.
+달라졌으면 최신 상태로 재시도한다(최대 `MAX_EDIT_ATTEMPTS`회, 모두 겹치면 아무것도 저장하지 않고 503 `ERR-017`). 변경된 계획을 수락하면 EDIT 이력을 폐기하고 일정을 저장한다.
 PostgreSQL에서는 두 쓰기를 같은 트랜잭션에서 처리해 실패 시 함께 롤백한다.
 메모리 저장소는 프로세스 잠금과 실패 시 보상 복원을 사용한다.
 
