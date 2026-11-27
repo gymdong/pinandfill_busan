@@ -82,20 +82,21 @@ def default_trip_service(
     없으면 메모리 저장소를 쓰며, 프로세스가 재시작되면 여행과 이력이 사라진다.
     """
     routes = build_route_provider()
-    engine = BasicItineraryEngine(places, routes)
+    crowd_lookup = CrowdServiceLookup(crowd_service) if crowd_service is not None else None
+    engine = BasicItineraryEngine(places, routes, crowd=crowd_lookup)
     recommender = WaypointRecommender(
         PublicPlaceCandidates(lambda: [item.place.id for item in places.all()], lambda pid: _stay(places, pid)),
         places,
         routes,
         WAYPOINT_WEIGHTS,
-        crowd=CrowdServiceLookup(crowd_service) if crowd_service is not None else None,
+        crowd=crowd_lookup,
         **({"crowd_min_confidence": crowd_service.avoidance.min_confidence} if crowd_service is not None else {}),
         max_route_candidates=WAYPOINT_ROUTE_CANDIDATES,
     )
     initial_planner = InitialSchedulePlanner(
         engine,
         PublicStayDurations(places.stay_min),
-        crowd=CrowdServiceLookup(crowd_service) if crowd_service is not None else None,
+        crowd=crowd_lookup,
         # 혼잡 계산과 같은 설정 파일에서 읽은 값을 서비스가 들고 있다(둘이 어긋나지 않게).
         avoidance=crowd_service.avoidance if crowd_service is not None else None,
     )
