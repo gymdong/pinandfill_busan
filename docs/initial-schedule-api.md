@@ -151,20 +151,21 @@ API-002로 빈 여행을 만든 다음 `POST /api/trips/{tripId}/schedule`을 �
 
 ## 조립·저장·보안 경계
 
-#25의 `default_trip_service` 안에서 동일 엔진과 표본 장소 체류시간 공급자로 planner를 주입한다.
-별도 엔진 또는 서비스 팩터리는 없다. 시험에서는 Fake 장소·경로와 planner를 주입한다.
-현재 기본 서버는 메모리 저장소이므로 재시작/다중 워커에 안전한 영속 서버가 아니다.
+`default_trip_service`는 앱이 선택한 공공 장소 공급자와 동일한 일정 엔진으로 planner를 구성한다.
+시험에서는 Fake 장소·경로 공급자를 사용할 수 있다. 저장소는 `DATABASE_URL`이 비어 있으면 메모리,
+설정돼 있으면 PostgreSQL을 사용한다. DB와 장소 출처의 설정 방법은 [백엔드 README](../backend/README.md)를 참조한다.
 
-수락 검사 후 EDIT 폐기 → 일정 저장 순서를 사용하고 실패 시 기존 EDIT 이력과 변경된 저장 상태를 복원한다.
-보상 쓰기 자체가 영구적으로 실패하는 저장소나 다중 프로세스 경쟁까지 원자성을 보장하지는 않는다.
-DB 단계의 일정·스냅샷·revision 트랜잭션은 PM 결정대로 후속 작업이다.
+경로를 포함한 일정 계산은 DB 트랜잭션 밖에서 수행한다. 저장 시 여행 상태가 계산 시작 때와 같은지 다시 확인하고,
+달라졌으면 최신 상태로 재시도한다. 변경된 계획을 수락하면 EDIT 이력을 폐기하고 일정을 저장한다.
+PostgreSQL에서는 두 쓰기를 같은 트랜잭션에서 처리해 실패 시 함께 롤백한다.
+메모리 저장소는 프로세스 잠금과 실패 시 보상 복원을 사용한다.
 
 `sessionCoords`는 계산 컨텍스트에만 전달한다. KAKAO 블록·스냅샷·응답에는 ID·URL만 남는다.
 `clientId`는 요청 내 매핑에만 사용하며 영속 블록 식별자로 쓰지 않는다. 409 `fields`와 `previewClientIds`에만 실린다.
-장소·체류시간 공급자 예외는 `initial_place_lookup` / `initial_stay_lookup` / `initial_tag_stay_lookup` 경고 로그로 남기되
-예외 타입과 공공 장소 ID만 쓴다(NFR-010: 좌표·키·응답 본문·사용자 입력 없음).
-저장 실패 보상 중 복원 읽기·쓰기가 실패하면 `trip_generation restore_failed` 경고(예외 타입만)를 남기고 원래 예외를 그대로 올린다.
-실제 외부 API 호출, 공공 DB, API-011 기본 후보 공급자, UI-03 연결, 날짜 분리 제안은 검증/구현 범위 밖이다.
+장소·체류시간 공급자 예외는 `initial_place_lookup` / `initial_stay_lookup` / `initial_tag_stay_lookup` 경고 로그로 남긴다.
+로그 필드는 예외 타입과 장소 종류(`PUBLIC` 또는 `KAKAO`)로 제한한다. 장소 ID, 좌표, 키, 예외 메시지, 응답 본문은 기록하지 않는다(NFR-010).
+저장 실패 보상 중 일정 복원이 실패하면 `trip_generation restore_failed`, EDIT 이력 복원이 실패하면
+`trip_generation history_restore_failed` 경고를 남긴다. 두 경고 모두 예외 타입만 기록하며 원래 저장 예외를 다시 올린다.
 
 ## 검증 명령
 
