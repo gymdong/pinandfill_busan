@@ -12,7 +12,7 @@
 }
 
 .warn {
-  border-left: 4px solid var(--color-warn);
+  border: 1px solid var(--color-warn);
   background: var(--color-warn-soft);
 }
 

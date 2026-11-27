@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { toApiError, tripsApi } from '@/api';
 import { BottomSheet, Button } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
+import { formatDuration } from '@/features/itinerary/format';
 import { useApi } from '@/hooks/useApi';
 import type { AddBlockRequest, ScheduleMutationResponse, WaypointCandidate, WaypointThresholdMin } from '@/types/api';
 import styles from './WaypointSheet.module.css';
@@ -15,14 +16,21 @@ export interface WaypointSheetProps {
   onClose: () => void;
   /** Close recommendation and open the existing manual search entry. */
   onDirectSearch?: () => void;
+  /** 구간 양 끝 장소 이름(시트 제목). 모르면 일반 제목을 쓴다. */
+  fromName?: string;
+  toName?: string;
+  /** 이 구간 뒤에 있는 고정 장소. 넣어도 고정 시각은 바뀌지 않는다는 근거로 보여 준다(원칙 1·5). */
+  keptFixed?: readonly { name: string; start: string }[];
 }
+
+const THRESHOLDS = [10, 15, 30] as const;
 
 /** Mount for the selected adjacent pair; no timeline or global state is changed here. */
 export function WaypointSheet(props: WaypointSheetProps) {
   return <WaypointContent key={JSON.stringify([props.tripId, props.between.fromBlockId, props.between.toBlockId])} {...props} />;
 }
 
-function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled, onChange, onClose, onDirectSearch }: WaypointSheetProps) {
+function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled, onChange, onClose, onDirectSearch, fromName, toName, keptFixed = [] }: WaypointSheetProps) {
   const [insertionError, setInsertionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const inFlight = useRef(false);
@@ -59,37 +67,46 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
     }
   }
 
-  return <BottomSheet open onClose={onClose} title="경유지 추천" description="두 장소 사이에 들를 곳을 비교해 보세요.">
-    {insertionError && <p role="alert">{insertionError}</p>}
-    {onDirectSearch && <Button variant="outline" disabled={busy} onClick={onDirectSearch}>직접 검색해서 넣기</Button>}
-    <fieldset className={styles.threshold} disabled={busy}>
-      <legend>우회 허용 시간</legend>
-      {([10, 15, 30] as const).map((value) => <label key={value}>
-        <input type="radio" name="waypoint-threshold" checked={thresholdMin === value} onChange={() => {
-          setInsertionError(null);
-          setThresholdMin(value);
-        }} />
-        {value}분
-      </label>)}
-    </fieldset>
-    {loaded.status === 'loading' && <p role="status">경유지를 찾는 중…</p>}
-    {loaded.status === 'error' && <div role="alert">
-      <p>경유지를 불러오지 못했어요. {toApiError(loaded.error).message}</p>
+  const title = fromName && toName ? `${fromName} → ${toName} 사이` : '사이에 들를 곳';
+  const kept = keptFixed.map((item) => `${item.name} ${item.start}`).join(', ');
+
+  return <BottomSheet open onClose={onClose} title={title} description="우회가 적은 곳부터 보여 드려요. 넣어도 고정한 시각은 그대로예요.">
+    {insertionError && <p role="alert" className={styles.error}>{insertionError}</p>}
+    <div className={styles.threshold}>
+      <span className={styles.thresholdLabel} id={`waypoint-threshold-${fromBlockId}`}>우회는 최대</span>
+      <span className={styles.segments} role="radiogroup" aria-labelledby={`waypoint-threshold-${fromBlockId}`}>
+        {THRESHOLDS.map((value) => <button
+          key={value} type="button" role="radio" aria-checked={thresholdMin === value} disabled={busy}
+          className={styles.segment}
+          onClick={() => { setInsertionError(null); setThresholdMin(value); }}
+        >{value}분</button>)}
+      </span>
+    </div>
+    {loaded.status === 'loading' && <p role="status" className={styles.status}>들를 곳을 찾는 중…</p>}
+    {loaded.status === 'error' && <div role="alert" className={styles.status}>
+      <p>들를 곳을 불러오지 못했어요. {toApiError(loaded.error).message}</p>
       <Button variant="outline" disabled={busy} onClick={loaded.reload}>다시 시도</Button>
     </div>}
-    {loaded.status === 'success' && candidates.length === 0 && <div role="status">
-      <p>추가할 곳 없음</p>
-      <p>{thresholdMin < 30 ? '우회 허용 시간을 늘려 다시 찾아보세요.' : '다른 구간에서 찾아보세요.'}</p>
+    {loaded.status === 'success' && candidates.length === 0 && <div role="status" className={styles.status}>
+      <p className={styles.emptyTitle}>{thresholdMin}분 안에 들를 곳이 없어요</p>
+      <p>{thresholdMin < 30 ? '우회 시간을 늘려 다시 찾아보세요.' : '다른 구간에서 찾아보세요.'}</p>
     </div>}
-    <ul className={styles.candidates} aria-label="경유지 후보">
+    <ul className={styles.candidates} aria-label="들를 곳 후보">
       {candidates.map((candidate) => <li key={candidate.place.id} className={styles.candidate}>
-        <h3>{candidate.place.name}</h3>
-        <p>추가 이동 {candidate.detourMin}분 · 체류 {candidate.stayMin}분</p>
+        <div className={styles.candidateHead}>
+          <h3 className={styles.name}>{candidate.place.name}</h3>
+          <p className={styles.detour}><span className={styles.detourValue}>+{candidate.detourMin}분</span> 우회</p>
+        </div>
+        <p className={styles.meta}>머무는 시간 {formatDuration(candidate.stayMin)}</p>
         <CrowdBadge grade={candidate.crowd?.grade ?? null} confidence={candidate.crowd?.confidence} />
-        <p>{candidate.reason}</p>
-        <p className={styles.source}>공공 데이터 · 기준일 {candidate.place.refDate}</p>
-        <Button disabled={busy} aria-label={`${candidate.place.name} 경유지로 추가`} onClick={() => { void insert(candidate); }}>경유지로 추가</Button>
+        <p className={styles.reason}>{candidate.reason}</p>
+        {kept && <p className={styles.kept}>넣어도 그대로: {kept}</p>}
+        <div className={styles.candidateFoot}>
+          <p className={styles.source}>공공 데이터 · 기준일 {candidate.place.refDate}</p>
+          <Button variant="outline" disabled={busy} aria-label={`${candidate.place.name} 일정에 넣기`} onClick={() => { void insert(candidate); }}>넣기</Button>
+        </div>
       </li>)}
     </ul>
+    {onDirectSearch && <button type="button" className={styles.direct} disabled={busy} onClick={onDirectSearch}>원하는 곳 직접 찾아 넣기</button>}
   </BottomSheet>;
 }

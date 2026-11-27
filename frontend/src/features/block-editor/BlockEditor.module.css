@@ -51,9 +51,8 @@
   font-weight: 500;
 }
 
-.editor input:focus {
+.editor input:focus-visible {
   border-color: var(--color-ink);
-  outline: none;
 }
 
 .editor form button {
@@ -126,4 +125,9 @@
 .danger {
   justify-self: start;
   color: var(--color-warn);
+}
+
+.note {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
 }

@@ -24,6 +24,8 @@ export function BlockEditor({ tripId, block, between, dayNo, disabled, onChange 
   const [searchError, setSearchError] = useState<string | null>(null);
   const [stayMin, setStayMin] = useState(block?.stayMin ?? 30);
   const [seq, setSeq] = useState(block?.seq ?? 1);
+  // 고정 장소를 빼는 것은 되돌리기 전까지 고정 시각을 잃는 일이라 한 번 더 묻는다.
+  const [confirmRemove, setConfirmRemove] = useState(false);
   // 후보별(kakaoPlaceId) 고른 체류시간과 안내. 서버는 체류시간 기본값을 만들지 않는다(#18 PM 결정 4, 지도 UI-06과 같음).
   const [stays, setStays] = useState<Record<string, number>>({});
   const [stayErrors, setStayErrors] = useState<Record<string, string>>({});
@@ -110,16 +112,23 @@ export function BlockEditor({ tripId, block, between, dayNo, disabled, onChange 
     </li>)}</ul>}
   </section>;
 
-  return <div className={`${styles.editor} ${styles.inCard}`} aria-label="블록 편집">
-    <h3>블록 편집</h3>
+  return <div className={`${styles.editor} ${styles.inCard}`} aria-label="이 장소 고치기">
+    <h3>이 장소 고치기</h3>
     <form onSubmit={(event) => { event.preventDefault(); void onChange(() => tripsApi.updateBlock(tripId, block.id, { stayMin: Number(stayMin) })); }}>
       <label>체류시간(분) <input type="number" min="1" required value={stayMin} onChange={(event) => setStayMin(Number(event.target.value))} /></label>
       <Button type="submit" variant="outline" disabled={disabled}>체류시간 변경</Button>
     </form>
-    <form onSubmit={(event) => { event.preventDefault(); void onChange(() => tripsApi.updateBlock(tripId, block.id, { seq: Number(seq) })); }}>
-      <label>순서 <input type="number" min="1" required value={seq} onChange={(event) => setSeq(Number(event.target.value))} /></label>
-      <Button type="submit" variant="outline" disabled={disabled}>순서 변경</Button>
-    </form>
-    <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => onChange(() => tripsApi.deleteBlock(tripId, block.id))}>블록 삭제</Button>
+    {block.isFixed
+      // 고정 장소는 순서·시각이 바뀌지 않는다(원칙 1). 순서 입력을 두지 않는다.
+      ? <p className={styles.note}>고정한 장소라 순서와 시각은 바뀌지 않아요.</p>
+      : <form onSubmit={(event) => { event.preventDefault(); void onChange(() => tripsApi.updateBlock(tripId, block.id, { seq: Number(seq) })); }}>
+        <label>순서 <input type="number" min="1" required value={seq} onChange={(event) => setSeq(Number(event.target.value))} /></label>
+        <Button type="submit" variant="outline" disabled={disabled}>순서 변경</Button>
+      </form>}
+    {block.isFixed && !confirmRemove
+      ? <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => setConfirmRemove(true)}>일정에서 빼기</Button>
+      : <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => onChange(() => tripsApi.deleteBlock(tripId, block.id))}>
+        {block.isFixed ? '고정 장소지만 빼기' : '일정에서 빼기'}
+      </Button>}
   </div>;
 }

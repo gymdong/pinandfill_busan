@@ -142,6 +142,23 @@
   border-radius: var(--radius-m);
   background: var(--color-surface);
   overflow: hidden;
+  transition: box-shadow 200ms ease-out, background-color 200ms ease-out;
+}
+
+/* 핀: 사용자가 담은 곳. 실선 잉크 테두리로 일정의 뼈대를 만든다. */
+.cardPin {
+  border-style: solid;
+}
+
+/* 필: 추천으로 채운 곳. 구간 레일과 같은 점선으로 '사이를 채운' 장소임을 보인다. */
+.cardFill {
+  border: 1.5px dashed var(--color-ink-muted);
+}
+
+/* 방금 들어간 블록을 잠깐 표시한다(움직임 줄이기 설정에서도 색 변화는 남는다). */
+.cardFlash {
+  background: var(--color-accent-soft);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 .cardSelected {
@@ -151,7 +168,7 @@
 
 .cardMain {
   display: grid;
-  grid-template-columns: 52px 1fr auto;
+  grid-template-columns: 52px 1fr;
   align-items: start;
   gap: var(--space-3);
   width: 100%;
@@ -190,8 +207,10 @@
 }
 
 .lock {
+  display: inline-flex;
+  margin-left: var(--space-1);
   color: var(--color-ink);
-  padding-top: 4px;
+  vertical-align: -2px;
 }
 
 .cardExtras {

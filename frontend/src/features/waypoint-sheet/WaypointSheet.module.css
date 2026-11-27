@@ -1,7 +1,154 @@
-.threshold { display: flex; flex-wrap: wrap; gap: var(--space-3); border: 0; padding: 0; margin: 0 0 var(--space-4); }
-.threshold legend { margin-bottom: var(--space-2); font-weight: 600; }
-.threshold label { display: flex; align-items: center; gap: var(--space-1); min-height: var(--tap-min); cursor: pointer; }
-.candidates { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
-.candidate { padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-s); overflow-wrap: anywhere; }
-.candidate h3 { margin: 0; }
-.source { font-size: var(--text-s); }
+/* 우회 허용 시간: 여행 시작 화면의 이동수단 선택과 같은 둥근 세그먼트(선택은 채움·굵기·aria-checked로도 전달). */
+.threshold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.thresholdLabel {
+  font-size: var(--text-s);
+  font-weight: 700;
+}
+
+.segments {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.segment {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  font-size: var(--text-s);
+  cursor: pointer;
+}
+
+.segment[aria-checked='true'] {
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-on-accent);
+  font-weight: 800;
+}
+
+.status {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4) 0;
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+}
+
+.emptyTitle {
+  color: var(--color-ink);
+  font-size: var(--text-m);
+  font-weight: 700;
+}
+
+.error {
+  margin-bottom: var(--space-3);
+  color: var(--color-warn);
+  font-size: var(--text-s);
+  font-weight: 700;
+}
+
+.candidates {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.candidate {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-m);
+  background: var(--color-surface);
+  overflow-wrap: anywhere;
+}
+
+.candidateHead,
+.candidateFoot {
+  width: 100%;
+}
+
+.candidateHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.name {
+  font-size: var(--text-l);
+  font-weight: 800;
+}
+
+/* 비교의 첫 기준은 늘어나는 이동시간이다. */
+.detour {
+  flex: none;
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+  white-space: nowrap;
+}
+
+.detourValue {
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: 400;
+}
+
+.meta,
+.reason {
+  color: var(--color-ink-muted);
+  font-size: var(--text-s);
+}
+
+.kept {
+  color: var(--color-accent);
+  font-size: var(--text-s);
+  font-weight: 700;
+}
+
+.candidateFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+.source {
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+}
+
+.direct {
+  display: block;
+  width: 100%;
+  min-height: var(--tap-min);
+  margin-top: var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font-size: var(--text-s);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.direct:disabled,
+.segment:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
