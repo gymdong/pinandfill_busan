@@ -131,3 +131,14 @@
   color: var(--color-ink-muted);
   font-size: var(--text-s);
 }
+
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.confirm p {
+  flex-basis: 100%;
+}

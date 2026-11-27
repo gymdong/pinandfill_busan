@@ -30,7 +30,7 @@ describe('WaypointSheet', () => {
     expect(screen.getByText('머무는 시간 40분')).toBeInTheDocument();
     expect(screen.getByText('정보 부족')).toBeInTheDocument();
     expect(screen.getByText(candidate.reason)).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: '15분' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '15분' })).toBeChecked();
   });
 
   it('10/30분 변경은 해당 임계값으로 다시 조회하고 빈 결과 안내를 제공한다', async () => {
@@ -111,7 +111,7 @@ describe('WaypointSheet', () => {
     await userEvent.click(screen.getByRole('radio', { name: '30분' }));
     await screen.findByText(candidate.place.name);
     view.rerender(<WaypointSheet {...input} between={{ fromBlockId: 'b', toBlockId: 'c' }} />);
-    expect(screen.getByRole('radio', { name: '15분' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '15분' })).toBeChecked();
     expect(screen.queryByText(candidate.place.name)).not.toBeInTheDocument();
     await act(async () => next.resolve({ candidates: [] }));
   });

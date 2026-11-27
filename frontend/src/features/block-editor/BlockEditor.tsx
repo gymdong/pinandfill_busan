@@ -125,10 +125,13 @@ export function BlockEditor({ tripId, block, between, dayNo, disabled, onChange 
         <label>순서 <input type="number" min="1" required value={seq} onChange={(event) => setSeq(Number(event.target.value))} /></label>
         <Button type="submit" variant="outline" disabled={disabled}>순서 변경</Button>
       </form>}
-    {block.isFixed && !confirmRemove
-      ? <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => setConfirmRemove(true)}>일정에서 빼기</Button>
-      : <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => onChange(() => tripsApi.deleteBlock(tripId, block.id))}>
-        {block.isFixed ? '고정 장소지만 빼기' : '일정에서 빼기'}
-      </Button>}
+    {confirmRemove
+      // 확인 단계: 같은 자리에는 '취소'가 와서 빠른 두 번 누르기로 바로 지워지지 않는다.
+      ? <div className={styles.confirm} role="group" aria-label="고정 장소 빼기 확인">
+        <p role="status" className={styles.note}>고정한 시각도 함께 사라져요. 정말 뺄까요?</p>
+        <Button variant="outline" disabled={disabled} onClick={() => setConfirmRemove(false)}>취소</Button>
+        <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => onChange(() => tripsApi.deleteBlock(tripId, block.id))}>고정 장소지만 빼기</Button>
+      </div>
+      : <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => (block.isFixed ? setConfirmRemove(true) : onChange(() => tripsApi.deleteBlock(tripId, block.id)))}>일정에서 빼기</Button>}
   </div>;
 }

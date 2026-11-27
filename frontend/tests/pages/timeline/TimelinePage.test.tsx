@@ -233,7 +233,7 @@ describe('코스 타임라인', () => {
       const add = vi.spyOn(tripsApi, 'addBlock').mockRejectedValue(new Error('private raw error'));
       renderPage();
       await screen.findByText('코스 타임라인');
-      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]).not.toHaveAttribute('aria-expanded');
       await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
       const sheet = await screen.findByRole('dialog');
       expect(suggest).toHaveBeenCalledWith('t1', { fromBlockId: first!.id, toBlockId: second!.id, thresholdMin: 15 }, expect.anything());
@@ -250,7 +250,11 @@ describe('코스 타임라인', () => {
       await userEvent.click(within(sheet).getByRole('button', { name: '원하는 곳 직접 찾아 넣기' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(screen.getByRole('region', { name: '경유지 추가' })).toBeInTheDocument();
-      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]).toHaveAttribute('aria-expanded', 'true');
+      // 직접 찾기가 열린 구간은 같은 자리 버튼이 그것을 닫는다(닫을 길이 있어야 한다).
+      const close = screen.getByRole('button', { name: '직접 찾기 닫기' });
+      expect(close).toHaveAttribute('aria-expanded', 'true');
+      await userEvent.click(close);
+      expect(screen.queryByRole('region', { name: '경유지 추가' })).not.toBeInTheDocument();
 
       await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
       expect(await screen.findByRole('dialog')).toBeInTheDocument();
@@ -290,7 +294,7 @@ describe('코스 타임라인', () => {
       await screen.findByText('코스 타임라인');
       await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
       await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 일정에 넣기` }));
-      expect(await screen.findByText(`일정에 넣었어요: ${candidate.place.name} · 오른쪽 위에서 되돌릴 수 있어요.`)).toBeInTheDocument();
+      expect(await screen.findByText(`일정에 넣었어요: ${candidate.place.name} · 되돌리기 버튼으로 취소할 수 있어요.`)).toBeInTheDocument();
       expect(document.getElementById('block-new-block')?.className).toMatch(/cardFlash/);
       expect(document.getElementById('block-new-block')?.className).toMatch(/cardFill/);
     });

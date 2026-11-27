@@ -54,7 +54,8 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
 
   useEffect(() => {
     if (!flashId) return undefined;
-    document.getElementById(`block-${flashId}`)?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    document.getElementById(`block-${flashId}`)?.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
     const timer = setTimeout(() => setFlashId(null), 1600);
     return () => clearTimeout(timer);
   }, [flashId]);
@@ -89,8 +90,8 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     if (isUndo) showToast('직전 편집을 되돌렸어요.');
     else if (added) {
       setFlashId(added.id);
-      showToast(`일정에 넣었어요: ${nameOf(added)} · 오른쪽 위에서 되돌릴 수 있어요.`);
-    } else if (removed) showToast(`일정에서 뺐어요: ${nameOf(removed)} · 오른쪽 위에서 되돌릴 수 있어요.`);
+      showToast(`일정에 넣었어요: ${nameOf(added)} · 되돌리기 버튼으로 취소할 수 있어요.`);
+    } else if (removed) showToast(`일정에서 뺐어요: ${nameOf(removed)} · 되돌리기 버튼으로 취소할 수 있어요.`);
     else showToast('일정을 고쳤어요.');
   };
   const change: Change = async (action, isUndo) => { await run(action, isUndo); };
@@ -172,9 +173,12 @@ function DayTimeline({ tripId, day, selected, slot, pending, flashId, onSelect, 
       {next && <div className={styles.between}>
         <p className={styles.leg}>{leg ? <LegText leg={leg} /> : '이동시간 확인 필요'}</p>
         {/* 구간 진입점은 하나다. 직접 검색은 추천 시트 안에서 연다. */}
-        <button type="button" className={styles.slotButton} aria-haspopup="dialog" aria-expanded={recommendedSlot === block.id || slot === block.id} disabled={pending} onClick={() => setRecommendedSlot(block.id)}>
-          <PlusIcon />사이에 들를 곳 추천받기
-        </button>
+        {slot === block.id
+          // 직접 찾기 편집기가 열려 있으면 같은 자리 버튼이 그것을 닫는다.
+          ? <button type="button" className={styles.slotButton} aria-expanded="true" disabled={pending} onClick={() => onSlot(block.id)}>직접 찾기 닫기</button>
+          : <button type="button" className={styles.slotButton} aria-haspopup="dialog" disabled={pending} onClick={() => setRecommendedSlot(block.id)}>
+            <PlusIcon />사이에 들를 곳 추천받기
+          </button>}
         {slot === block.id && <BlockEditor key={`slot-${block.id}`} tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending} onChange={onSlotChange} />}
         {recommendedSlot === block.id && <WaypointSheet
           tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending}

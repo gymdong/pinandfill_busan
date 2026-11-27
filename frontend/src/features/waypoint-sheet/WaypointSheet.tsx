@@ -72,16 +72,21 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
 
   return <BottomSheet open onClose={onClose} title={title} description="우회가 적은 곳부터 보여 드려요. 넣어도 고정한 시각은 그대로예요.">
     {insertionError && <p role="alert" className={styles.error}>{insertionError}</p>}
-    <div className={styles.threshold}>
-      <span className={styles.thresholdLabel} id={`waypoint-threshold-${fromBlockId}`}>우회는 최대</span>
-      <span className={styles.segments} role="radiogroup" aria-labelledby={`waypoint-threshold-${fromBlockId}`}>
-        {THRESHOLDS.map((value) => <button
-          key={value} type="button" role="radio" aria-checked={thresholdMin === value} disabled={busy}
-          className={styles.segment}
-          onClick={() => { setInsertionError(null); setThresholdMin(value); }}
-        >{value}분</button>)}
+    {/* 기본 radio 를 쓰고(방향키·Tab 동작은 브라우저 그대로) 모양만 둥근 세그먼트로 꾸민다. */}
+    <fieldset className={styles.threshold} disabled={busy}>
+      <legend className={styles.thresholdLabel}>우회는 최대</legend>
+      <span className={styles.segments}>
+        {THRESHOLDS.map((value) => <label key={value} className={`${styles.segment} ${thresholdMin === value ? styles.segmentOn : ''}`}>
+          <input
+            type="radio" className="sr-only" name={`waypoint-threshold-${fromBlockId}`} value={value}
+            checked={thresholdMin === value}
+            onChange={() => { setInsertionError(null); setThresholdMin(value); }}
+          />
+          {value}분
+        </label>)}
       </span>
-    </div>
+    </fieldset>
+    {kept && <p className={styles.kept}>넣어도 그대로: {kept}</p>}
     {loaded.status === 'loading' && <p role="status" className={styles.status}>들를 곳을 찾는 중…</p>}
     {loaded.status === 'error' && <div role="alert" className={styles.status}>
       <p>들를 곳을 불러오지 못했어요. {toApiError(loaded.error).message}</p>
@@ -100,7 +105,6 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
         <p className={styles.meta}>머무는 시간 {formatDuration(candidate.stayMin)}</p>
         <CrowdBadge grade={candidate.crowd?.grade ?? null} confidence={candidate.crowd?.confidence} />
         <p className={styles.reason}>{candidate.reason}</p>
-        {kept && <p className={styles.kept}>넣어도 그대로: {kept}</p>}
         <div className={styles.candidateFoot}>
           <p className={styles.source}>공공 데이터 · 기준일 {candidate.place.refDate}</p>
           <Button variant="outline" disabled={busy} aria-label={`${candidate.place.name} 일정에 넣기`} onClick={() => { void insert(candidate); }}>넣기</Button>
