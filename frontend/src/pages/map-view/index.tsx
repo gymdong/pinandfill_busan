@@ -35,6 +35,12 @@ function MapViewContent({ tripId }: { tripId: string }) {
   // 공공 DB 장소라도 서버가 체류시간 근거가 없다고 알려 준(fields.stayMin) 후보
   const [askStay, setAskStay] = useState<ReadonlySet<string>>(new Set());
   const sheet = useRef<HTMLElement>(null);
+  const overlay = useRef<HTMLDivElement>(null);
+  // 지도 위 버튼 줄과 아래 시트가 덮는 높이. 마커가 그 밑에 숨지 않게 지도에 알려 준다.
+  const getCovered = useCallback(() => ({
+    top: overlay.current?.offsetHeight ?? 0,
+    bottom: sheet.current?.offsetHeight ?? 0,
+  }), []);
 
   // 선택 카드는 시트 맨 위에 나오므로, 목록 아래쪽을 눌렀을 때도 보이게 시트를 올린다.
   useEffect(() => {
@@ -103,9 +109,9 @@ function MapViewContent({ tripId }: { tripId: string }) {
 
   return <main className={styles.page}>
     <h1 className="sr-only">지도 보기</h1>
-    <KakaoMap className={styles.map} blocks={blocks} legs={day.legs} selectedId={selectedId} onSelect={setSelectedId} onLongPress={findNearby} />
+    <KakaoMap className={styles.map} blocks={blocks} legs={day.legs} selectedId={selectedId} onSelect={setSelectedId} onLongPress={findNearby} getCovered={getCovered} />
 
-    <div className={styles.overlay}>
+    <div ref={overlay} className={styles.overlay}>
       <div className={styles.topRow}>
         <Link to={paths.timeline(tripId)} className={styles.roundButton} aria-label="코스 타임라인으로"><BackIcon /></Link>
         {currentSchedule.days.length > 0 && <nav className={styles.days} aria-label="여행 일차">
