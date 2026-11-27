@@ -9,7 +9,8 @@ type KakaoMaps = {
   LatLng: new (lat: number, lng: number) => LatLng;
   Map: new (node: HTMLElement, options: { center: LatLng; level: number }) => {
     setCenter(center: LatLng): void;
-    setBounds(bounds: unknown): void;
+    setBounds(bounds: unknown, paddingTop?: number, paddingRight?: number, paddingBottom?: number, paddingLeft?: number): void;
+    panBy(dx: number, dy: number): void;
     getProjection(): { coordsFromContainerPoint(point: unknown): LatLng };
   };
   Point: new (x: number, y: number) => unknown;
@@ -61,22 +62,36 @@ export interface KakaoMapProps {
   onLongPress(coords: Coords): void;
   /** 지도 영역 크기·모양. 지정하지 않으면 높이 300px 카드로 그린다. */
   className?: string;
+  /**
+   * 지도 위를 덮는 UI(위 버튼 줄·아래 시트)의 높이(px). 마커가 그 밑에 숨지 않게 범위 맞춤과 선택 중심에 반영한다.
+   * 그릴 때마다 다시 재므로 함수로 받는다.
+   */
+  getCovered?: () => { top: number; bottom: number };
 }
 
-export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, className }: KakaoMapProps) {
+const NO_COVER = () => ({ top: 0, bottom: 0 });
+const EDGE_PX = 24;
+
+export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, className, getCovered = NO_COVER }: KakaoMapProps) {
   const node = useRef<HTMLDivElement>(null);
   const mapRef = useRef<InstanceType<KakaoMaps['Map']> | null>(null);
   const mapsRef = useRef<KakaoMaps | null>(null);
   const [error, setError] = useState<string | null>(null);
   const points = useMemo(() => blocks.map((block) => ({ block, place: resolveBlockPlace(block.place) })), [blocks]);
   const selectionRef = useRef({ selectedId, points });
+  const coveredRef = useRef(getCovered);
+  useEffect(() => { coveredRef.current = getCovered; }, [getCovered]);
+  /** 덮인 영역을 뺀 보이는 부분의 가운데에 좌표를 둔다(시트가 아래 절반을 가려도 마커가 보이게). */
+  const centerVisible = (map: InstanceType<KakaoMaps['Map']>, maps: KakaoMaps, coords: Coords) => {
+    map.setCenter(new maps.LatLng(coords.lat, coords.lng));
+    const { top, bottom } = coveredRef.current();
+    if (bottom !== top) map.panBy(0, Math.round((bottom - top) / 2));
+  };
 
   useEffect(() => {
     selectionRef.current = { selectedId, points };
     const selected = points.find(({ block }) => block.id === selectedId)?.place;
-    if (selected && mapRef.current && mapsRef.current) {
-      mapRef.current.setCenter(new mapsRef.current.LatLng(selected.coords.lat, selected.coords.lng));
-    }
+    if (selected && mapRef.current && mapsRef.current) centerVisible(mapRef.current, mapsRef.current, selected.coords);
   }, [points, selectedId]);
 
   useEffect(() => {
@@ -97,7 +112,10 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, clas
         bounds.extend(coord);
         locations.set(block.id, coord);
       }
-      if (locations.size > 1) map.setBounds(bounds);
+      if (locations.size > 1) {
+        const { top, bottom } = coveredRef.current();
+        map.setBounds(bounds, top + EDGE_PX, EDGE_PX, bottom + EDGE_PX, EDGE_PX);
+      }
       overlays = points.filter((item) => item.place).map(({ block, place }) => {
         const marker = new maps.Marker({ map, position: locations.get(block.id)!, title: place!.name });
         maps.event.addListener(marker, 'click', () => onSelect(block.id));
@@ -114,7 +132,7 @@ export function KakaoMap({ blocks, legs, selectedId, onSelect, onLongPress, clas
       // SDK가 늦게 로드되어도 마지막으로 선택한 블록에 중심을 맞춘다.
       const latest = selectionRef.current;
       const selected = latest.points.find(({ block }) => block.id === latest.selectedId)?.place;
-      if (selected) map.setCenter(new maps.LatLng(selected.coords.lat, selected.coords.lng));
+      if (selected) centerVisible(map, maps, selected.coords);
 
       // 카카오 Map 이벤트에는 mousedown/mouseup이 없으므로 컨테이너 DOM의 pointer 이벤트로
       // 마우스·터치 길게 누르기를 감지하고, 컨테이너 좌표를 지도 좌표로 변환한다.

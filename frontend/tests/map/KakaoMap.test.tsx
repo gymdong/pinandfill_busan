@@ -126,6 +126,28 @@ describe('카카오맵 SDK 래퍼', () => {
     expect(setCenter).toHaveBeenCalledWith(expect.objectContaining({ lat: day.blocks[1]!.place.source === 'PUBLIC' ? day.blocks[1]!.place.lat : 0 }));
   });
 
+  it('위 버튼 줄·아래 시트가 덮는 높이만큼 범위 여백을 두고, 선택 장소는 보이는 부분 가운데로 옮긴다', async () => {
+    vi.stubEnv('VITE_KAKAO_MAP_JS_KEY', 'test-key');
+    const setBounds = vi.fn();
+    const panBy = vi.fn();
+    class LatLng { constructor(public lat: number, public lng: number) {} getLat() { return this.lat; } getLng() { return this.lng; } }
+    Object.defineProperty(window, 'kakao', { configurable: true, value: { maps: {
+      load: (callback: () => void) => callback(), LatLng,
+      Map: class { setCenter() {} setBounds = setBounds; panBy = panBy; },
+      LatLngBounds: class { extend() {} }, Marker: class { setMap() {} },
+      Polyline: class { setMap() {} },
+      event: { addListener() {}, removeListener() {} },
+    } } });
+    const day = schedule.days[0]!;
+    const props = { blocks: day.blocks, legs: day.legs, onSelect: vi.fn(), onLongPress: vi.fn(), getCovered: () => ({ top: 80, bottom: 400 }) };
+    const view = render(<KakaoMap {...props} selectedId={null} />);
+    await act(async () => { await Promise.resolve(); });
+    // 위 80 + 24, 오른쪽 24, 아래 400 + 24, 왼쪽 24
+    expect(setBounds).toHaveBeenCalledWith(expect.anything(), 104, 24, 424, 24);
+    view.rerender(<KakaoMap {...props} selectedId={day.blocks[0]!.id} />);
+    expect(panBy).toHaveBeenCalledWith(0, 160);
+  });
+
   it('스크립트 onload 후에도 SDK 전역이 없으면 오류를 표시한다', async () => {
     vi.stubEnv('VITE_KAKAO_MAP_JS_KEY', 'test-key');
     render(<KakaoMap blocks={[]} legs={[]} selectedId={null} onSelect={vi.fn()} onLongPress={vi.fn()} />);
