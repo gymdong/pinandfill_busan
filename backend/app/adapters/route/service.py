@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pydantic import SecretStr, ValidationError
 
+from app.adapters.route.estimated import EstimatedFallbackRouteProvider
 from app.adapters.route.providers import (
     SEOUL_TIMEZONE,
     LookupResult,
@@ -109,6 +110,14 @@ class UnconfiguredRouteProvider:
 
 
 def build_route_provider(tmap: TMAPSettings | None = None, odsay: ODsaySettings | None = None) -> RouteProvider:
+    """TMAP 주력 → ODsay 예비 → 추정 이동시간('추정', SRS 2.1). 만들 때 네트워크를 쓰지 않는다.
+
+    키가 없거나 한도 초과·실패로 이동시간을 못 받으면 좌표로 추정한다(`estimated.py`).
+    """
+    return EstimatedFallbackRouteProvider(build_live_route_provider(tmap, odsay))
+
+
+def build_live_route_provider(tmap: TMAPSettings | None = None, odsay: ODsaySettings | None = None) -> RouteProvider:
     """키가 있으면 TMAP 주력·ODsay 예비, 둘 다 없으면 조회하지 않는다. 만들 때 네트워크를 쓰지 않는다."""
     tmap = tmap if tmap is not None else TMAPSettings()
     odsay = odsay if odsay is not None else ODsaySettings()

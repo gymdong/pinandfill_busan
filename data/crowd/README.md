@@ -3,7 +3,18 @@
 이 디렉터리는 예상 혼잡 계산의 **운영 입력 위치**다. 백엔드는 앱 시작 시 아래 정규화 CSV 4개를 읽고,
 요청마다 메모리에서 계산한다(요청이 공공 API 를 부르지 않는다). 위치는 환경변수 `CROWD_DATA_DIR` 로, 설정 파일(`data/seed/crowd/crowd_config.json`)은 `CROWD_CONFIG_PATH` 로 바꿀 수 있다.
 
-- **실제 공공데이터 파일만 둔다.** 지금은 확보한 파일이 없어 CSV 가 하나도 없고, 그래서 모든 장소가 '정보 부족'이다.
+- **실제 공공데이터 파일만 둔다.** 지금 있는 파일과 만든 방법(2026-11-27):
+  - `metro_hourly.csv`: 부산교통공사_시간대별 승하차인원(공공데이터포털 파일 3057229, 2026-10-31 갱신본)의 2026-10.
+    `uv run python -m app.modules.crowd.importers metro <원본 CSV>` (원본은 `data/crowd/raw/`, 커밋하지 않음)
+  - `living_population.csv`: 부산광역시_일평균 생활인구수(행정동·시간, 통신사)(공공데이터포털 API 15164444,
+    `getDongPopTime`)의 2026-09. `uv run python -m app.modules.crowd.importers living --month 202609`
+    (`DATA04_SERVICE_KEY` 필요). 원본에 평일/주말 구분이 없어 같은 월 일평균을 WEEKDAY·WEEKEND 에 똑같이 쓴다.
+    그래서 이 신호만으로는 평일과 주말 혼잡이 같다. population 은 주거 + 직장 + 방문 인구 합이다.
+  - `place_signal_links.csv`: `data/samples` 의 10곳. DATA-04 는 장소 좌표의 행정동(카카오 좌표→행정구역 변환으로 찾고
+    DATA-04 코드 목록에 있는지 확인), DATA-05 는 직선 800m 안의 가장 가까운 부산교통공사 역(동해선 등 다른 운영사 제외).
+    역이 가까운 곳은 광안리해수욕장(광안)·용두산 공원(남포)·부산시립미술관(벡스코) 3곳뿐이라 이 3곳만 신뢰도 '중간',
+    나머지는 '낮음'이다(혼잡 회피는 '중간' 이상만 쓴다).
+  - `crowd_multipliers.csv`(날짜 배수 M)는 아직 없다.
 - 시험용 가짜 표본은 `backend/tests/fixtures/crowd/` 에만 있다. 여기로 복사하지 않는다.
 - 파일이 없으면 그 신호는 없는 것으로 본다. 깨진 행은 건너뛰고 건수만 경고 로그로 남긴다. 값을 지어내지 않는다.
 - UTF-8(BOM 허용), 첫 줄은 머리줄. `#` 로 시작하는 줄은 주석으로 보고 건너뛴다.
