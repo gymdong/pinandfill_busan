@@ -31,13 +31,15 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [undoAvailable, setUndoAvailable] = useState(false);
+  // null 이면 이 화면에서 아직 편집하지 않았다: 서버가 알려 준 값(다른 화면에 다녀와도 유지)을 쓴다.
+  const [undoState, setUndoAvailable] = useState<boolean | null>(null);
   const [mutationViolations, setMutationViolations] = useState<Violation[]>([]);
   // 방금 들어간 블록. 그 카드로 스크롤하고 잠깐 강조한다(무엇이 바뀌었는지 보이게).
   const [flashId, setFlashId] = useState<string | null>(null);
   const { showToast } = useOptionalToast();
   const addPanel = useRef<HTMLElement>(null);
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
+  const undoAvailable = undoState ?? (loaded.status === 'success' ? Boolean(loaded.data.canUndo) : false);
   // 고른 일차가 일정에 없으면(다시 불러온 일정 등) 첫 일차를 보여 준다.
   const day = schedule?.days.find((item) => item.dayNo === dayNo) ?? schedule?.days[0];
   // 보고 있는 날의 블록 카드에 이미 보이는 경고는 위 안내에서 뺀다(다른 날 경고는 남긴다).

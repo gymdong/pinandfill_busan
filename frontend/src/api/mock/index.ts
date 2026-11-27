@@ -403,7 +403,9 @@ const routes: [HttpMethod, RegExp, Handler][] = [
       };
     },
   ],
-  ['GET', /^\/trips\/([^/]+)$/, (_request, [tripId]): TripDetailResponse => ({ trip: state(tripId ?? '').trip, schedule: snapshot(tripId ?? '') })],
+  ['GET', /^\/trips\/([^/]+)$/, (_request, [tripId]): TripDetailResponse => ({
+    trip: state(tripId ?? '').trip, schedule: snapshot(tripId ?? ''), canUndo: state(tripId ?? '').previous !== null,
+  })],
   [
     'GET',
     /^\/admin\/sources$/,

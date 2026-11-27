@@ -126,6 +126,7 @@ class TripService:
                 mode=trip.transport_mode,
             ),
             schedule=result.schedule,
+            can_undo=self.history.latest_edit(trip_id) is not None,
         )
 
     def _get(self, trip_id: str) -> TripRecord:

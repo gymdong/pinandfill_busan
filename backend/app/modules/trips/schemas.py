@@ -276,6 +276,8 @@ class TripDetail(ContractModel):
 class TripDetailResponse(ContractModel):
     trip: TripDetail
     schedule: Schedule
+    # 지금 되돌릴 수 있는 편집이 있는가. 화면을 다시 열어도 되돌리기 버튼 상태를 맞추려고 쓴다(FR-006).
+    can_undo: bool = False
 
 
 class SuggestWaypointsRequest(WithSessionCoords):
