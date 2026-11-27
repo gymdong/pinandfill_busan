@@ -1,8 +1,11 @@
 .estimate {
-  position: relative;
-  display: inline-flex;
-  gap: 1px;
+  display: inline;
+  padding: 0;
+  border: 0;
   border-bottom: 1px dotted currentColor;
+  background: none;
+  color: inherit;
+  font: inherit;
   cursor: help;
 }
 
@@ -11,19 +14,8 @@
   outline-offset: 2px;
 }
 
-.estimate:hover::after,
-.estimate:focus::after {
-  content: attr(data-tip);
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 0;
-  z-index: 10;
-  width: max-content;
-  max-width: min(240px, 70vw);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--color-ink);
-  color: var(--color-surface);
+.note {
+  display: block;
+  margin-top: var(--space-1);
   font-size: var(--text-xs);
-  white-space: normal;
 }
