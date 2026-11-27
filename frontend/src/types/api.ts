@@ -420,6 +420,8 @@ export interface SuggestWaypointsResponse {
 export interface TripDetailResponse {
   trip: Trip;
   schedule: Schedule | null;
+  /** 지금 되돌릴 수 있는 편집이 있는가. 화면을 다시 열어도 되돌리기 버튼 상태를 맞춘다(FR-006). 옛 서버는 보내지 않는다. */
+  canUndo?: boolean;
 }
 
 /* ---------- 분위기 추천 ---------- */

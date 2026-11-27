@@ -366,3 +366,19 @@ describe('코스 타임라인', () => {
     });
   });
 });
+
+describe('되돌리기 상태(FR-006)', () => {
+  it('화면을 다시 열어도 서버가 되돌릴 편집이 있다고 하면 되돌리기를 켠다', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule, canUndo: true });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    expect(screen.getByRole('button', { name: '직전 편집 되돌리기' })).toBeEnabled();
+  });
+
+  it('서버가 알려 주지 않으면(옛 서버) 꺼 둔다', async () => {
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    await screen.findByText('코스 타임라인');
+    expect(screen.getByRole('button', { name: '직전 편집 되돌리기' })).toBeDisabled();
+  });
+});

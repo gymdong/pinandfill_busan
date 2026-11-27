@@ -46,7 +46,9 @@ def test_trip_edit_flow_without_injected_services():
         types = {warning["type"] for warning in museum["warnings"]}
         assert "HOURS_NEEDS_CHECK" not in types
         # 경로 키가 없으면 좌표로 추정한다: 구간은 '추정'(ESTIMATED)이고 도착 시각이 생긴다.
+        # 구간 표시가 이미 '추정'이라 블록마다 같은 뜻의 경고(ROUTE_TIME_CONTEXT_ONLY)를 붙이지 않는다.
         assert "TRAVEL_TIME_NEEDS_CHECK" not in types
+        assert "ROUTE_TIME_CONTEXT_ONLY" not in types
         (leg,) = added.json()["schedule"]["days"][0]["legs"]
         assert leg["source"] == "ESTIMATED" and leg["durationMin"] > 0
         assert museum["arriveAt"] is not None
@@ -80,9 +82,15 @@ def test_get_trip_returns_conditions_and_projected_schedule():
             "mode": "TRANSIT",
             "detourThresholdMin": 15,
         }
+        assert empty.json()["canUndo"] is False
         added = client.post(f"/api/trips/{trip_id}/blocks", json=FIXED).json()["schedule"]
-        detail = client.get(f"/api/trips/{trip_id}").json()["schedule"]
+        loaded = client.get(f"/api/trips/{trip_id}").json()
+        detail = loaded["schedule"]
         assert [b["id"] for b in detail["days"][0]["blocks"]] == [b["id"] for b in added["days"][0]["blocks"]]
+        # 화면을 다시 열어도 되돌리기를 켤 수 있게 서버가 알려 준다(FR-006).
+        assert loaded["canUndo"] is True
+        assert client.post(f"/api/trips/{trip_id}/undo").status_code == 200
+        assert client.get(f"/api/trips/{trip_id}").json()["canUndo"] is False
 
 
 def test_kakao_block_uses_matched_sample_stay_and_rejects_unknown():

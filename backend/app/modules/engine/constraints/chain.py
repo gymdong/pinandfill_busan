@@ -128,9 +128,11 @@ def validate_chain(command: ValidateInput, places: Mapping[str, TransientPlaceDe
                 "ROUTE_LOOKUP_FAILED",
                 "경로 조회에 실패하여 이동시간을 확인할 수 없습니다.",
             )
+        # 추정 이동시간(ESTIMATED)은 구간 표시 자체가 '추정'이라 같은 뜻의 경고를 블록마다 또 붙이지 않는다.
         if (
             leg is not None
             and leg.duration_min is not None
+            and leg.source != "ESTIMATED"
             and leg.time_semantics
             in (
                 "service_availability",
