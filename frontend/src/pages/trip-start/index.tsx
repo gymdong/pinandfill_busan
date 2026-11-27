@@ -143,8 +143,8 @@ export default function TripStartPage() {
       setSubmitError(`${firstBad.name}: ${failing[pinnedKey(firstBad)]}${others > 0 ? ` (그 밖에 ${others}곳)` : ''}`);
       const row = document.getElementById(pinnedRowId(pinnedKey(firstBad)));
       row?.scrollIntoView?.({ block: 'center' });
-      // 고칠 칸(시각·일차·머무를 시간)에 포커스를 둔다. '빼기' 버튼에 두면 Enter 한 번에 장소가 빠진다.
-      (row?.querySelector<HTMLElement>('input, select') ?? row?.querySelector<HTMLElement>('[aria-invalid="true"]'))?.focus();
+      // 오류가 가리키는 칸에 포커스를 둔다. '빼기' 버튼에 두면 Enter 한 번에 장소가 빠진다.
+      focusFix(row, failing[pinnedKey(firstBad)] ?? '');
       return;
     }
     if (pinned.length > PINNED_LIMIT) {
@@ -409,6 +409,19 @@ export default function TripStartPage() {
       </footer>
     </main>
   );
+}
+
+/** 오류 문구에 맞는 칸(시각 → 비어 있는 시각 칸, 일차 → 일차 칸, 머무를 시간 → 그 칸)으로 포커스를 옮긴다. */
+function focusFix(row: HTMLElement | null, message: string) {
+  if (!row) return;
+  const times = [...row.querySelectorAll<HTMLInputElement>('input[type="time"]')];
+  const selects = [...row.querySelectorAll<HTMLSelectElement>('select')];
+  const target = message.includes('시각')
+    ? times.find((input) => !input.value) ?? times[0]
+    : message.includes('일차')
+      ? selects.find((select) => (select.getAttribute('aria-label') ?? '').includes('일차')) ?? selects[0]
+      : selects.find((select) => (select.getAttribute('aria-label') ?? '').includes('머무를')) ?? times[0] ?? selects[0];
+  target?.focus();
 }
 
 /** 담은 장소 행의 DOM id. 제출 오류 때 그 행으로 스크롤·포커스한다. */

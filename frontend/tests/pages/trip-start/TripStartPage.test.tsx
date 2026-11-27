@@ -242,6 +242,19 @@ describe('UI-01 여행 시작', () => {
       await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     });
 
+    it('여러 날 여행에서 시각 오류면 일차 칸이 아니라 비어 있는 시각 칸에 포커스를 둔다', async () => {
+      mockCourseApis();
+      renderPage();
+      setDates('2026-10-17', '2026-10-18');
+      await pinAllSearchResults();
+      await userEvent.click(screen.getAllByRole('button', { name: '시간 정하기' })[0]!);
+      const [arrive] = screen.getAllByLabelText(/도착 시각$/);
+      const name = arrive!.getAttribute('aria-label')!.replace(/ 도착 시각$/, '');
+      fireEvent.change(arrive!, { target: { value: '10:00' } });
+      await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
+      expect(document.activeElement).toBe(screen.getByLabelText(`${name} 출발 시각`));
+    });
+
     it("여러 날 여행에서 시간을 정한 장소의 일차가 '알아서'면 일차를 고르게 한다", async () => {
       const { create } = mockCourseApis();
       renderPage();

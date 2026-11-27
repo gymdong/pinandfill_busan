@@ -48,6 +48,8 @@ export function validatePlans(
     else if (fixed && (!isLocalTime(fixed.start) || !isLocalTime(fixed.end))) errors[key] = '도착·출발 시각을 모두 정해 주세요.';
     else if (fixed && dayNo === null) errors[key] = '시간을 정한 장소는 일차를 골라 주세요.';
     else if (fixed && fixed.start >= fixed.end) errors[key] = '출발 시각은 도착 시각보다 늦어야 해요.';
+    // 시간 칸만 열어 둔 상태에서는 머무를 시간 칸이 보이지 않는다. 보이는 칸으로 고칠 길을 알려 준다.
+    else if (!fixed && opened && stayRequired(place, asked) && !stayMin) errors[key] = "시각을 정하거나 '시간 빼기'를 누른 뒤 머무를 시간을 골라 주세요.";
     else if (!fixed && stayRequired(place, asked) && !stayMin) errors[key] = '머무를 시간을 골라 주세요.';
   }
   return errors;
