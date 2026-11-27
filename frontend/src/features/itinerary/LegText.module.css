@@ -1,12 +1,13 @@
 .estimate {
   display: inline;
-  padding: 0;
+  padding: 6px 2px;
+  margin: -6px -2px;
   border: 0;
   border-bottom: 1px dotted currentColor;
   background: none;
   color: inherit;
   font: inherit;
-  cursor: help;
+  cursor: pointer;
 }
 
 .estimate:focus-visible {
