@@ -41,12 +41,6 @@ p {
   text-wrap: pretty;
 }
 
-/* 시각·숫자 표시는 자릿수가 흔들리지 않게 */
-time,
-[data-numeric] {
-  font-variant-numeric: tabular-nums;
-}
-
 ::selection {
   background: var(--color-accent-soft);
   color: var(--color-ink);
