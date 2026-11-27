@@ -262,14 +262,17 @@ class WaypointRecommender:
                 for block in projected
             ):
                 continue
-            via = [
-                leg.duration_min
+            via_legs = [
+                leg
                 for leg in result.state.legs
                 if (leg.from_block_id, leg.to_block_id) in ((before.id, probe_id), (probe_id, after.id))
             ]
+            via = [leg.duration_min for leg in via_legs]
             if len(via) != 2 or any(duration is None for duration in via):
                 continue
-            detour = sum(duration for duration in via if duration is not None) - baseline
+            # 기준과 경유 구간의 출처가 다르면(예: 기준은 TMAP, 경유는 한도 초과로 추정) 차이가 음수일 수 있다.
+            mixed = any(leg.source != baseline_result.source for leg in via_legs)
+            detour = max(0, sum(duration for duration in via if duration is not None) - baseline)
             if detour > request.threshold_min:
                 continue
             unknown_hours = bool(anchor_check.violations) or any(
@@ -279,6 +282,8 @@ class WaypointRecommender:
             reason = f"우회 {detour}분·체류 {candidate.stay_min}분, 후보 영업시간과 후속 시간 제약 확인"
             if unknown_hours:
                 reason += "; 기존 장소 영업시간은 별도 확인 필요"
+            if mixed:
+                reason += "; 추정 이동시간 포함"
             if baseline_result.time_semantics in {
                 "service_availability",
                 "search_context",
