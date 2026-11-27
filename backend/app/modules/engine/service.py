@@ -5,6 +5,7 @@ prefix, recalculating only later blocks on that day. Automatic placement and
 cross-day edits require a later policy.
 """
 
+import logging
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
@@ -35,6 +36,8 @@ from app.modules.trips.schemas import (
     Schedule,
     ScheduleDay,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class EngineInputError(ValueError):
@@ -310,10 +313,16 @@ class BasicItineraryEngine:
         for block in state.blocks:
             if block.day_no != day_no or block.arrive_at is None or not isinstance(block.place_ref, PublicPlaceRef):
                 continue
-            found = self.crowd.crowd(block.place_ref, on_date=day)
+            try:
+                found = self.crowd.crowd(block.place_ref, on_date=day)
+            except Exception:  # 부가 정보라 편집 요청을 실패시키지 않는다(그 블록은 정보 부족).
+                logger.warning("block_crowd_failed", exc_info=False)
+                continue
             if found is None or found.confidence == "없음" or not found.hours:
                 continue
             grade = next((hour.grade for hour in found.hours if hour.h == block.arrive_at.hour), None)
+            if grade is None:
+                continue
             rows.append(
                 BlockCrowd(
                     block_id=block.id,
