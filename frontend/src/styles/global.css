@@ -18,7 +18,7 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: var(--text-m);
-  line-height: 1.5;
+  line-height: var(--leading-body);
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
@@ -28,6 +28,22 @@ h2,
 h3,
 p {
   margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
 }
 
 button,

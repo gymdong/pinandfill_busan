@@ -4,4 +4,4 @@
 .candidates { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 .candidate { padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-s); overflow-wrap: anywhere; }
 .candidate h3 { margin: 0; }
-.source { font-size: 0.875rem; }
+.source { font-size: var(--text-s); }
