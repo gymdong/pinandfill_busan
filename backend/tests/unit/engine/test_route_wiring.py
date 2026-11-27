@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 import pytest
 
 from app.adapters.route import service as route_service
-from app.adapters.route.service import LiveRouteProvider, UnconfiguredRouteProvider, build_route_provider
+from app.adapters.route.estimated import EstimatedFallbackRouteProvider
+from app.adapters.route.service import (
+    LiveRouteProvider,
+    UnconfiguredRouteProvider,
+    build_live_route_provider,
+    build_route_provider,
+)
 from app.adapters.route.settings import ODsaySettings, TMAPSettings
 from app.adapters.route.transport import HttpReply
 from app.modules.engine.schemas import PublicPlaceRef, TransientPlaceDetails
@@ -37,12 +43,29 @@ def transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTransport:
 
 @pytest.mark.parametrize("keys", [(None, None), ("", ""), ("   ", "\t\n")])
 def test_without_keys_routes_are_not_looked_up(keys, transport):
-    provider = build_route_provider(*settings(*keys))
+    provider = build_live_route_provider(*settings(*keys))
     assert isinstance(provider, UnconfiguredRouteProvider)
     estimate = provider.estimate(ORIGIN, DESTINATION, mode="TRANSIT")
-    # 이동시간을 지어내지 않는다. 엔진은 이 구간을 '이동시간 확인 필요'로 둔다.
+    # 실제 경로 조회 단계는 이동시간을 지어내지 않는다.
     assert (estimate.duration_min, estimate.source) == (None, "UNKNOWN")
     assert transport.urls == []
+
+
+@pytest.mark.parametrize("keys", [(None, None), ("", "")])
+def test_without_keys_default_provider_estimates_without_calls(keys, transport):
+    provider = build_route_provider(*settings(*keys))
+    assert isinstance(provider, EstimatedFallbackRouteProvider)
+    estimate = provider.estimate_at(ORIGIN, DESTINATION, mode="TRANSIT", departure_at=DEPARTURE)
+    assert estimate.source == "ESTIMATED" and estimate.duration_min is not None and estimate.duration_min > 0
+    assert estimate.time_semantics == "static" and not estimate.lookup_failed
+    assert transport.urls == []
+
+
+def test_failed_live_lookup_falls_back_to_estimate(transport):
+    provider = build_route_provider(*settings(tmap="test-tmap"))
+    estimate = provider.estimate_at(ORIGIN, DESTINATION, mode="TRANSIT", departure_at=DEPARTURE)
+    assert transport.urls == ["https://apis.openapi.sk.com/transit/routes"]
+    assert estimate.source == "ESTIMATED"
 
 
 def test_settings_read_the_documented_environment_names(monkeypatch):
@@ -55,21 +78,21 @@ def test_settings_read_the_documented_environment_names(monkeypatch):
 
 
 def test_tmap_key_uses_tmap_without_fallback(transport):
-    provider = build_route_provider(*settings(tmap="test-tmap"))
+    provider = build_live_route_provider(*settings(tmap="test-tmap"))
     assert isinstance(provider, LiveRouteProvider) and provider.fallback is None
     assert provider.estimate_at(ORIGIN, DESTINATION, mode="TRANSIT", departure_at=DEPARTURE).duration_min is None
     assert transport.urls == ["https://apis.openapi.sk.com/transit/routes"]
 
 
 def test_both_keys_fall_back_to_odsay(transport):
-    provider = build_route_provider(*settings(tmap="test-tmap", odsay="test-odsay"))
+    provider = build_live_route_provider(*settings(tmap="test-tmap", odsay="test-odsay"))
     assert isinstance(provider, LiveRouteProvider) and provider.fallback is not None
     provider.estimate_at(ORIGIN, DESTINATION, mode="TRANSIT", departure_at=DEPARTURE)
     assert transport.urls == ["https://apis.openapi.sk.com/transit/routes", "https://api.odsay.com/v1/api/maasRP"]
 
 
 def test_odsay_key_alone_skips_tmap_calls(transport):
-    provider = build_route_provider(*settings(odsay="test-odsay"))
+    provider = build_live_route_provider(*settings(odsay="test-odsay"))
     assert isinstance(provider, LiveRouteProvider)
     estimate = provider.estimate_at(ORIGIN, DESTINATION, mode="TRANSIT", departure_at=DEPARTURE)
     assert estimate.source == "UNKNOWN"

@@ -382,7 +382,13 @@ def test_default_crowd_without_files_keeps_initial_response(monkeypatch, tmp_pat
         text = json.dumps(payload)
         for block in blocks(payload):
             text = text.replace(block["id"], block["place"]["id"])
-        return json.loads(text)
+        result = json.loads(text)
+        # 추정 이동시간(키 없음)은 계산 시각을 담고, 구간 ID 도 그 시각에서 나온다. 두 실행 사이에서만 다르다.
+        for day in result["days"]:
+            for leg in day["legs"]:
+                leg.pop("id", None)
+                leg.pop("computedAt", None)
+        return result
 
     with_crowd = default_trip_service(places, crowd_service=default_crowd_service(places))
     assert with_crowd.initial_planner.crowd is not None

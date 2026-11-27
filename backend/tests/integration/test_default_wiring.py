@@ -45,10 +45,11 @@ def test_trip_edit_flow_without_injected_services():
         assert museum["stayMin"] == 90
         types = {warning["type"] for warning in museum["warnings"]}
         assert "HOURS_NEEDS_CHECK" not in types
-        # 경로 키가 없으면 이동시간을 만들지 않는다: 구간은 빠지고 '확인 필요' 경고가 붙는다.
-        assert "TRAVEL_TIME_NEEDS_CHECK" in types
-        assert added.json()["schedule"]["days"][0]["legs"] == []
-        assert museum["arriveAt"] is None
+        # 경로 키가 없으면 좌표로 추정한다: 구간은 '추정'(ESTIMATED)이고 도착 시각이 생긴다.
+        assert "TRAVEL_TIME_NEEDS_CHECK" not in types
+        (leg,) = added.json()["schedule"]["days"][0]["legs"]
+        assert leg["source"] == "ESTIMATED" and leg["durationMin"] > 0
+        assert museum["arriveAt"] is not None
 
         patched = client.patch(f"/api/trips/{trip_id}/blocks/{museum['id']}", json={"stayMin": 45})
         assert patched.status_code == 200

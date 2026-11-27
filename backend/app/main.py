@@ -59,6 +59,10 @@ def default_database() -> Database | None:
 WAYPOINT_WEIGHTS = ScoreWeights(preference=0, representativeness=0, detour=1, crowd=20, missing_crowd_penalty=0.5)
 
 
+# 경유지 제안 1회에 경로를 조회해 볼 후보 수(직선 우회가 짧은 순). 후보마다 경로 2회라 요청당 최대 1 + 2×8 회.
+WAYPOINT_ROUTE_CANDIDATES = 8
+
+
 def _stay(places: SamplePlaceData, place_id: str) -> int | None:
     item = places.place(place_id)
     return item.stay_min if item is not None else None
@@ -85,7 +89,8 @@ def default_trip_service(
         routes,
         WAYPOINT_WEIGHTS,
         crowd=CrowdServiceLookup(crowd_service) if crowd_service is not None else None,
-        crowd_min_confidence=crowd_service.avoidance.min_confidence if crowd_service is not None else "중간",
+        **({"crowd_min_confidence": crowd_service.avoidance.min_confidence} if crowd_service is not None else {}),
+        max_route_candidates=WAYPOINT_ROUTE_CANDIDATES,
     )
     initial_planner = InitialSchedulePlanner(
         engine,

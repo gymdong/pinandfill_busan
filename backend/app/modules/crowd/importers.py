@@ -13,6 +13,7 @@
 import argparse
 import csv
 import io
+import math
 import os
 import re
 import sys
@@ -62,9 +63,19 @@ def _day_type(day: date) -> DayType:
     return "WEEKEND" if day.weekday() in _WEEKEND else "WEEKDAY"
 
 
+def _text(value: object) -> str:
+    # 숫자 0 도 값이다(빈칸으로 보지 않는다).
+    return "" if value is None else str(value)
+
+
 def _count(value: str | None) -> int | None:
+    """0 이상 정수. 소수 평균(예: "123.4")은 반올림한다. 숫자가 아니면 None."""
     text = (value or "").strip().replace(",", "")
-    return int(text) if text.isdigit() else None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return round(number) if math.isfinite(number) and number >= 0 else None
 
 
 def _decode(raw: bytes) -> str:
@@ -142,7 +153,7 @@ def normalize_living(items: Iterable[Mapping[str, Any]]) -> tuple[list[dict[str,
         month_raw = str(item.get("stdYm") or "").strip()
         code = str(item.get("hcode") or "").strip()
         hour_match = _LIVING_HOUR.match(str(item.get("times") or "").strip())
-        parts = [_count(str(item.get(name) or "")) for name in ("hpopAvg", "wpopAvg", "vpopAvg")]
+        parts = [_count(_text(item.get(name))) for name in ("hpopAvg", "wpopAvg", "vpopAvg")]
         if not re.fullmatch(r"\d{6}", month_raw) or not code or hour_match is None or any(p is None for p in parts):
             report.skipped += 1
             continue
@@ -195,12 +206,18 @@ def fetch_living(
             }
             try:
                 response = http.get(DATA04_URL, params=params)
-                body = response.json()["response"]["body"]
-            except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
-                raise RuntimeError(f"DATA-04 응답이 정상이 아닙니다(page {page}, {type(error).__name__}).") from None
-            batch = (body.get("items") or {}).get("item") or []
-            batch = [batch] if isinstance(batch, dict) else batch
-            total = int(body.get("totalCount") or 0)
+                envelope = response.json()["response"]
+                code = str(envelope["header"]["resultCode"])
+                if response.status_code != 200 or code not in ("00", "0"):
+                    raise ValueError(f"status {response.status_code}, resultCode {code}")
+                body = envelope["body"]
+                batch = (body.get("items") or {}).get("item") or []
+                batch = [batch] if isinstance(batch, dict) else batch
+                total = int(body.get("totalCount") or 0)
+            except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as error:
+                detail = str(error) if isinstance(error, ValueError) and "resultCode" in str(error) else ""
+                kind = type(error).__name__
+                raise RuntimeError(f"DATA-04 응답이 정상이 아닙니다(page {page}, {kind} {detail}).") from None
             if not batch:
                 break
             yield from batch
@@ -221,6 +238,8 @@ def write_csv(path: Path, fields: tuple[str, ...], rows: list[dict[str, Any]]) -
             writer = csv.DictWriter(file, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
+        # mkstemp 는 0600 이다. 다른 계정의 앱 프로세스도 읽게 0644 로 둔다.
+        os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -237,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
     living = sub.add_parser("living", help="DATA-04 API → living_population.csv")
     living.add_argument("--month", required=True, help="기준년월 YYYYMM")
     args = parser.parse_args(argv)
+    if args.command == "metro" and args.months < 0:
+        parser.error("--months 는 0 이상입니다.")
     out_dir: Path = args.out_dir or crowd_dir_from_env()
 
     if args.command == "metro":

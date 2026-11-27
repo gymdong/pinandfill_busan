@@ -113,3 +113,22 @@ def test_cli_metro_writes_file_the_provider_reads(tmp_path: Path) -> None:
     assert main(["--out-dir", str(tmp_path), "metro", str(source)]) == 0
     inputs = load_inputs(tmp_path)
     assert inputs.profiles[("DATA-05", "209")]["2026-10"][("WEEKEND", 1)] == 10.0
+
+
+def test_living_keeps_numeric_zero_and_rounds_decimals() -> None:
+    item = {"stdYm": "202609", "hcode": "1", "times": "03시", "hpopAvg": 10, "wpopAvg": 0, "vpopAvg": "2.6"}
+    rows, report = normalize_living([item])
+    assert report.skipped == 0 and rows[0]["population"] == 13
+
+
+@respx.mock
+def test_fetch_living_rejects_error_result_code() -> None:
+    page = {"response": {"header": {"resultCode": "30"}, "body": {"totalCount": "1", "items": {"item": [ITEM]}}}}
+    respx.get(DATA04_URL).mock(return_value=httpx.Response(200, json=page))
+    with pytest.raises(RuntimeError):
+        list(fetch_living("202609", Data04Settings(_env_file=None, data04_service_key=SecretStr("k"))))
+
+
+def test_cli_rejects_negative_months(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main(["--out-dir", str(tmp_path), "metro", str(tmp_path / "x.csv"), "--months", "-1"])

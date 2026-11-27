@@ -7,6 +7,7 @@ from typing import Protocol
 
 from pydantic import Field
 
+from app.adapters.route.estimated import distance_km
 from app.modules.crowd.avoidance import meets_confidence, window_cost
 from app.modules.crowd.schemas import CrowdConfidence, PlaceCrowdResponse
 from app.modules.engine.constraints.chain import validate_chain
@@ -120,6 +121,7 @@ class WaypointRecommender:
         *,
         crowd: CrowdLookup | None = None,
         crowd_min_confidence: CrowdConfidence = "중간",
+        max_route_candidates: int | None = None,
     ) -> None:
         self.candidates = candidates
         self.places = places
@@ -128,6 +130,8 @@ class WaypointRecommender:
         # 후보에 혼잡이 없으면 넣은 위치의 도착~출발 시각으로 예상 혼잡을 계산한다(FR-004 후보별 예상 혼잡).
         self.crowd = crowd
         self.crowd_min_confidence = crowd_min_confidence
+        # 경로를 조회해 볼 후보 수 상한. 넘으면 직선거리 우회가 짧은 순으로 자른다(경로 API 한도 보호).
+        self.max_route_candidates = max_route_candidates
 
     def _place(
         self, ref: PublicPlaceRef | KakaoPlaceRef, day: date, context: CalculationContext
@@ -143,6 +147,25 @@ class WaypointRecommender:
         if details.place_ref != ref:
             raise EngineInputError("Place reference mismatch")
         return details
+
+    def _nearest(
+        self,
+        offered: tuple[CandidateData, ...],
+        origin: TransientPlaceDetails,
+        destination: TransientPlaceDetails,
+        day: date,
+        context: CalculationContext,
+    ) -> tuple[CandidateData, ...]:
+        """직선거리 우회(출발→후보→도착 - 출발→도착)가 짧은 후보 max_route_candidates 개. 좌표 없는 후보는 뺀다."""
+        direct = distance_km(origin, destination) or 0.0
+        scored: list[tuple[float, str, CandidateData]] = []
+        for candidate in offered:
+            place = self._place(candidate.ref, day, context)
+            first, second = distance_km(origin, place), distance_km(place, destination)
+            if first is not None and second is not None:
+                scored.append((first + second - direct, candidate.ref.place_id, candidate))
+        scored.sort(key=lambda row: (row[0], row[1]))
+        return tuple(row[2] for row in scored[: self.max_route_candidates])
 
     def suggest(
         self, record: TripRecord, request: SuggestWaypointsRequest, context: CalculationContext
@@ -192,14 +215,18 @@ class WaypointRecommender:
         while probe_id in ids:
             probe_id += "-"
         engine = BasicItineraryEngine(self.places, self.routes)
-        offered = self.candidates.candidates(on_date=day)
+        in_trip = {block.place_ref for block in blocks}
+        offered = tuple(c for c in self.candidates.candidates(on_date=day) if c.ref not in in_trip)
+        if self.max_route_candidates is not None and len(offered) > self.max_route_candidates:
+            offered = self._nearest(offered, origin, destination, day, context)
         counts = Counter(candidate.ref.place_id for candidate in offered)
         ranked: list[tuple[float, str, WaypointCandidate]] = []
         affected = {block.id for block in blocks[index + 1 :] if block.day_no == before.day_no}
         for candidate in offered:
             if candidate.stay_min is None or counts[candidate.ref.place_id] != 1:
                 continue
-            if candidate.ref in (before.place_ref, after.place_ref):
+            # 이미 일정에 있는 장소(다른 날 포함)는 다시 제안하지 않는다.
+            if candidate.ref in in_trip:
                 continue
             try:
                 result = engine.insert(
