@@ -1,7 +1,7 @@
 """API-009 initial generation: HTTP contracts, persistence and edit interoperability."""
 
 import json
-from datetime import date
+from datetime import date, time
 from uuid import UUID
 
 import pytest
@@ -12,6 +12,7 @@ from app.modules.crowd.avoidance import AvoidanceSettings
 from app.modules.crowd.engine_lookup import CrowdServiceLookup
 from app.modules.crowd.service import CrowdService
 from app.modules.engine.initial import InitialSchedulePlanner
+from app.modules.engine.interfaces import CrowdLookup
 from app.modules.engine.schemas import OpeningHours, ScheduleState
 from app.modules.engine.service import BasicItineraryEngine
 from app.modules.places.samples import load_sample_places
@@ -19,7 +20,7 @@ from app.modules.trips.repository import FakeTripRepository, TripRecord
 from app.modules.trips.router import translate_error
 from app.modules.trips.schemas import MAX_INITIAL_SELECTIONS, GenerateScheduleRequest
 from app.modules.trips.service import FixedScheduleConflictError, TripService
-from tests.unit.engine.test_initial import Places, Routes, Stays, command
+from tests.unit.engine.test_initial import X_MORNING_BUSY, Places, Routes, Stays, command, crowd_of
 
 TRIP = "initial-trip"
 URL = f"/api/trips/{TRIP}/schedule"
@@ -39,7 +40,7 @@ def pinned(key, start="10:00", end="10:30", **kwargs):
     return item(key, fixedWindow={"dayNo": 1, "start": start, "end": end}, **kwargs)
 
 
-def setup_api(stay=30, days=1):
+def setup_api(stay=30, days=1, *, crowd: CrowdLookup | None = None):
     places, routes, stays = Places(), Routes(), Stays(stay)
     engine = BasicItineraryEngine(places, routes)
     record = TripRecord(command(days=days).trip, ScheduleState())
@@ -48,7 +49,7 @@ def setup_api(stay=30, days=1):
         repository,
         engine,
         lambda place: stay,
-        initial_planner=InitialSchedulePlanner(engine, stays),
+        initial_planner=InitialSchedulePlanner(engine, stays, crowd=crowd),
     )
     return TestClient(create_app(trip_service=service)), service, repository, places, routes
 
@@ -83,6 +84,38 @@ def test_initial_generation_saves_server_uuids_and_preserves_trip():
     assert len(repository.get(TRIP).schedule.blocks) == 2
     assert service.history.latest_edit(TRIP) is None
     assert routes.departures
+
+
+def test_initial_generation_saves_less_crowded_schedule_without_moving_fixed_visit():
+    calls = []
+
+    class CrowdProvider:
+        def find(self, place_id: str, on_date: date | None):
+            calls.append((place_id, on_date))
+            return crowd_of(X_MORNING_BUSY) if place_id == "x" else None
+
+    selections = body(pinned("a"), item("y", stayMin=120), item("x", stayMin=120))
+    baseline, _, _, _, _ = setup_api()
+    baseline_response = baseline.post(URL, json=selections)
+    assert baseline_response.status_code == 200, baseline_response.text
+    assert [block["place"]["id"] for block in blocks(baseline_response.json())] == ["a", "x", "y"]
+
+    client, _, repository, _, _ = setup_api(crowd=CrowdServiceLookup(CrowdService(CrowdProvider())))
+    response = client.post(URL, json=selections)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["generation"] == {"saved": True, "confirmed": True, "unplaced": [], "previewClientIds": {}}
+    visits = blocks(result)
+    assert [block["place"]["id"] for block in visits] == ["a", "y", "x"]
+    assert visits[0]["isFixed"] and (visits[0]["arriveAt"], visits[0]["departAt"]) == ("10:00", "10:30")
+    assert not visits[-1]["isFixed"] and (visits[-1]["arriveAt"], visits[-1]["departAt"]) == ("13:00", "15:00")
+    stored = repository.get(TRIP)
+    assert stored is not None
+    assert [block.id for block in stored.schedule.blocks] == [block["id"] for block in visits]
+    assert [(block.arrive_at, block.depart_at) for block in stored.schedule.blocks] == [
+        (time.fromisoformat(block["arriveAt"]), time.fromisoformat(block["departAt"])) for block in visits
+    ]
+    assert set(calls) == {(place_id, stored.trip.start_date) for place_id in ("x", "y")}
 
 
 def test_multiple_dates_and_client_order_do_not_become_block_identifiers():
