@@ -6,6 +6,7 @@ import { placesApi, tripsApi } from '@/api';
 import { parseErrorResponse } from '@/api/errors';
 import { schedule, trip } from '@/api/mock/fixtures/schedule';
 import { placeSummaries, searchItems, waypointCandidates } from '@/api/mock/fixtures/places';
+import { ToastProvider } from '@/components';
 import TimelinePage from '@/pages/timeline';
 
 afterEach(() => vi.restoreAllMocks());
@@ -62,9 +63,12 @@ describe('코스 타임라인', () => {
     vi.spyOn(placesApi, 'search').mockResolvedValue({ places: [searchItems[0]!] });
     const add = vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule, violations: [] });
     render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [] });
     await screen.findByText('코스 타임라인');
-    await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 찾기' })[0]!);
-    const slot = screen.getByRole('region', { name: '경유지 추가' });
+    // 구간 진입점은 추천 시트 하나이고, 직접 검색은 시트 안에서 연다.
+    await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
+    await userEvent.click(await within(await screen.findByRole('dialog')).findByRole('button', { name: '원하는 곳 직접 찾아 넣기' }));
+    const slot = await screen.findByRole('region', { name: '경유지 추가' });
     await userEvent.type(within(slot).getByLabelText('장소 검색'), '민락');
     await userEvent.click(within(slot).getByRole('button', { name: '검색' }));
     await userEvent.click(await within(slot).findByRole('button', { name: '추가' }));
@@ -100,7 +104,7 @@ describe('코스 타임라인', () => {
     await userEvent.click(screen.getByRole('button', { name: '체류시간 변경' }));
     expect(await screen.findByText('상위 경고')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('link', { name: '다른 여행' }));
-    expect(await screen.findByText('표시할 일정이 없습니다.')).toBeInTheDocument();
+    expect(await screen.findByText('표시할 일정이 없어요.')).toBeInTheDocument();
     expect(screen.queryByText('상위 경고')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '직전 편집 되돌리기' })).toBeDisabled();
   });
@@ -114,7 +118,7 @@ describe('코스 타임라인', () => {
     await userEvent.click(screen.getByRole('button', { name: /감천/ }));
     await userEvent.click(screen.getByRole('button', { name: '체류시간 변경' }));
     await userEvent.click(screen.getByRole('link', { name: '다른 여행' }));
-    await screen.findByText('표시할 일정이 없습니다.');
+    await screen.findByText('표시할 일정이 없어요.');
     resolve({ schedule, violations: [] });
     await waitFor(() => expect(screen.queryByRole('button', { name: /감천/ })).not.toBeInTheDocument());
   });
@@ -229,12 +233,11 @@ describe('코스 타임라인', () => {
       const add = vi.spyOn(tripsApi, 'addBlock').mockRejectedValue(new Error('private raw error'));
       renderPage();
       await screen.findByText('코스 타임라인');
-      // 기존 직접 검색 버튼은 그대로 남는다.
-      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 찾기' })[0]).toHaveAttribute('aria-expanded', 'false');
-      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
+      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]).not.toHaveAttribute('aria-expanded');
+      await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
       const sheet = await screen.findByRole('dialog');
       expect(suggest).toHaveBeenCalledWith('t1', { fromBlockId: first!.id, toBlockId: second!.id, thresholdMin: 15 }, expect.anything());
-      await userEvent.click(await within(sheet).findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
+      await userEvent.click(await within(sheet).findByRole('button', { name: `${candidate.place.name} 일정에 넣기` }));
       expect(add).toHaveBeenCalledWith('t1', {
         place: { placeId: candidate.place.id }, fromBlockId: first!.id, toBlockId: second!.id,
         isFixed: false, origin: 'SUGGESTED', stayMin: candidate.stayMin,
@@ -244,12 +247,16 @@ describe('코스 타임라인', () => {
       expect(screen.getByRole('dialog')).toBe(sheet);
       expect(screen.getByRole('button', { name: '직전 편집 되돌리기' })).toBeDisabled();
 
-      await userEvent.click(within(sheet).getByRole('button', { name: '직접 검색해서 넣기' }));
+      await userEvent.click(within(sheet).getByRole('button', { name: '원하는 곳 직접 찾아 넣기' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(screen.getByRole('region', { name: '경유지 추가' })).toBeInTheDocument();
-      expect(screen.getAllByRole('button', { name: '사이에 들를 곳 찾기' })[0]).toHaveAttribute('aria-expanded', 'true');
+      // 직접 찾기가 열린 구간은 같은 자리 버튼이 그것을 닫는다(닫을 길이 있어야 한다).
+      const close = screen.getByRole('button', { name: '직접 찾기 닫기' });
+      expect(close).toHaveAttribute('aria-expanded', 'true');
+      await userEvent.click(close);
+      expect(screen.queryByRole('region', { name: '경유지 추가' })).not.toBeInTheDocument();
 
-      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
+      await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
       expect(await screen.findByRole('dialog')).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: '2일차' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -268,11 +275,28 @@ describe('코스 타임라인', () => {
       vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule: changed, violations: [] });
       renderPage();
       await screen.findByText('코스 타임라인');
-      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
-      await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
+      await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
+      await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 일정에 넣기` }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(await screen.findByText(/체류 2시간/)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '직전 편집 되돌리기' })).toBeEnabled();
+    });
+
+    it('넣은 장소를 알림으로 알리고 그 카드를 강조한다', async () => {
+      const inserted = { ...first!, id: 'new-block', seq: first!.seq + 1, origin: 'SUGGESTED' as const, isFixed: false, fixedStart: null, fixedEnd: null,
+        place: { ...candidate.place, source: 'PUBLIC' as const } };
+      const blocksAfter = [first!, inserted, ...schedule.days[0]!.blocks.slice(1).map((block) => ({ ...block, seq: block.seq + 1 }))];
+      const added = { ...schedule, days: [{ ...schedule.days[0]!, blocks: blocksAfter }] };
+      vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+      vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
+      vi.spyOn(tripsApi, 'addBlock').mockResolvedValue({ schedule: added, violations: [] });
+      render(<ToastProvider><MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter></ToastProvider>);
+      await screen.findByText('코스 타임라인');
+      await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
+      await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 일정에 넣기` }));
+      expect(await screen.findByText(`일정에 넣었어요: ${candidate.place.name} · 되돌리기 버튼으로 취소할 수 있어요.`)).toBeInTheDocument();
+      expect(document.getElementById('block-new-block')?.className).toMatch(/cardFlash/);
+      expect(document.getElementById('block-new-block')?.className).toMatch(/cardFill/);
     });
 
     it('삽입 요청 중에는 구간 버튼을 잠근다', async () => {
@@ -282,10 +306,9 @@ describe('코스 타임라인', () => {
       vi.spyOn(tripsApi, 'addBlock').mockReturnValue(new Promise((done) => { resolve = done; }));
       renderPage();
       await screen.findByText('코스 타임라인');
-      await userEvent.click(screen.getAllByRole('button', { name: '추천 보기' })[0]!);
-      await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 경유지로 추가` }));
-      for (const button of screen.getAllByRole('button', { name: '추천 보기', hidden: true })) expect(button).toBeDisabled();
-      for (const button of screen.getAllByRole('button', { name: '사이에 들를 곳 찾기', hidden: true })) expect(button).toBeDisabled();
+      await userEvent.click(screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기' })[0]!);
+      await userEvent.click(await screen.findByRole('button', { name: `${candidate.place.name} 일정에 넣기` }));
+      for (const button of screen.getAllByRole('button', { name: '사이에 들를 곳 추천받기', hidden: true })) expect(button).toBeDisabled();
       resolve({ schedule, violations: [] });
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     });

@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { toApiError, tripsApi } from '@/api';
 import { resolveBlockPlace } from '@/api/kakaoSession';
 import { paths } from '@/app/paths';
-import { Banner, Button } from '@/components';
+import { Banner, Button, useOptionalToast } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
 import { BlockEditor } from '@/features/block-editor/BlockEditor';
 import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
@@ -33,6 +33,9 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const [error, setError] = useState<string | null>(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [mutationViolations, setMutationViolations] = useState<Violation[]>([]);
+  // 방금 들어간 블록. 그 카드로 스크롤하고 잠깐 강조한다(무엇이 바뀌었는지 보이게).
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const { showToast } = useOptionalToast();
   const addPanel = useRef<HTMLElement>(null);
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
   // 고른 일차가 일정에 없으면(다시 불러온 일정 등) 첫 일차를 보여 준다.
@@ -49,15 +52,25 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     if (adding) addPanel.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' });
   }, [adding]);
 
+  useEffect(() => {
+    if (!flashId) return undefined;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    document.getElementById(`block-${flashId}`)?.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    const timer = setTimeout(() => setFlashId(null), 1600);
+    return () => clearTimeout(timer);
+  }, [flashId]);
+
   /** 요청을 보내고 성공 여부를 돌려준다. 패널은 그 패널에서 보낸 추가가 성공했을 때만 닫는다. */
   const run = async (action: Parameters<Change>[0], isUndo = false) => {
     setPending(true);
     setError(null);
     try {
+      const before = schedule;
       const result = await action();
       setEdited(result.schedule);
       setMutationViolations(result.violations ?? []);
       setUndoAvailable(!isUndo);
+      announce(before, result.schedule, isUndo);
       return true;
     } catch (cause) {
       setError(toApiError(cause).message);
@@ -66,13 +79,28 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       setPending(false);
     }
   };
+  /** 바뀐 내용을 알림(화면 읽기 프로그램에도 읽힘)으로 알리고, 새로 들어간 블록을 강조한다. */
+  const announce = (before: Schedule | null, after: Schedule, isUndo: boolean) => {
+    const beforeIds = new Set(before?.days.flatMap((d) => d.blocks.map((b) => b.id)) ?? []);
+    const afterBlocks = after.days.flatMap((d) => d.blocks);
+    const afterIds = new Set(afterBlocks.map((b) => b.id));
+    const added = afterBlocks.find((b) => !beforeIds.has(b.id));
+    const removed = before?.days.flatMap((d) => d.blocks).find((b) => !afterIds.has(b.id));
+    const nameOf = (block: Block) => resolveBlockPlace(block.place)?.name ?? '장소';
+    if (isUndo) showToast('직전 편집을 되돌렸어요.');
+    else if (added) {
+      setFlashId(added.id);
+      showToast(`일정에 넣었어요: ${nameOf(added)} · 되돌리기 버튼으로 취소할 수 있어요.`);
+    } else if (removed) showToast(`일정에서 뺐어요: ${nameOf(removed)} · 되돌리기 버튼으로 취소할 수 있어요.`);
+    else showToast('일정을 고쳤어요.');
+  };
   const change: Change = async (action, isUndo) => { await run(action, isUndo); };
   const addAndClose: Change = async (action) => { if (await run(action)) setAdding(false); };
   const slotAndClose: Change = async (action) => { if (await run(action)) setSlot(null); };
 
-  if (!tripId) return <Banner tone="warn">여행 ID가 없습니다.</Banner>;
+  if (!tripId) return <Banner tone="warn">여행 정보를 찾을 수 없어요.</Banner>;
   if (loaded.status === 'loading') return <p role="status" className={styles.status}>일정을 불러오는 중…</p>;
-  if (loaded.status === 'error') return <Banner tone="warn">일정을 불러오지 못했습니다. <Button onClick={loaded.reload}>다시 시도</Button></Banner>;
+  if (loaded.status === 'error') return <Banner tone="warn">일정을 불러오지 못했어요. <Button onClick={loaded.reload}>다시 시도</Button></Banner>;
 
   const selectDay = (next: number) => { setDayNo(next); setSelected(null); setSlot(null); };
 
@@ -89,7 +117,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       </button>
     </header>
 
-    {schedule && schedule.days.length > 0 && <nav className={styles.days} aria-label="여행 일차">
+    {schedule && schedule.days.length > 1 && <nav className={styles.days} aria-label="여행 일차">
       {schedule.days.map((item) => <button key={item.dayNo} type="button" className={styles.dayTab} aria-pressed={item.dayNo === day?.dayNo} onClick={() => selectDay(item.dayNo)}>{item.dayNo}일차</button>)}
     </nav>}
 
@@ -103,9 +131,9 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     </section>}
 
     {day ? <DayTimeline
-      key={day.dayNo} tripId={tripId} day={day} selected={selected} slot={slot} pending={pending}
+      key={day.dayNo} tripId={tripId} day={day} selected={selected} slot={slot} pending={pending} flashId={flashId}
       onSelect={(id) => setSelected(selected === id ? null : id)} onSlot={(id) => setSlot(slot === id ? null : id)} onChange={change} onSlotChange={slotAndClose}
-    /> : <p className={styles.empty}>표시할 일정이 없습니다.</p>}
+    /> : <p className={styles.empty}>표시할 일정이 없어요.</p>}
 
     {adding && <section ref={addPanel} className={styles.addPanel}>
       <BlockEditor tripId={tripId} dayNo={day?.dayNo ?? 1} disabled={pending} onChange={addAndClose} />
@@ -118,12 +146,13 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   </main>;
 }
 
-function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, onChange, onSlotChange }: {
+function DayTimeline({ tripId, day, selected, slot, pending, flashId, onSelect, onSlot, onChange, onSlotChange }: {
   tripId: string;
   day: ScheduleDay;
   selected: string | null;
   slot: string | null;
   pending: boolean;
+  flashId: string | null;
   onSelect(id: string): void;
   onSlot(id: string): void;
   onChange: Change;
@@ -138,18 +167,23 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
     const next = blocks[index + 1];
     const leg = legBetween(day.legs, block, next);
     return <li key={block.id}>
-      <BlockCard block={block} date={day.date} crowd={day.crowd.find((item) => item.blockId === block.id)} selected={selected === block.id} onSelect={() => onSelect(block.id)}>
+      <BlockCard block={block} date={day.date} crowd={day.crowd.find((item) => item.blockId === block.id)} selected={selected === block.id} flash={flashId === block.id} onSelect={() => onSelect(block.id)}>
         {selected === block.id && <BlockEditor key={block.id} tripId={tripId} block={block} disabled={pending} onChange={onChange} />}
       </BlockCard>
       {next && <div className={styles.between}>
         <p className={styles.leg}>{leg ? <LegText leg={leg} /> : '이동시간 확인 필요'}</p>
-        <button type="button" className={styles.slotButton} aria-expanded={slot === block.id} disabled={pending} onClick={() => onSlot(block.id)}>
-          <PlusIcon />사이에 들를 곳 찾기
-        </button>
-        <Button variant="outline" disabled={pending} onClick={() => setRecommendedSlot(block.id)}>추천 보기</Button>
+        {/* 구간 진입점은 하나다. 직접 검색은 추천 시트 안에서 연다. */}
+        {slot === block.id
+          // 직접 찾기 편집기가 열려 있으면 같은 자리 버튼이 그것을 닫는다.
+          ? <button type="button" className={styles.slotButton} aria-expanded="true" disabled={pending} onClick={() => onSlot(block.id)}>직접 찾기 닫기</button>
+          : <button type="button" className={styles.slotButton} aria-haspopup="dialog" disabled={pending} onClick={() => setRecommendedSlot(block.id)}>
+            <PlusIcon />사이에 들를 곳 추천받기
+          </button>}
         {slot === block.id && <BlockEditor key={`slot-${block.id}`} tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending} onChange={onSlotChange} />}
         {recommendedSlot === block.id && <WaypointSheet
           tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending}
+          fromName={resolveBlockPlace(block.place)?.name} toName={resolveBlockPlace(next.place)?.name}
+          keptFixed={blocks.slice(index + 1).filter((item) => item.isFixed && item.fixedStart).map((item) => ({ name: resolveBlockPlace(item.place)?.name ?? '고정 장소', start: item.fixedStart ?? '' }))}
           onClose={() => setRecommendedSlot(null)}
           onDirectSearch={() => {
             setRecommendedSlot(null);
@@ -169,8 +203,9 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
   })}</ol>;
 }
 
-function BlockCard({ block, date, crowd, selected, onSelect, children }: {
+function BlockCard({ block, date, crowd, selected, flash, onSelect, children }: {
   block: Block;
+  flash: boolean;
   /** 그 블록이 있는 날. 장소 상세가 이 날의 영업시간·예상 혼잡을 보이게 넘긴다. */
   date: IsoDate;
   crowd: BlockCrowd | undefined;
@@ -180,17 +215,18 @@ function BlockCard({ block, date, crowd, selected, onSelect, children }: {
 }) {
   const resolved = resolveBlockPlace(block.place);
   const kakaoLink = !resolved && block.place.source === 'KAKAO' ? block.place.placeUrl : null;
-  return <article className={`${styles.card} ${selected ? styles.cardSelected : ''}`}>
+  // 핀(사용자가 담은 곳)은 실선, 필(추천으로 채운 곳)은 점선 카드로 구분한다. 고정은 이름 옆 자물쇠(지도와 같은 자리).
+  const variant = block.origin === 'SUGGESTED' ? styles.cardFill : styles.cardPin;
+  return <article id={`block-${block.id}`} className={`${styles.card} ${variant} ${selected ? styles.cardSelected : ''} ${flash ? styles.cardFlash : ''}`}>
     <button type="button" className={styles.cardMain} aria-pressed={selected} onClick={onSelect}>
       <span className={styles.times}>
         <span>{block.arriveAt ?? '--:--'}</span>
         <span>{block.departAt ?? '--:--'}</span>
       </span>
       <span className={styles.cardBody}>
-        <span className={styles.placeName}>{resolved?.name ?? '다시 선택 필요'}</span>
+        <span className={styles.placeName}>{resolved?.name ?? '다시 선택 필요'}{block.isFixed && <span className={styles.lock}><LockIcon /><span className="sr-only">고정</span></span>}</span>
         <span className={styles.meta}>{blockRole(block)} · 체류 {formatDuration(block.stayMin)}</span>
       </span>
-      {block.isFixed && <span className={styles.lock}><LockIcon /><span className="sr-only">고정</span></span>}
     </button>
     <div className={styles.cardExtras}>
       {/* 혼잡 신호가 없는 블록도 '정보 부족'으로 표시한다(NFR-012, 지도 화면과 같음). */}

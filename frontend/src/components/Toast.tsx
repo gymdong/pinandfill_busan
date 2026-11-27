@@ -60,3 +60,10 @@ export function useToast(): ToastContextValue {
   }
   return value;
 }
+
+const NO_TOAST: ToastContextValue = { showToast: () => {} };
+
+/** 알림이 부가 정보인 화면용. Provider 밖(단독 렌더·시험)에서는 아무것도 하지 않는다. */
+export function useOptionalToast(): ToastContextValue {
+  return useContext(ToastContext) ?? NO_TOAST;
+}
