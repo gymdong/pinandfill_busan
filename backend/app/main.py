@@ -35,6 +35,7 @@ from app.modules.places.samples import SamplePlaceData
 from app.modules.places.service import PlaceSearchService
 from app.modules.places.settings import PlaceMatchSettings
 from app.modules.places.source import load_places
+from app.modules.recommend.waypoints import PublicPlaceCandidates, ScoreWeights, WaypointRecommender
 from app.modules.trips.edit_history import EditHistory
 from app.modules.trips.initial import PublicStayDurations
 from app.modules.trips.repository import FakeTripRepository
@@ -52,6 +53,17 @@ def default_database() -> Database | None:
     return Database(url, **settings.engine_options()) if url is not None else None
 
 
+# FR-004 경유지 점수 가중치(SDD 는 항만 정하고 값은 정하지 않았다, 잠정). 선호·대표성 근거 자료가 아직 없어 0 이고,
+# 우회 1분 = 1점, 체류 구간 평균 혼잡 score(0~1, 신뢰도 '중간' 이상만) 1.0 = 20점이다.
+# 혼잡을 모르거나 신뢰도가 낮은 후보는 중간값(0.5 × 20)을 벌점으로 받아, 붐빈다고 알려진 후보보다만 앞선다.
+WAYPOINT_WEIGHTS = ScoreWeights(preference=0, representativeness=0, detour=1, crowd=20, missing_crowd_penalty=0.5)
+
+
+def _stay(places: SamplePlaceData, place_id: str) -> int | None:
+    item = places.place(place_id)
+    return item.stay_min if item is not None else None
+
+
 def default_trip_service(
     places: SamplePlaceData, database: Database | None = None, *, crowd_service: CrowdService | None = None
 ) -> TripService:
@@ -65,7 +77,16 @@ def default_trip_service(
     편집 한 번(일정 저장 + 스냅샷)을 한 트랜잭션으로 처리한다. 스키마는 `alembic upgrade head` 로 만든다.
     없으면 메모리 저장소를 쓰며, 프로세스가 재시작되면 여행과 이력이 사라진다.
     """
-    engine = BasicItineraryEngine(places, build_route_provider())
+    routes = build_route_provider()
+    engine = BasicItineraryEngine(places, routes)
+    recommender = WaypointRecommender(
+        PublicPlaceCandidates(lambda: [item.place.id for item in places.all()], lambda pid: _stay(places, pid)),
+        places,
+        routes,
+        WAYPOINT_WEIGHTS,
+        crowd=CrowdServiceLookup(crowd_service) if crowd_service is not None else None,
+        crowd_min_confidence=crowd_service.avoidance.min_confidence if crowd_service is not None else "중간",
+    )
     initial_planner = InitialSchedulePlanner(
         engine,
         PublicStayDurations(places.stay_min),
@@ -76,11 +97,14 @@ def default_trip_service(
     if database is None:
         # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포에는 DATABASE_URL 을 설정한다.
         logger.warning("trip storage is in-memory (DATABASE_URL unset): trips and undo history are lost on restart")
-        return TripService(FakeTripRepository({}), engine, places.stay_min, initial_planner=initial_planner)
+        return TripService(
+            FakeTripRepository({}), engine, places.stay_min, recommender=recommender, initial_planner=initial_planner
+        )
     return TripService(
         SqlTripRepository(database),
         engine,
         places.stay_min,
+        recommender=recommender,
         history=EditHistory(SqlSnapshotRepository(database)),
         initial_planner=initial_planner,
         transaction=database.transaction,

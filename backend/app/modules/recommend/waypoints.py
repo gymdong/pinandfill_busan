@@ -1,13 +1,16 @@
 """PUBLIC-only waypoint evaluation; no repository writes or retained request context."""
 
 from collections import Counter
-from datetime import date, timedelta
+from collections.abc import Callable
+from datetime import date, time, timedelta
 from typing import Protocol
 
 from pydantic import Field
 
+from app.modules.crowd.avoidance import meets_confidence, window_cost
+from app.modules.crowd.schemas import CrowdConfidence, PlaceCrowdResponse
 from app.modules.engine.constraints.chain import validate_chain
-from app.modules.engine.interfaces import PlaceDataProvider, RouteProvider
+from app.modules.engine.interfaces import CrowdLookup, PlaceDataProvider, RouteProvider
 from app.modules.engine.routing import departure_for, estimate_departing
 from app.modules.engine.schemas import (
     BlockDraft,
@@ -69,6 +72,44 @@ class ScoreWeights(ContractModel):
         )
 
 
+class PublicPlaceCandidates:
+    """앱의 공공 장소 전체를 후보로 낸다(체류시간 근거가 있는 곳만). 선호·대표성 근거 자료가 아직 없어 0 이다."""
+
+    def __init__(self, place_ids: Callable[[], list[str]], stay_min: Callable[[str], int | None]) -> None:
+        self._place_ids = place_ids
+        self._stay_min = stay_min
+
+    def candidates(self, *, on_date: date) -> tuple[CandidateData, ...]:
+        rows = []
+        for place_id in sorted(self._place_ids()):
+            stay = self._stay_min(place_id)
+            if stay is not None and stay > 0:
+                rows.append(
+                    CandidateData(
+                        ref=PublicPlaceRef(place_id=place_id),
+                        stay_min=stay,
+                        preference_match=0,
+                        representativeness=0,
+                    )
+                )
+        return tuple(rows)
+
+
+def crowd_at_stay(
+    crowd: PlaceCrowdResponse | None, arrive: time, depart: time, min_confidence: CrowdConfidence
+) -> tuple[CrowdSummary | None, float | None]:
+    """(도착 시각의 등급 요약, 점수 벌점). 벌점은 신뢰도가 기준 이상일 때만 체류 구간 평균 score 다.
+
+    혼잡 정보가 없으면(None·'없음') 요약도 없다(화면 '정보 부족'). 신뢰도가 낮으면 요약만 보여 주고 벌점은 없다.
+    """
+    if crowd is None or crowd.confidence == "없음" or not crowd.hours:
+        return None, None
+    grade = next((hour.grade for hour in crowd.hours if hour.h == arrive.hour), None)
+    summary = CrowdSummary(grade=grade, confidence=crowd.confidence, as_of=crowd.as_of, sources=tuple(crowd.sources))
+    penalty = window_cost(crowd, arrive, depart) if meets_confidence(crowd, min_confidence) else None
+    return summary, penalty
+
+
 class WaypointRecommender:
     def __init__(
         self,
@@ -76,11 +117,17 @@ class WaypointRecommender:
         places: PlaceDataProvider,
         routes: RouteProvider,
         weights: ScoreWeights,
+        *,
+        crowd: CrowdLookup | None = None,
+        crowd_min_confidence: CrowdConfidence = "중간",
     ) -> None:
         self.candidates = candidates
         self.places = places
         self.routes = routes
         self.weights = weights
+        # 후보에 혼잡이 없으면 넣은 위치의 도착~출발 시각으로 예상 혼잡을 계산한다(FR-004 후보별 예상 혼잡).
+        self.crowd = crowd
+        self.crowd_min_confidence = crowd_min_confidence
 
     def _place(
         self, ref: PublicPlaceRef | KakaoPlaceRef, day: date, context: CalculationContext
@@ -211,15 +258,26 @@ class WaypointRecommender:
                 "static",
             } or any(w.type == "ROUTE_TIME_CONTEXT_ONLY" for block in projected for w in block.warnings):
                 reason += "; 출발시각별 시간표·교통 예측은 아님"
+            arrive, depart = inserted.arrive_at, inserted.depart_at
+            if candidate.crowd is None and self.crowd is not None and arrive is not None and depart is not None:
+                summary, penalty = crowd_at_stay(
+                    self.crowd.crowd(candidate.ref, on_date=day),
+                    arrive,
+                    depart,
+                    self.crowd_min_confidence,
+                )
+                scored = candidate.model_copy(update={"crowd": summary, "crowd_penalty": penalty})
+            else:
+                scored = candidate
             ranked.append(
                 (
-                    self.weights.score(candidate, detour),
+                    self.weights.score(scored, detour),
                     candidate.ref.place_id,
                     WaypointCandidate(
                         place=inserted.place,
                         detour_min=detour,
                         stay_min=candidate.stay_min,
-                        crowd=candidate.crowd,
+                        crowd=scored.crowd,
                         reason=reason,
                     ),
                 )
