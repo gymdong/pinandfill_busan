@@ -18,7 +18,9 @@ describe('BlockEditor 장소 고치기', () => {
     expect(screen.getByText('고정한 장소라 순서와 시각은 바뀌지 않아요.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '일정에서 빼기' }));
     expect(remove).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '취소' })).toHaveFocus();
     await userEvent.click(screen.getByRole('button', { name: '취소' }));
+    expect(screen.getByRole('button', { name: '일정에서 빼기' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '고정 장소지만 빼기' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '일정에서 빼기' }));
     await userEvent.click(screen.getByRole('button', { name: '고정 장소지만 빼기' }));

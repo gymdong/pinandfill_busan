@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { placesApi, rememberKakaoPlace, toApiError, tripsApi } from '@/api';
 import { Button } from '@/components';
 import { formatDuration } from '@/features/itinerary/format';
@@ -26,6 +26,9 @@ export function BlockEditor({ tripId, block, between, dayNo, disabled, onChange 
   const [seq, setSeq] = useState(block?.seq ?? 1);
   // 고정 장소를 빼는 것은 되돌리기 전까지 고정 시각을 잃는 일이라 한 번 더 묻는다.
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // '일정에서 빼기' 버튼이 확인 영역으로 바뀌면 포커스를 '취소'로 옮긴다(키보드 사용자가 길을 잃지 않게).
+  useEffect(() => { if (confirmRemove) cancelRef.current?.focus(); }, [confirmRemove]);
   // 후보별(kakaoPlaceId) 고른 체류시간과 안내. 서버는 체류시간 기본값을 만들지 않는다(#18 PM 결정 4, 지도 UI-06과 같음).
   const [stays, setStays] = useState<Record<string, number>>({});
   const [stayErrors, setStayErrors] = useState<Record<string, string>>({});
@@ -129,7 +132,7 @@ export function BlockEditor({ tripId, block, between, dayNo, disabled, onChange 
       // 확인 단계: 같은 자리에는 '취소'가 와서 빠른 두 번 누르기로 바로 지워지지 않는다.
       ? <div className={styles.confirm} role="group" aria-label="고정 장소 빼기 확인">
         <p role="status" className={styles.note}>고정한 시각도 함께 사라져요. 정말 뺄까요?</p>
-        <Button variant="outline" disabled={disabled} onClick={() => setConfirmRemove(false)}>취소</Button>
+        <Button ref={cancelRef} variant="outline" disabled={disabled} onClick={() => setConfirmRemove(false)}>취소</Button>
         <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => onChange(() => tripsApi.deleteBlock(tripId, block.id))}>고정 장소지만 빼기</Button>
       </div>
       : <Button variant="ghost" className={styles.danger} disabled={disabled} onClick={() => (block.isFixed ? setConfirmRemove(true) : onChange(() => tripsApi.deleteBlock(tripId, block.id)))}>일정에서 빼기</Button>}

@@ -86,7 +86,7 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
         </label>)}
       </span>
     </fieldset>
-    {kept && <p className={styles.kept}>넣어도 그대로: {kept}</p>}
+    {kept && candidates.length > 0 && <p className={styles.kept}>넣어도 그대로: {kept}</p>}
     {loaded.status === 'loading' && <p role="status" className={styles.status}>들를 곳을 찾는 중…</p>}
     {loaded.status === 'error' && <div role="alert" className={styles.status}>
       <p>들를 곳을 불러오지 못했어요. {toApiError(loaded.error).message}</p>
