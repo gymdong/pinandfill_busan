@@ -6,7 +6,8 @@ import { paths } from '@/app/paths';
 import { Badge, Button, EmptyState, ErrorState, LoadingState } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
 import { STAY_OPTIONS } from '@/features/place-search';
-import { blockRole, formatDuration, legBetween, legLabel, scheduleLevelViolations } from '@/features/itinerary/format';
+import { blockRole, formatDuration, legBetween, scheduleLevelViolations } from '@/features/itinerary/format';
+import { LegText } from '@/features/itinerary/LegText';
 import { BackIcon, LockIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
 import { KakaoMap } from '@/map/KakaoMap';
@@ -175,7 +176,7 @@ function MapViewContent({ tripId }: { tripId: string }) {
           const place = resolveBlockPlace(block.place);
           const leg = legBetween(day.legs, blocks[index - 1], block);
           return <li key={block.id}>
-            {leg ? <p className={styles.leg}>{legLabel(leg)}</p> : null}
+            {leg ? <p className={styles.leg}><LegText leg={leg} /></p> : null}
             <button type="button" className={styles.stop} aria-pressed={selectedId === block.id} onClick={() => setSelectedId(block.id)}>
               <span className={styles.stopNo} aria-hidden="true">{index + 1}</span>
               <span className={styles.stopBody}>

@@ -7,7 +7,8 @@ import { Banner, Button } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
 import { BlockEditor } from '@/features/block-editor/BlockEditor';
 import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
-import { blockRole, formatDayDate, formatDuration, legBetween, legLabel, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
+import { blockRole, formatDayDate, formatDuration, legBetween, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
+import { LegText } from '@/features/itinerary/LegText';
 import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, UndoIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
 import type { Block, BlockCrowd, IsoDate, Schedule, ScheduleDay, Violation } from '@/types/api';
@@ -141,7 +142,7 @@ function DayTimeline({ tripId, day, selected, slot, pending, onSelect, onSlot, o
         {selected === block.id && <BlockEditor key={block.id} tripId={tripId} block={block} disabled={pending} onChange={onChange} />}
       </BlockCard>
       {next && <div className={styles.between}>
-        <p className={styles.leg}>{leg ? legLabel(leg) : '이동시간 확인 필요'}</p>
+        <p className={styles.leg}>{leg ? <LegText leg={leg} /> : '이동시간 확인 필요'}</p>
         <button type="button" className={styles.slotButton} aria-expanded={slot === block.id} disabled={pending} onClick={() => onSlot(block.id)}>
           <PlusIcon />사이에 들를 곳 찾기
         </button>

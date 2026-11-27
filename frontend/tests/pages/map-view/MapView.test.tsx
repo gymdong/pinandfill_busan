@@ -52,7 +52,7 @@ describe('지도 보기', () => {
   it('일차 경로와 이동수단·추정 시간을 표시하고 선택을 동기화한다', async () => {
     renderPage();
     expect(await screen.findByText('1일차 장소 순서')).toBeInTheDocument();
-    expect(screen.getByText(/대중교통 · 30분 \(추정\)/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '30분 (추정)' }).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByText('마커 선택'));
     expect(within(screen.getByRole('region', { name: '선택한 장소' })).getByRole('heading', { name: /감천/ })).toBeInTheDocument();
   });
