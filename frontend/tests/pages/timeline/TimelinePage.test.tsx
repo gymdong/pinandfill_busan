@@ -221,7 +221,8 @@ describe('코스 타임라인', () => {
   });
   describe('경유지 추천 시트(UI-03)', () => {
     const [first, second] = schedule.days[0]!.blocks;
-    const candidate = waypointCandidates[0]!;
+    // 일정에 이미 있는 장소(흰여울문화마을, [0])는 시트가 거르므로 일정 밖 후보를 쓴다.
+    const candidate = waypointCandidates[1]!;
     function renderPage() {
       render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
     }

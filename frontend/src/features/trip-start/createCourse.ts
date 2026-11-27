@@ -40,10 +40,13 @@ export function validatePlans(
   const errors: PlanErrors = {};
   for (const place of pinned) {
     const key = pinnedKey(place);
-    const { dayNo, fixed, stayMin } = planOf(plans, key);
+    const { dayNo, fixed: opened, stayMin } = planOf(plans, key);
+    // '시간 정하기'를 열기만 하고 두 칸을 비워 두면 고정하지 않은 것으로 본다(제출을 막지 않는다).
+    const fixed = opened && (opened.start || opened.end) ? opened : null;
     if (dayNo !== null && (dayNo < 1 || dayNo > days)) errors[key] = '여행 기간 안의 일차를 골라 주세요.';
-    else if (fixed && dayNo === null) errors[key] = '시간을 정한 장소는 일차를 골라 주세요.';
+    // 시각을 먼저 묻는다: 시각 한 칸만 채운 장소에 일차부터 물으면 엉뚱한 칸을 고치게 된다.
     else if (fixed && (!isLocalTime(fixed.start) || !isLocalTime(fixed.end))) errors[key] = '도착·출발 시각을 모두 정해 주세요.';
+    else if (fixed && dayNo === null) errors[key] = '시간을 정한 장소는 일차를 골라 주세요.';
     else if (fixed && fixed.start >= fixed.end) errors[key] = '출발 시각은 도착 시각보다 늦어야 해요.';
     else if (!fixed && stayRequired(place, asked) && !stayMin) errors[key] = '머무를 시간을 골라 주세요.';
   }

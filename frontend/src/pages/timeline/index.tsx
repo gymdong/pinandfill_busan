@@ -183,6 +183,7 @@ function DayTimeline({ tripId, day, selected, slot, pending, flashId, onSelect, 
         {recommendedSlot === block.id && <WaypointSheet
           tripId={tripId} between={{ fromBlockId: block.id, toBlockId: next.id }} disabled={pending}
           fromName={resolveBlockPlace(block.place)?.name} toName={resolveBlockPlace(next.place)?.name}
+          excludePlaceIds={blocks.flatMap((item) => (item.place.source === 'PUBLIC' ? [item.place.id] : []))}
           keptFixed={blocks.slice(index + 1).filter((item) => item.isFixed && item.fixedStart).map((item) => ({ name: resolveBlockPlace(item.place)?.name ?? '고정 장소', start: item.fixedStart ?? '' }))}
           onClose={() => setRecommendedSlot(null)}
           onDirectSearch={() => {

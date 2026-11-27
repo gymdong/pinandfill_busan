@@ -208,7 +208,7 @@ describe('UI-01 여행 시작', () => {
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
 
       expect(screen.getByText('여행 날짜를 정해 주세요.')).toBeInTheDocument();
-      expect(screen.getByText('입력한 내용을 다시 확인해 주세요.')).toBeInTheDocument();
+      expect(screen.getByText('여행 조건을 확인해 주세요. 표시된 칸을 고치면 돼요.')).toBeInTheDocument();
       expect(screen.getByLabelText('여행 시작일')).toHaveAttribute('aria-invalid', 'true');
       expect(create).not.toHaveBeenCalled();
 
@@ -217,18 +217,27 @@ describe('UI-01 여행 시작', () => {
       expect(screen.queryByText('여행 날짜를 정해 주세요.')).not.toBeInTheDocument();
     });
 
-    it('시간을 정하기로 한 장소의 시각이 비어 있으면 요청하지 않는다', async () => {
+    it('시간 칸을 한쪽만 채우면 그 장소 이름으로 알리고, 열기만 하고 비우면 고정하지 않은 것으로 본다', async () => {
       const { create } = mockCourseApis();
       renderPage();
       setDates('2026-10-17', '2026-10-17');
       await pinAllSearchResults();
       await userEvent.click(screen.getAllByRole('button', { name: '시간 정하기' })[0]!);
+      const [arrive] = screen.getAllByLabelText(/도착 시각$/);
+      const name = arrive!.getAttribute('aria-label')!.replace(/ 도착 시각$/, '');
+      fireEvent.change(arrive!, { target: { value: '10:00' } });
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
 
       expect(screen.getByText('도착·출발 시각을 모두 정해 주세요.')).toBeInTheDocument();
+      expect(screen.getByText(`${name}: 도착·출발 시각을 모두 정해 주세요.`)).toBeInTheDocument();
+      // 고칠 칸으로 포커스가 간다('빼기' 버튼이 아니다).
+      expect(document.activeElement?.tagName).toBe('INPUT');
       expect(create).not.toHaveBeenCalled();
 
-      await userEvent.click(screen.getByRole('button', { name: '시간 빼기' }));
+      // 고치면 지난 배너는 사라진다.
+      fireEvent.change(arrive!, { target: { value: '' } });
+      expect(screen.queryByText(`${name}: 도착·출발 시각을 모두 정해 주세요.`)).not.toBeInTheDocument();
+      // 두 칸이 모두 비어 있으면 고정하지 않은 장소로 보고 그대로 만든다.
       await userEvent.click(screen.getByRole('button', { name: '코스 만들기' }));
       await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     });
