@@ -174,3 +174,11 @@ it('구간 이름을 제목으로, 뒤의 고정 장소를 그대로라고 보�
   expect(await screen.findByText('넣어도 그대로: 부산시립미술관 16:00')).toBeInTheDocument();
 });
 
+
+it('이미 일정에 있는 장소는 후보에서 거르고, 정렬 기준을 문구로 밝힌다', async () => {
+  vi.spyOn(tripsApi, 'suggestWaypoints').mockResolvedValue({ candidates: [candidate] });
+  render(<WaypointSheet {...props()} excludePlaceIds={[candidate.place.id]} />);
+  expect(await screen.findByText(/들를 곳이 없어요/)).toBeInTheDocument();
+  expect(screen.queryByText(candidate.place.name)).not.toBeInTheDocument();
+  expect(screen.getByText(/우회 시간과 예상 혼잡을 함께 따져 골랐어요/)).toBeInTheDocument();
+});

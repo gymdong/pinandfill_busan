@@ -236,6 +236,15 @@ describe('장소별 방문 시간 검증', () => {
     expect(Object.keys(validatePlans([park, cafe], plans, 2))).toEqual(['public:p1']);
   });
 
+  it('시간 칸을 열기만 하고 비우면 고정하지 않은 것으로 보고, 일차보다 시각을 먼저 묻는다', () => {
+    expect(validatePlans([park], { 'public:p1': { dayNo: null, fixed: { start: '', end: '' } } }, 2)).toEqual({});
+    expect(validatePlans([park], { 'public:p1': { dayNo: null, fixed: { start: '12:00', end: '' } } }, 2))
+      .toEqual({ 'public:p1': '도착·출발 시각을 모두 정해 주세요.' });
+    // 머무를 시간이 필요한 장소인데 시간 칸만 열려 있으면(머무를 시간 칸이 숨어 있음) 보이는 길을 알려 준다.
+    expect(validatePlans([cafe], { 'kakao:123': { dayNo: 1, fixed: { start: '', end: '' } } }, 2))
+      .toEqual({ 'kakao:123': "시각을 정하거나 '시간 빼기'를 누른 뒤 머무를 시간을 골라 주세요." });
+  });
+
   it('체류시간 근거가 없는 카카오 장소는 시간을 정하거나 머무를 시간을 골라야 한다', () => {
     expect(validatePlans([park, cafe], {}, 2)).toEqual({ 'kakao:123': '머무를 시간을 골라 주세요.' });
     expect(validatePlans([cafe], { 'kakao:123': { dayNo: 1, fixed: null, stayMin: 90 } }, 1)).toEqual({});

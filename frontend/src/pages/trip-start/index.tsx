@@ -80,6 +80,10 @@ export default function TripStartPage() {
   const planErrors = showErrors ? validatePlans(pinned, effectivePlans, dayCount, stayAsked) : {};
   const conditionsKey = JSON.stringify(validation.ok ? validation.value : draft);
   const selectionKey = JSON.stringify([pinned.map(pinnedKey), effectivePlans]);
+  // 제출 오류는 그때의 조건·담은 장소에 대한 것이다. 사용자가 고치면(키가 바뀌면) 배너를 감춘다.
+  const formKey = `${conditionsKey}|${selectionKey}`;
+  const [submitErrorKey, setSubmitErrorKey] = useState<string | null>(null);
+  const visibleSubmitError = submitError && submitErrorKey === formKey ? submitError : null;
 
   // 장소의 계획을 고치거나 빼면 그 장소의 미배치 이유는 지난 결과라 지운다.
   function clearUnplaced(key: string) {
@@ -125,8 +129,22 @@ export default function TripStartPage() {
   async function submit() {
     setShowErrors(true);
     setSubmitError(null);
-    if (!validation.ok || Object.keys(validatePlans(pinned, effectivePlans, dayCount, stayAsked)).length > 0) {
-      setSubmitError('입력한 내용을 다시 확인해 주세요.');
+    setSubmitErrorKey(formKey);
+    if (!validation.ok) {
+      setSubmitError('여행 조건을 확인해 주세요. 표시된 칸을 고치면 돼요.');
+      startDateRef.current?.focus();
+      return;
+    }
+    const failing = validatePlans(pinned, effectivePlans, dayCount, stayAsked);
+    const firstBad = pinned.find((place) => pinnedKey(place) in failing);
+    if (firstBad) {
+      // 어디가 문제인지 배너에 장소 이름으로 말하고, 그 장소로 화면과 포커스를 옮긴다.
+      const others = Object.keys(failing).length - 1;
+      setSubmitError(`${firstBad.name}: ${failing[pinnedKey(firstBad)]}${others > 0 ? ` (그 밖에 ${others}곳)` : ''}`);
+      const row = document.getElementById(pinnedRowId(pinnedKey(firstBad)));
+      row?.scrollIntoView?.({ block: 'center' });
+      // 오류가 가리키는 칸에 포커스를 둔다. '빼기' 버튼에 두면 Enter 한 번에 장소가 빠진다.
+      focusFix(row, failing[pinnedKey(firstBad)] ?? '');
       return;
     }
     if (pinned.length > PINNED_LIMIT) {
@@ -379,7 +397,7 @@ export default function TripStartPage() {
           </>
         ) : (
           <>
-            {submitError && <Banner tone="warn">{submitError}</Banner>}
+            {visibleSubmitError && <Banner tone="warn">{visibleSubmitError}</Banner>}
             <p className={styles.footerNote}>
               {pinned.length === 0 ? '꼭 갈 곳을 1곳 이상 담으면 코스를 만들 수 있어요' : '사이 구간의 경유지는 코스를 만든 뒤에 찾아요'}
             </p>
@@ -391,6 +409,24 @@ export default function TripStartPage() {
       </footer>
     </main>
   );
+}
+
+/** 오류 문구에 맞는 칸(시각 → 비어 있는 시각 칸, 일차 → 일차 칸, 머무를 시간 → 그 칸)으로 포커스를 옮긴다. */
+function focusFix(row: HTMLElement | null, message: string) {
+  if (!row) return;
+  const times = [...row.querySelectorAll<HTMLInputElement>('input[type="time"]')];
+  const selects = [...row.querySelectorAll<HTMLSelectElement>('select')];
+  const target = message.includes('시각')
+    ? times.find((input) => !input.value) ?? times[0]
+    : message.includes('일차')
+      ? selects.find((select) => (select.getAttribute('aria-label') ?? '').includes('일차')) ?? selects[0]
+      : selects.find((select) => (select.getAttribute('aria-label') ?? '').includes('머무를')) ?? times[0] ?? selects[0];
+  target?.focus();
+}
+
+/** 담은 장소 행의 DOM id. 제출 오류 때 그 행으로 스크롤·포커스한다. */
+function pinnedRowId(key: string) {
+  return `pinned-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 }
 
 function PinnedItem({ place, plan, askStay, dayCount, startDate, error, onPlan, onRemove }: {
@@ -405,7 +441,7 @@ function PinnedItem({ place, plan, askStay, dayCount, startDate, error, onPlan, 
   onRemove: () => void;
 }) {
   return (
-    <li className={styles.pinned}>
+    <li className={styles.pinned} id={pinnedRowId(pinnedKey(place))}>
       <div className={styles.pinnedHead}>
         <span className={styles.pinnedName}>{place.name}</span>
         <Badge kind={pinnedBadgeKind(place)} />

@@ -21,6 +21,8 @@ export interface WaypointSheetProps {
   toName?: string;
   /** 이 구간 뒤에 있는 고정 장소. 넣어도 고정 시각은 바뀌지 않는다는 근거로 보여 준다(원칙 1·5). */
   keptFixed?: readonly { name: string; start: string }[];
+  /** 이미 일정에 있는 공공 장소 ID. 서버도 빼지만 화면에서도 한 번 더 거른다. */
+  excludePlaceIds?: readonly string[];
 }
 
 const THRESHOLDS = [10, 15, 30] as const;
@@ -30,7 +32,7 @@ export function WaypointSheet(props: WaypointSheetProps) {
   return <WaypointContent key={JSON.stringify([props.tripId, props.between.fromBlockId, props.between.toBlockId])} {...props} />;
 }
 
-function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled, onChange, onClose, onDirectSearch, fromName, toName, keptFixed = [] }: WaypointSheetProps) {
+function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled, onChange, onClose, onDirectSearch, fromName, toName, keptFixed = [], excludePlaceIds = [] }: WaypointSheetProps) {
   const [insertionError, setInsertionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const inFlight = useRef(false);
@@ -41,7 +43,9 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
   ), [tripId, fromBlockId, toBlockId, thresholdMin]);
   const loaded = useApi(fetchCandidates);
   const candidates = loaded.status === 'success'
-    ? loaded.data.candidates.filter((candidate) => candidate.place.source === 'PUBLIC').slice(0, 3)
+    ? loaded.data.candidates
+      .filter((candidate) => candidate.place.source === 'PUBLIC' && !excludePlaceIds.includes(candidate.place.id))
+      .slice(0, 3)
     : [];
 
   async function insert(candidate: WaypointCandidate) {
@@ -70,7 +74,7 @@ function WaypointContent({ tripId, between: { fromBlockId, toBlockId }, disabled
   const title = fromName && toName ? `${fromName} → ${toName} 사이` : '사이에 들를 곳';
   const kept = keptFixed.map((item) => `${item.name} ${item.start}`).join(', ');
 
-  return <BottomSheet open onClose={onClose} title={title} description="우회가 적은 곳부터 보여 드려요. 넣어도 고정한 시각은 그대로예요.">
+  return <BottomSheet open onClose={onClose} title={title} description="우회 시간과 예상 혼잡을 함께 따져 골랐어요. 넣어도 고정한 시각은 그대로예요.">
     {insertionError && <p role="alert" className={styles.error}>{insertionError}</p>}
     {/* 기본 radio 를 쓰고(방향키·Tab 동작은 브라우저 그대로) 모양만 둥근 세그먼트로 꾸민다. */}
     <fieldset className={styles.threshold} disabled={busy}>
