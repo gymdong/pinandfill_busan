@@ -117,3 +117,21 @@ def test_route_candidates_are_capped_by_straight_line_detour(monkeypatch: pytest
     assert response.status_code == 200
     assert len(response.json()["candidates"]) <= 2
     assert len(calls) <= 1 + 2 * 2 + 2  # 기준 1 + 후보 2곳 × 2 (+ 엔진 재계산 여유)
+
+
+def test_schedule_days_carry_block_crowd_at_arrival(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """타임라인 배지(days[].crowd): 혼잡 근거가 있는 공공 장소 블록만, 도착 시각의 등급을 낸다."""
+    monkeypatch.setattr("app.main.build_route_provider", TwentyMinutes)
+    monkeypatch.setenv("CROWD_DATA_DIR", str(FIXTURES))
+    with TestClient(create_app()) as client:
+        trip_id = client.post("/api/trips", json=TRIP).json()["tripId"]
+        client.post(f"/api/trips/{trip_id}/blocks", json=fixed("126121", "10:00", "11:00", 60))
+        # 시험용 혼잡 연결이 있는 태종대(126658)
+        added = client.post(f"/api/trips/{trip_id}/blocks", json=fixed("126658", "14:00", "15:30", 90))
+    assert added.status_code == 200, added.text
+    day = added.json()["schedule"]["days"][0]
+    blocks = {block["place"]["id"]: block["id"] for block in day["blocks"]}
+    crowd = {row["blockId"]: row for row in day["crowd"]}
+    assert blocks["126121"] not in crowd  # 연결 없음 → 정보 부족
+    row = crowd[blocks["126658"]]
+    assert row["confidence"] in {"높음", "중간", "낮음"} and row["sources"]

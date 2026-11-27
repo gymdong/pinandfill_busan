@@ -6,16 +6,17 @@ cross-day edits require a later policy.
 """
 
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 
 from app.modules.engine.constraints.chain import minutes, validate_chain, visit_end
-from app.modules.engine.interfaces import EngineResult, PlaceDataProvider, RouteProvider
+from app.modules.engine.interfaces import CrowdLookup, EngineResult, PlaceDataProvider, RouteProvider
 from app.modules.engine.routing import departure_for, estimate_departing
 from app.modules.engine.schemas import (
     CalculationContext,
     InsertInput,
     KakaoPlaceRef,
+    PublicPlaceRef,
     RecomputeInput,
     ScheduleState,
     StoredBlock,
@@ -27,6 +28,7 @@ from app.modules.engine.schemas import (
 )
 from app.modules.trips.schemas import (
     Block,
+    BlockCrowd,
     KakaoBlockPlace,
     Leg,
     PlaceSummary,
@@ -63,12 +65,15 @@ class BasicItineraryEngine:
         *,
         clock: Callable[[], datetime] = _now,
         id_factory: Callable[[], str] = lambda: str(uuid4()),
+        crowd: CrowdLookup | None = None,
     ) -> None:
         # Request-specific coordinates are intentionally never stored on self.
         self.places = places
         self.routes = routes
         self.clock = clock
         self.id_factory = id_factory
+        # FR-008: 응답 일정의 블록별 예상 혼잡(타임라인 배지). 없으면 crowd 는 비어 있다(정보 부족).
+        self.crowd = crowd
 
     def _check(self, trip: TripWindow, state: ScheduleState) -> None:
         if trip.day_end <= trip.day_start:
@@ -297,6 +302,29 @@ class BasicItineraryEngine:
         validation = validate_chain(ValidateInput(trip=trip, schedule=updated), places)
         return EngineResult(state=updated, schedule=self._present(trip, updated, places, validation))
 
+    def _crowd(self, state: ScheduleState, day_no: int, day: date) -> tuple[BlockCrowd, ...]:
+        """도착 시각의 예상 혼잡 등급. 공공 장소·도착 시각이 있고 근거 신호가 있는 블록만 낸다."""
+        if self.crowd is None:
+            return ()
+        rows: list[BlockCrowd] = []
+        for block in state.blocks:
+            if block.day_no != day_no or block.arrive_at is None or not isinstance(block.place_ref, PublicPlaceRef):
+                continue
+            found = self.crowd.crowd(block.place_ref, on_date=day)
+            if found is None or found.confidence == "없음" or not found.hours:
+                continue
+            grade = next((hour.grade for hour in found.hours if hour.h == block.arrive_at.hour), None)
+            rows.append(
+                BlockCrowd(
+                    block_id=block.id,
+                    grade=grade,
+                    confidence=found.confidence,
+                    as_of=found.as_of,
+                    sources=tuple(found.sources),
+                )
+            )
+        return tuple(rows)
+
     def _present(
         self,
         trip: TripWindow,
@@ -362,12 +390,14 @@ class BasicItineraryEngine:
                     response_legs.append(
                         Leg.model_validate(leg.model_dump(exclude={"time_semantics", "lookup_failed"}))
                     )
+            day = trip.start_date + timedelta(days=day_no - 1)
             days.append(
                 ScheduleDay(
                     day_no=day_no,
-                    date=trip.start_date + timedelta(days=day_no - 1),
+                    date=day,
                     blocks=tuple(response_blocks),
                     legs=tuple(response_legs),
+                    crowd=self._crowd(state, day_no, day),
                 )
             )
         return Schedule(days=tuple(days), violations=validation.violations, conflicts=validation.conflicts)
