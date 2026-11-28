@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { tripsApi } from '@/api';
+import { ApiError, tripsApi } from '@/api';
 import { placeSummaries } from '@/api/mock/fixtures/places';
 import { schedule } from '@/api/mock/fixtures/schedule';
 import { PlanBSheet, type PlanBSheetProps } from '@/features/plan-b-sheet/PlanBSheet';
@@ -62,5 +62,18 @@ describe('PlanBSheet', () => {
     vi.spyOn(tripsApi, 'getPlanB').mockResolvedValue({ blockId: 'b1', trigger: null, crowd: null, options: [] });
     render(<PlanBSheet {...props()} />);
     expect(await screen.findByText(/지금은 바꿀 필요가 없어요/)).toBeInTheDocument();
+  });
+
+  it('적용이 409 로 실패하면 시트 안에 오류를 보이고 3안을 다시 받는다', async () => {
+    const get = vi.spyOn(tripsApi, 'getPlanB').mockResolvedValue({ ...response, estimated: true });
+    const message = '일정이 바뀌어 이 안을 적용할 수 없어요. 플랜 B를 다시 불러 주세요.';
+    vi.spyOn(tripsApi, 'applyPlanB').mockRejectedValue(new ApiError({ id: 'ERR-001', status: 409, message }));
+    const input = props();
+    render(<PlanBSheet {...input} />);
+    expect(await screen.findByText(/이동 \+3분\(추정\)/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '대체 장소 적용' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(input.onClose).not.toHaveBeenCalled();
   });
 });

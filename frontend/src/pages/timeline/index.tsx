@@ -31,6 +31,10 @@ function writeSeen(tripId: string, ids: string[]) {
   try { sessionStorage.setItem(seenKey(tripId), JSON.stringify(ids)); } catch { /* 저장 불가: 이번 화면에서만 기억 */ }
 }
 
+function pad(value: number) { return String(value).padStart(2, '0'); }
+function localToday(): IsoDate { const now = new Date(); return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; }
+function localNow(): string { const now = new Date(); return `${pad(now.getHours())}:${pad(now.getMinutes())}`; }
+
 export default function TimelinePage() {
   const { tripId } = useParams();
   return <TimelineTrip key={tripId} tripId={tripId} />;
@@ -83,7 +87,8 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   }, [flashId]);
 
   /** 요청을 보내고 성공 여부를 돌려준다. 패널은 그 패널에서 보낸 추가가 성공했을 때만 닫는다. */
-  const run = async (action: Parameters<Change>[0], isUndo = false, message?: string) => {
+  /** `rethrow` 면 오류를 위 배너 대신 호출한 쪽(예: 모달 시트)으로 넘긴다. 모달 뒤 배너는 보이지 않는다. */
+  const run = async (action: Parameters<Change>[0], isUndo = false, message?: string, rethrow = false) => {
     setPending(true);
     setError(null);
     try {
@@ -95,6 +100,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       announce(before, result.schedule, isUndo, message);
       return true;
     } catch (cause) {
+      if (rethrow) throw cause;
       setError(toApiError(cause).message);
       return false;
     } finally {
@@ -138,7 +144,9 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const selectDay = (next: number) => { setDayNo(next); setSelected(null); setSlot(null); };
   const crowdOf = (block: Block) => day?.crowd.find((item) => item.blockId === block.id);
   const planBIds = new Set(day?.blocks.filter((block) => needsPlanB(block, crowdOf(block))).map((block) => block.id) ?? []);
-  const alertBlock = [...(day?.blocks ?? [])].sort((a, b) => a.seq - b.seq).find((block) => planBIds.has(block.id) && !seen.includes(block.id));
+  // '다음 블록'(UC-007): 여행 당일이면 지금 이후 블록만, 그 전이면 그날 첫 블록부터 본다.
+  const upcoming = (block: Block) => day?.date !== localToday() || (block.arriveAt ?? '') > localNow();
+  const alertBlock = [...(day?.blocks ?? [])].sort((a, b) => a.seq - b.seq).find((block) => planBIds.has(block.id) && upcoming(block) && !seen.includes(block.id));
   const planBTarget = day?.blocks.find((block) => block.id === planBBlock);
 
   return <main className={styles.page}>
@@ -188,8 +196,8 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       tripId={tripId} blockId={planBTarget.id} placeName={resolveBlockPlace(planBTarget.place)?.name ?? '이 장소'} disabled={pending}
       onClose={() => setPlanBBlock(null)}
       onChange={async (action, message) => {
-        // 실패하면 시트를 열어 둔다(run 이 오류를 위 배너에 보여 준다).
-        if (await run(action, false, message)) setPlanBBlock(null);
+        // 실패하면 오류가 시트로 넘어가 시트 안에 보인다. 시트는 열어 둔다.
+        if (await run(action, false, message, true)) setPlanBBlock(null);
       }}
     />}
 

@@ -26,6 +26,7 @@ from app.modules.engine.service import (
     SequenceNormalizationRequiredError,
 )
 from app.modules.plan_b.schemas import ApplyPlanBRequest, PlanBResponse
+from app.modules.plan_b.service import PlanBStaleError
 from app.modules.trips.commands import FixedWindowRequiredError
 from app.modules.trips.edit_history import NothingToUndoError
 from app.modules.trips.schemas import (
@@ -78,6 +79,8 @@ Service = Annotated[TripService, Depends(trip_service)]
 
 def translate_error(exc: Exception) -> TripAPIError:
     # Never use str(exc), errors(), or the original body: they may contain search data.
+    if isinstance(exc, PlanBStaleError):
+        return TripAPIError(409, "ERR-001", "일정이 바뀌어 이 안을 적용할 수 없어요. 플랜 B를 다시 불러 주세요.")
     if isinstance(exc, TripNotFoundError):
         return TripAPIError(404, "ERR-016", "여행을 찾을 수 없습니다.")
     if isinstance(exc, FixedScheduleConflictError):

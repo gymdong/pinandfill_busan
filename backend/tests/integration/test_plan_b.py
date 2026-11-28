@@ -177,11 +177,99 @@ def test_keep_changes_nothing_and_unknown_options_are_rejected() -> None:
                 "NOPE",
                 f"REORDER:{blocks[YONGDUSAN]['id']}:x",
                 f"REORDER:{blocks[ART]['id']}:2",  # 고정 블록
-                f"REPLACE:{blocks[YONGDUSAN]['id']}:{TAEJONGDAE}",  # 이미 일정에 있는 장소
+                f"REORDER:{blocks[YONGDUSAN]['id']}:0",
+                "REORDER:" + str(blocks[YONGDUSAN]["id"]) + ":\u00b2",  # isdigit() 는 참이지만 숫자가 아님
             )
         ]
+        # 조회 때 보여 준 적 없는 안(이미 일정에 있는 장소)은 지금 일정의 안이 아니다.
+        stale = client.post(
+            f"/api/trips/{trip_id}/plan-b/apply", json={"optionId": f"REPLACE:{blocks[YONGDUSAN]['id']}:{TAEJONGDAE}"}
+        )
         missing = client.get(f"/api/trips/{trip_id}/plan-b", params={"blockId": "missing"})
     assert keep.status_code == 200
     assert after == before and after["canUndo"] is False
-    assert [response.status_code for response in bad] == [400, 400, 400, 400]
+    assert [response.status_code for response in bad] == [400, 400, 400, 400, 400]
+    assert stale.status_code == 409
     assert missing.status_code == 400
+
+
+def test_options_that_push_blocks_past_day_end_are_not_offered() -> None:
+    """태종대 뒤(16:20–17:05)로 옮기면 하루 끝(16:50)을 넘는다. 그런 순서는 '충돌 없음'으로 내지 않는다."""
+    with _app(FakeCrowd()) as client:
+        trip_id = client.post("/api/trips", json={**TRIP, "dayEnd": "16:50"}).json()["tripId"]
+        selections = [
+            _fixed(ART, "10:00", "11:00"),
+            {"clientId": YONGDUSAN, "place": {"placeId": YONGDUSAN}, "stayMin": 45},
+            _fixed(TAEJONGDAE, "15:00", "16:00"),
+        ]
+        created = client.post(
+            f"/api/trips/{trip_id}/schedule", json={"initial": {"policy": "FIRST_FEASIBLE", "selections": selections}}
+        ).json()
+        target = next(b for b in created["days"][0]["blocks"] if b["place"]["id"] == YONGDUSAN)
+        body = client.get(f"/api/trips/{trip_id}/plan-b", params={"blockId": target["id"]}).json()
+        forced = client.post(f"/api/trips/{trip_id}/plan-b/apply", json={"optionId": f"REORDER:{target['id']}:3"})
+    reorder = next(o for o in body["options"] if o["kind"] == "REORDER")
+    assert reorder["available"] is False and reorder["note"]
+    assert forced.status_code == 409
+
+
+def test_apply_rechecks_the_option_against_the_current_schedule() -> None:
+    """조회 뒤 다른 편집으로 그 자리가 더 이상 덜 붐비지 않으면 적용하지 않는다(409)."""
+    with _app(FakeCrowd()) as client:
+        trip_id, blocks = _trip(client)
+        options = client.get(f"/api/trips/{trip_id}/plan-b", params={"blockId": blocks[YONGDUSAN]["id"]}).json()
+        reorder = next(o for o in options["options"] if o["kind"] == "REORDER")
+        # 다른 화면에서 먼저 태종대 뒤로 옮겼다. 같은 안은 이제 아무것도 바꾸지 않는다.
+        moved = client.patch(f"/api/trips/{trip_id}/blocks/{blocks[YONGDUSAN]['id']}", json={"seq": 3})
+        assert moved.status_code == 200, moved.text
+        applied = client.post(f"/api/trips/{trip_id}/plan-b/apply", json={"optionId": reorder["id"]})
+    assert applied.status_code == 409
+
+
+def test_preview_uses_the_preview_engine_and_never_calls_routes() -> None:
+    """조회는 경로 API 를 부르지 않는다(TMAP 일일 한도 보호). 적용 때만 실제 경로를 조회한다."""
+    calls: list[int] = []
+
+    class Counting(TwentyMinutes):
+        def estimate(self, origin: object, destination: object, *, mode: str) -> RouteEstimate:
+            calls.append(1)
+            return super().estimate(origin, destination, mode=mode)
+
+    places = load_sample_places()
+    crowd = FakeCrowd()
+    engine = BasicItineraryEngine(places, Counting(), crowd=crowd)
+    preview = BasicItineraryEngine(places, TwentyMinutes(), crowd=crowd)
+    candidates = PublicPlaceCandidates(lambda: [item.place.id for item in places.all()], lambda pid: _stay(places, pid))
+    service = TripService(
+        FakeTripRepository({}),
+        engine,
+        places.stay_min,
+        initial_planner=InitialSchedulePlanner(engine, PublicStayDurations(places.stay_min)),
+        plan_b=PlanBPlanner(engine, places, candidates, crowd=crowd, preview_engine=preview),
+    )
+    with TestClient(create_app(trip_service=service)) as client:
+        trip_id, blocks = _trip(client)
+        calls.clear()
+        body = client.get(f"/api/trips/{trip_id}/plan-b", params={"blockId": blocks[YONGDUSAN]["id"]}).json()
+        assert calls == [] and body["estimated"] is True
+        reorder = next(o for o in body["options"] if o["kind"] == "REORDER")
+        applied = client.post(f"/api/trips/{trip_id}/plan-b/apply", json={"optionId": reorder["id"]})
+    assert applied.status_code == 200, applied.text
+    assert calls  # 적용은 실제 경로로 다시 계산한다
+
+
+class BusyElsewhere(FakeCrowd):
+    """다른 장소는 근거가 약하지만(신뢰 낮음) 하루 종일 붐빔으로 보인다."""
+
+    def crowd(self, place_ref: PlaceRef, *, on_date: date) -> PlaceCrowdResponse | None:
+        if isinstance(place_ref, PublicPlaceRef) and place_ref.place_id != YONGDUSAN:
+            return _crowd(set(range(24)), "낮음")
+        return super().crowd(place_ref, on_date=on_date)
+
+
+def test_low_confidence_busy_places_are_not_offered_as_replacements() -> None:
+    with _app(BusyElsewhere()) as client:
+        trip_id, blocks = _trip(client)
+        body = client.get(f"/api/trips/{trip_id}/plan-b", params={"blockId": blocks[YONGDUSAN]["id"]}).json()
+    replace = next(o for o in body["options"] if o["kind"] == "REPLACE")
+    assert replace["available"] is False

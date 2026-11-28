@@ -483,6 +483,8 @@ export interface PlanBResponse {
   /** null 이면 플랜 B 를 띄울 조건이 아니다. */
   trigger: 'CROWD' | 'RAIN' | null;
   crowd: CrowdSummary | null;
+  /** 안의 이동시간이 직선거리 추정인가. 적용하면 실제 경로로 다시 계산한다. */
+  estimated?: boolean;
   options: PlanBOption[];
 }
 

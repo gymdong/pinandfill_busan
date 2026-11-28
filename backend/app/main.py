@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.adapters.kakao import KakaoLocalAdapter, KakaoSettings
+from app.adapters.route.estimated import EstimatedFallbackRouteProvider
 from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
@@ -112,6 +113,8 @@ def default_trip_service(
         places,
         candidates,
         crowd=crowd_lookup,
+        # 조회는 직선거리 추정만 쓴다(경로 API 한도 보호). 적용할 때만 실제 경로를 조회한다.
+        preview_engine=BasicItineraryEngine(places, EstimatedFallbackRouteProvider(None), crowd=crowd_lookup),
         min_confidence=avoidance.min_confidence,
         min_gain=avoidance.min_gain,
     )

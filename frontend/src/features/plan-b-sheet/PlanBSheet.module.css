@@ -76,3 +76,9 @@
   color: var(--color-ink-muted);
   font-size: var(--text-xs);
 }
+
+.note {
+  margin-bottom: var(--space-3);
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+}

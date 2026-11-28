@@ -19,10 +19,11 @@ export interface PlanBSheetProps {
 
 const TITLES: Record<PlanBOption['kind'], string> = { KEEP: '그대로 가기', REORDER: '순서 바꾸기', REPLACE: '대체 장소' };
 
-function travel(minutes: number | null): string {
+function travel(minutes: number | null, estimated: boolean): string {
   if (minutes === null) return '이동시간 확인 필요';
-  if (minutes === 0) return '이동시간 그대로';
-  return minutes > 0 ? `이동 +${minutes}분` : `이동 ${minutes}분`;
+  const suffix = estimated ? '(추정)' : '';
+  if (minutes === 0) return `이동시간 그대로${suffix}`;
+  return minutes > 0 ? `이동 +${minutes}분${suffix}` : `이동 ${minutes}분${suffix}`;
 }
 
 /**
@@ -53,7 +54,10 @@ function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose 
     try {
       await onChange(() => tripsApi.applyPlanB(tripId, { optionId: option.id }), message);
     } catch (cause) {
-      setApplyError(toApiError(cause).message);
+      const error = toApiError(cause);
+      setApplyError(error.message);
+      // 일정이 바뀌어 안이 달라졌으면(409) 지금 일정으로 3안을 다시 받는다.
+      if (error.status === 409) loaded.reload();
     } finally {
       inFlight.current = false;
       setSubmitting(false);
@@ -73,6 +77,7 @@ function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose 
       <Button variant="outline" disabled={busy} onClick={loaded.reload}>다시 시도</Button>
     </div>}
     {current && current.trigger === null && <p role="status" className={styles.status}>지금은 바꿀 필요가 없어요. 예상 혼잡이 높지 않거나 근거가 부족해요.</p>}
+    {current?.trigger && current.estimated && <p className={styles.note}>시각·이동시간은 추정이에요. 고르면 실제 경로로 다시 계산해요.</p>}
     {current && current.trigger !== null && <ul className={styles.options} aria-label="플랜 B 3안">
       {current.options.map((option) => <li key={option.kind} className={`${styles.option} ${option.available ? '' : styles.optionOff}`}>
         <div className={styles.head}>
@@ -82,7 +87,7 @@ function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose 
         {option.available ? <>
           <CrowdBadge grade={option.crowd?.grade ?? null} confidence={option.crowd?.confidence} />
           <p className={styles.meta}>
-            {option.kind === 'KEEP' ? '지금 일정 그대로' : travel(option.extraMinutes)}
+            {option.kind === 'KEEP' ? '지금 일정 그대로' : travel(option.extraMinutes, Boolean(current.estimated))}
             {' · '}
             {option.hoursConflict ? <span className={styles.conflict}>영업시간 충돌 있음</span> : '영업시간 충돌 없음'}
           </p>

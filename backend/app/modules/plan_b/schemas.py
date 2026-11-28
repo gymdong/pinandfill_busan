@@ -36,6 +36,8 @@ class PlanBResponse(ContractModel):
     trigger: PlanBTrigger | None
     # 대상 블록 지금 시각의 예상 혼잡.
     crowd: CrowdSummary | None
+    # 안의 이동시간이 직선거리 추정인가(조회는 경로 API 를 부르지 않는다). 적용하면 실제 경로로 다시 계산한다.
+    estimated: bool = False
     options: tuple[PlanBOption, ...] = Field(default=(), max_length=3)
 
 
