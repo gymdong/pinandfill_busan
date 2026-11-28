@@ -16,6 +16,8 @@ class WeatherSettings(BaseSettings):
     kma_timeout_s: float = Field(default=10.0, gt=0, le=60)
     # 같은 격자·발표의 예보를 다시 받지 않는 시간(초). 단기예보는 3시간마다 발표된다.
     kma_cache_s: int = Field(default=1800, ge=0)
+    # 조회 실패·빈 결과를 기억하는 시간(초). 짧게 두어 곧 다시 조회한다.
+    kma_retry_s: int = Field(default=60, ge=0)
     # 비 예보로 보는 강수확률(%). 강수형태(PTY)가 비·눈이면 확률과 관계없이 비 예보다.
     rain_pop: int = Field(default=60, ge=0, le=100)
     # 해안 장소 강풍 경고 기준 풍속(m/s, 잠정). 기상청 강풍주의보(육상 14m/s)보다 낮게 둔다.

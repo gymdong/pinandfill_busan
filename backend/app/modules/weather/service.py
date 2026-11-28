@@ -9,7 +9,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from threading import Lock
 from typing import Literal, Protocol
 
@@ -56,39 +56,58 @@ class WeatherService:
         self._short: dict[tuple[int, int, datetime], tuple[datetime, ShortForecast | None]] = {}
         self._mid: dict[datetime, tuple[datetime, MidForecast | None]] = {}
 
-    def _fresh(self, fetched: datetime) -> bool:
-        return (self.clock() - fetched).total_seconds() < self.settings.kma_cache_s
+    def _fresh(self, expires: datetime, value: object) -> bool:
+        return self.clock() < expires
+
+    def _until(self, value: object, *, fallback: bool = False) -> datetime:
+        """캐시 만료 시각. 실패·빈 결과·직전 발표로 대신한 값은 짧게만 기억해 곧 다시 조회한다."""
+        empty = value is None or not (getattr(value, "slots", None) or getattr(value, "days", None))
+        ttl = self.settings.kma_retry_s if empty or fallback else self.settings.kma_cache_s
+        return self.clock() + timedelta(seconds=ttl)
+
+    def _fetch_short(self, nx: int, ny: int, base: datetime) -> ShortForecast | None:
+        try:
+            return self.source.short(nx, ny, base)
+        except KmaError as error:
+            logger.warning("weather short_failed kind=%s", error)
+        except Exception as error:  # 예상 밖 오류도 '예보 없음'이다. 종류만 남긴다.
+            logger.warning("weather short_failed kind=%s", type(error).__name__)
+        return None
 
     def _short_for(self, nx: int, ny: int) -> ShortForecast | None:
         base = short_base(self.clock())
         key = (nx, ny, base)
         with self._lock:
             hit = self._short.get(key)
-            if hit is not None and self._fresh(hit[0]):
+            if hit is not None and self._fresh(*hit):
                 return hit[1]
-        try:
-            value: ShortForecast | None = self.source.short(nx, ny, base)
-        except KmaError as error:
-            logger.warning("weather short_failed kind=%s", error)
-            value = None
+        value = self._fetch_short(nx, ny, base)
+        fallback = False
+        if value is None or not value.slots:
+            # 이번 발표 자료가 아직 없으면 직전 발표(3시간 전)를 쓰고, 이번 발표는 곧 다시 찾는다.
+            previous = self._fetch_short(nx, ny, base - timedelta(hours=3))
+            if previous is not None and previous.slots:
+                value, fallback = previous, True
         with self._lock:
-            self._short = {k: v for k, v in self._short.items() if self._fresh(v[0])}
-            self._short[key] = (self.clock(), value)
+            self._short = {k: v for k, v in self._short.items() if self._fresh(*v)}
+            self._short[key] = (self._until(value, fallback=fallback), value)
         return value
 
     def _mid_for(self) -> MidForecast | None:
         base = mid_base(self.clock())
         with self._lock:
             hit = self._mid.get(base)
-            if hit is not None and self._fresh(hit[0]):
+            if hit is not None and self._fresh(*hit):
                 return hit[1]
+        value: MidForecast | None = None
         try:
-            value: MidForecast | None = self.source.mid(base)
+            value = self.source.mid(base)
         except KmaError as error:
             logger.warning("weather mid_failed kind=%s", error)
-            value = None
+        except Exception as error:
+            logger.warning("weather mid_failed kind=%s", type(error).__name__)
         with self._lock:
-            self._mid = {base: (self.clock(), value)}
+            self._mid = {base: (self._until(value), value)}
         return value
 
     def forecast(self, lat: float, lng: float, day: date, hour: int) -> Forecast | None:
@@ -125,8 +144,9 @@ class WeatherService:
         )
 
     def rain(self, lat: float, lng: float, day: date, hour: int) -> bool | None:
-        """시간 단위 예보로 본 비 예보 여부. 단기예보가 없으면 None(판단하지 않는다)."""
-        found = self.forecast(lat, lng, day, hour)
-        if found is None or found.scope != "SHORT":
+        """시간 단위 예보로 본 비 예보 여부. 단기예보가 없으면 None(판단하지 않는다). 중기예보는 부르지 않는다."""
+        short = self._short_for(*to_grid(lat, lng))
+        slot = short.slots.get((day, hour)) if short is not None else None
+        if slot is None:
             return None
-        return found.rain
+        return slot.pty in RAIN_TYPES or (slot.pop is not None and slot.pop >= self.settings.rain_pop)

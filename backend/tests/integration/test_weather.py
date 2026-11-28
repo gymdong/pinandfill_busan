@@ -1,6 +1,6 @@
 """FR-013 날씨(API-016)와 플랜 B 비 트리거. 기상청은 httpx MockTransport 가짜 응답이다(실제 호출 없음)."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -200,3 +200,45 @@ def test_no_key_disables_weather() -> None:
         ).json()["tripId"]
         response = client.get(f"/api/trips/{trip_id}/weather")
     assert response.status_code == 503 and response.json()["error"]["id"] == "ERR-012"
+
+
+def test_empty_or_failed_results_are_retried_soon_and_previous_issue_is_used() -> None:
+    calls: list[str] = []
+    state = {"now": NOW}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params.get("base_time", request.url.params.get("tmFc", "")))
+        if request.url.path.endswith("getVilageFcst"):
+            if request.url.params["base_time"] == "0800":
+                return httpx.Response(200, json={"response": {"header": {"resultCode": "03"}}})  # 아직 없음
+            stamp = {"fcstDate": TOMORROW.strftime("%Y%m%d"), "fcstTime": "1000"}
+            return _ok([{"category": "POP", "fcstValue": "20", **stamp}])
+        return httpx.Response(200, json={"response": None})  # 예상 밖 모양
+
+    weather = WeatherService(
+        KmaClient("k", transport=httpx.MockTransport(handler)),
+        WeatherSettings(_env_file=None),
+        clock=lambda: state["now"].astimezone(UTC),
+    )
+    found = weather.forecast(35.15, 129.11, TOMORROW, 10)
+    assert found is not None and found.pop == 20 and found.issued_at.hour == 5  # 08시 자료가 없어 05시 발표
+    assert weather.forecast(35.15, 129.11, date(2026, 12, 8), 10) is None  # 중기 모양 오류 → 예보 없음
+    assert weather.rain(35.15, 129.11, date(2026, 12, 8), 10) is None
+    before = len(calls)
+    state["now"] = NOW + timedelta(seconds=61)
+    weather.forecast(35.15, 129.11, TOMORROW, 10)
+    assert len(calls) > before  # 빈 결과는 1분 뒤 다시 조회한다
+
+
+def test_mid_term_keys_count_days_from_the_issue_date() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("getMidLandFcst"):
+            return _ok(
+                [{"rnSt5Am": 10, "rnSt5Pm": 40, "wf5Am": "맑음", "wf5Pm": "구름많음", "rnSt8": 70, "wf8": "흐리고 비"}]
+            )
+        return _ok([{"taMin5": 3, "taMax5": 11, "taMin8": 5, "taMax8": 9}])
+
+    mid = KmaClient("k", transport=httpx.MockTransport(handler)).mid(datetime(2026, 11, 28, 18, tzinfo=KST))
+    assert mid.days[date(2026, 12, 3)].sky_pm == "구름많음" and mid.days[date(2026, 12, 3)].pop_pm == 40
+    assert mid.days[date(2026, 12, 6)].pop_am == 70 and mid.days[date(2026, 12, 6)].temp_max == 9
+    assert date(2026, 12, 2) not in mid.days  # 18시 발표는 5일 뒤부터

@@ -319,19 +319,27 @@ class PlanBPlanner:
         """그 장소·시각의 시간 단위 비 예보. 모르면 False(비를 근거로 바꾸지 않는다)."""
         if self.rain_lookup is None or not isinstance(ref, PublicPlaceRef):
             return False
-        place = self.places.get(ref, on_date=day)
-        if place.lat is None or place.lng is None:
+        try:
+            place = self.places.get(ref, on_date=day)
+            if place.lat is None or place.lng is None:
+                return False
+            return self.rain_lookup.rain(place.lat, place.lng, day, hour) is True
+        except Exception:
+            # 날씨 조회 실패가 혼잡 플랜 B 까지 막지 않게 한다(비를 근거로 바꾸지 않는다).
             return False
-        return self.rain_lookup.rain(place.lat, place.lng, day, hour) is True
 
     def _dry(self, ref: object, day: date, hour: int) -> bool:
         """비 예보가 없다고 확인되는가(단기예보로 비가 아님)."""
         if self.rain_lookup is None or not isinstance(ref, PublicPlaceRef):
             return False
-        place = self.places.get(ref, on_date=day)
-        if place.lat is None or place.lng is None:
+        try:
+            place = self.places.get(ref, on_date=day)
+            if place.lat is None or place.lng is None:
+                return False
+            return self.rain_lookup.rain(place.lat, place.lng, day, hour) is False
+        except Exception:
+            # 날씨 조회 실패가 혼잡 플랜 B 까지 막지 않게 한다(비를 근거로 바꾸지 않는다).
             return False
-        return self.rain_lookup.rain(place.lat, place.lng, day, hour) is False
 
     def _rain_reorder(self, record: TripRecord, block: StoredBlock, day: date, evaluate: "_Evaluator") -> PlanBOption:
         ranked: list[tuple[tuple[bool, int], _Evaluated]] = []

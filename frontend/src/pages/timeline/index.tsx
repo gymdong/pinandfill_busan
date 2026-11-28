@@ -75,7 +75,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
   // 블록 시각 예보(API-016). 'off' 는 서버에 기상청 키가 없거나 조회 실패: 배지를 숨긴다.
   const [weather, setWeather] = useState<TripWeatherResponse | 'off' | null>(null);
-  const timesKey = schedule?.days.flatMap((d) => d.blocks.map((b) => `${b.id}@${b.arriveAt ?? ''}`)).join(',') ?? '';
+  const timesKey = schedule?.days.flatMap((d) => d.blocks.map((b) => `${d.date}:${b.id}@${b.arriveAt ?? ''}`)).join(',') ?? '';
   useEffect(() => {
     if (!tripId || !timesKey) return undefined;
     const controller = new AbortController();

@@ -23,8 +23,10 @@ export function WeatherBadge({ weather }: { weather: TripWeatherBlock | undefine
     if (forecast.tempMin != null && forecast.tempMax != null) parts.push(`${forecast.tempMin}~${forecast.tempMax}°`);
   }
   const label = weather.scope === 'SHORT' ? '예보' : '예보(일 단위)';
-  return <span className={`${styles.badge} ${forecast.rain ? styles.rain : ''}`} title={`기상청 ${issued(weather.issuedAt)} 발표`}>
+  const when = issued(weather.issuedAt);
+  return <span className={`${styles.badge} ${forecast.rain ? styles.rain : ''}`}>
     <span className={styles.label}>{label}</span> {parts.join(' · ') || '정보 없음'}
-    <span className="sr-only">, 기상청 {issued(weather.issuedAt)} 발표</span>
+    {forecast.rain && <span className="sr-only">, 비 예보</span>}
+    {when && <span className="sr-only">, 기상청 {when} 발표</span>}
   </span>;
 }

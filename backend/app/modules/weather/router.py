@@ -90,7 +90,10 @@ def trip_weather(
             place = block.place
             if getattr(place, "source", None) != "PUBLIC" or block.arrive_at is None:
                 continue
-            found: Forecast | None = weather.forecast(place.lat, place.lng, on, block.arrive_at.hour)  # type: ignore[union-attr]
+            try:
+                found: Forecast | None = weather.forecast(place.lat, place.lng, on, block.arrive_at.hour)  # type: ignore[union-attr]
+            except Exception:
+                found = None  # 예보 없음(ERR-012). 다른 블록은 계속 붙인다.
             if found is None:
                 continue
             outdoor = outdoor_of(places, place.id)  # type: ignore[union-attr]

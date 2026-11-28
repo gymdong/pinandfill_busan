@@ -100,17 +100,23 @@ class KmaClient:
                 url, params={"serviceKey": self._key, "pageNo": 1, "dataType": "JSON", **params}
             )
             response.raise_for_status()
-            body = response.json()["response"]
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
             raise KmaError("request_failed") from None
-        code = str(body.get("header", {}).get("resultCode", ""))
+        # 응답 모양을 하나씩 확인한다. 예상 밖 모양은 조회 실패(예보 없음)이지 서버 오류가 아니다.
+        body = payload.get("response") if isinstance(payload, dict) else None
+        header = body.get("header") if isinstance(body, dict) else None
+        if not isinstance(body, dict) or not isinstance(header, dict):
+            raise KmaError("bad_response")
+        code = str(header.get("resultCode", ""))
         if code == "03":  # NO_DATA
             return []
         if code != "00":
             raise KmaError(f"result_{code or 'unknown'}")
-        items = body.get("body", {}).get("items", {})
+        content = body.get("body")
+        items = content.get("items") if isinstance(content, dict) else None
         rows = items.get("item", []) if isinstance(items, dict) else []
-        return [row for row in rows if isinstance(row, dict)]
+        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
     def short(self, nx: int, ny: int, base: datetime) -> ShortForecast:
         rows = self._items(
