@@ -650,7 +650,7 @@ def test_migration_matches_models_and_downgrades(database: Database):
     assert set(inspect(database.engine).get_table_names()) <= {"alembic_version"}
     upgrade(database)
     tables = {"trips", "blocks", "legs", "schedule_snapshots"}
-    tables |= {"places", "place_hours", "data_sources", "ingestion_runs"}
+    tables |= {"places", "place_hours", "data_sources", "ingestion_runs", "shared_links"}
     assert tables <= set(inspect(database.engine).get_table_names())
     with database.engine.connect() as connection:
         sources = connection.execute(
@@ -750,3 +750,20 @@ def test_open_database_stops_before_any_schema_sql_and_closes_the_engine(name: s
 def test_alembic_ini_is_ascii_so_any_locale_can_read_it():
     # alembic 은 alembic.ini 를 로캘 인코딩으로 읽는다. 한국어 Windows(cp949)에서 UTF-8 한글 주석은 깨진다.
     (BACKEND_DIR / "alembic.ini").read_bytes().decode("ascii")
+
+
+def test_shared_links_store_only_digest(database: Database):
+    """FR-011: 공유 링크는 토큰 해시만 저장하고, 만료 시각은 UTC 로 돌아온다."""
+    from app.modules.share.repository import SqlShareLinks, token_digest
+
+    trip_id = str(uuid.uuid4())
+    SqlTripRepository(database).save(trip_id, record())
+    links = SqlShareLinks(database)
+    expires = datetime(2026, 12, 31, 15, 0, tzinfo=UTC)
+    links.create(trip_id, token_digest("secret-token"), expires)
+    found = links.find(token_digest("secret-token"))
+    assert found is not None and found.trip_id == trip_id and found.expires_at == expires
+    assert links.find("secret-token") is None
+    with database.engine.connect() as connection:
+        stored = connection.execute(text("SELECT token FROM shared_links")).scalars().all()
+    assert stored == [token_digest("secret-token")]

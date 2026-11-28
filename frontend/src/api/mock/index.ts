@@ -401,6 +401,13 @@ const routes: [HttpMethod, RegExp, Handler][] = [
     ],
   })],
   ['POST', /^\/trips\/([^/]+)\/plan-b\/apply$/, (_request, [tripId]): ScheduleMutationResponse => ({ schedule: snapshot(tripId ?? ''), violations: [] })],
+  // API-019·020 공유: mock 토큰 하나로 mock 여행을 보기 전용으로 돌려준다.
+  ['POST', /^\/trips\/([^/]+)\/share$/, () => ({ url: '/shared/mock-share-token-000000000000', token: 'mock-share-token-000000000000' })],
+  ['GET', /^\/shared\/([^/]+)$/, (_request, [token]) => {
+    if (token !== 'mock-share-token-000000000000') throw new ApiError({ id: 'ERR-016', status: 404 });
+    const { trip: current } = state(TRIP_ID);
+    return { trip: { dates: current.dates, dayStart: current.dayStart, dayEnd: current.dayEnd, mode: current.mode }, schedule: snapshot(TRIP_ID) };
+  }],
   [
     'POST',
     /^\/recommend\/mood$/,
@@ -447,6 +454,6 @@ export async function mockRequest<T>(request: ApiRequest): Promise<T> {
     const match = method === request.method ? pattern.exec(request.path) : null;
     if (match) return handler(request, match.slice(1)) as T;
   }
-  // API-016~021(P1)은 타입만 두고 mock을 만들지 않는다.
+  // API-016~018·021(P1)은 타입만 두고 mock을 만들지 않는다.
   throw new ApiError({ id: 'UNKNOWN', message: `mock이 없는 API입니다: ${request.method} ${request.path}` });
 }

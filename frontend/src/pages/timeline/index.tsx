@@ -10,7 +10,9 @@ import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
 import { PlanBSheet } from '@/features/plan-b-sheet/PlanBSheet';
 import { blockRole, formatDayDate, formatDuration, legBetween, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
 import { LegText } from '@/features/itinerary/LegText';
-import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, UndoIcon } from '@/features/itinerary/icons';
+import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, ShareIcon, UndoIcon } from '@/features/itinerary/icons';
+import { ShareSheet } from '@/features/share/ShareSheet';
+import { forgetTrip, rememberTrip } from '@/store/recentTrips';
 import { useApi } from '@/hooks/useApi';
 import type { Block, BlockCrowd, IsoDate, Schedule, ScheduleDay, Violation } from '@/types/api';
 import styles from './TimelinePage.module.css';
@@ -60,6 +62,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   // 플랜 B 시트를 연 블록, 알림을 이미 본 블록.
   const [planBBlock, setPlanBBlock] = useState<string | null>(null);
   const [seen, setSeen] = useState<string[]>(() => (tripId ? readSeen(tripId) : []));
+  const [sharing, setSharing] = useState(false);
   const { showToast } = useOptionalToast();
   const addPanel = useRef<HTMLElement>(null);
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
@@ -77,6 +80,15 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   useEffect(() => {
     if (adding) addPanel.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' });
   }, [adding]);
+
+  // 비회원 임시 저장(FR-011): 이 브라우저에서 연 일정을 기억해 여행 시작 화면에서 다시 열 수 있게 한다.
+  const loadedTrip = loaded.status === 'success' ? loaded.data.trip : null;
+  const missing = loaded.status === 'error' && toApiError(loaded.error).status === 404;
+  useEffect(() => {
+    if (tripId && loadedTrip) rememberTrip(tripId, loadedTrip);
+    // 서버에 없는 일정(재시작 등)은 '이 기기에서 본 일정'에서 지운다.
+    if (tripId && missing) forgetTrip(tripId);
+  }, [tripId, loadedTrip, missing]);
 
   useEffect(() => {
     if (!flashId) return undefined;
@@ -157,6 +169,9 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
         <p className={styles.tripLine}>{tripSummary(loaded.data.trip)}</p>
         <h2 className={styles.dayTitle}>{day ? `${day.dayNo}일차 · ${formatDayDate(day.date)}` : '일정 없음'}</h2>
       </div>
+      <button type="button" className={styles.iconButton} aria-label="일정 공유" aria-haspopup="dialog" onClick={() => setSharing(true)}>
+        <ShareIcon />
+      </button>
       <button type="button" className={styles.iconButton} aria-label="직전 편집 되돌리기" disabled={!undoAvailable || pending} onClick={() => change(() => tripsApi.undo(tripId), true)}>
         <UndoIcon />
       </button>
@@ -200,6 +215,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
         if (await run(action, false, message, true)) setPlanBBlock(null);
       }}
     />}
+    {sharing && <ShareSheet tripId={tripId} onClose={() => setSharing(false)} />}
 
     {adding && <section ref={addPanel} className={styles.addPanel}>
       <BlockEditor tripId={tripId} dayNo={day?.dayNo ?? 1} disabled={pending} onChange={addAndClose} />

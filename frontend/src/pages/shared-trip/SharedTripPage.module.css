@@ -1,0 +1,37 @@
+.header {
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-4);
+}
+
+.badge {
+  justify-self: start;
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.title {
+  font-size: var(--text-xl);
+  font-weight: 800;
+}
+
+/* 타임라인 카드의 버튼 자리를 읽기 전용 블록으로 바꾼다. */
+.cardMain {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  align-items: start;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 72px;
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+
+.footnote {
+  margin-top: var(--space-5);
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+}
