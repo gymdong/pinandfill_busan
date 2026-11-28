@@ -499,7 +499,7 @@ export interface TripWeatherResponse {
   blocks: { blockId: Uuid; forecast: WeatherForecast; issuedAt: IsoDateTime; scope: 'SHORT' | 'MID' }[];
 }
 
-/** API-017 */
+/** API-017. 공공 DB 장소에서만, 확신도 높은 순 최대 3곳. 확신이 낮으면 notFound 이고 candidates 는 비어 있다. */
 export interface PhotoSearchResponse {
   candidates: { place: PlaceSummary; confidence: number }[];
   notFound: boolean;

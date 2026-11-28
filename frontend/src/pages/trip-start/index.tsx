@@ -377,6 +377,10 @@ export default function TripStartPage() {
           <span>{mood ? '고른 분위기 바꾸기' : '원하는 분위기로 찾기'}</span>
           <span aria-hidden="true">›</span>
         </Link>
+        <Link className={styles.moodLink} to={paths.photoSearch()}>
+          <span>사진으로 찾기</span>
+          <span aria-hidden="true">›</span>
+        </Link>
         {mood && (
           <div className={styles.mood} role="group" aria-label="고른 분위기">
             <p className={styles.moodLabels}>

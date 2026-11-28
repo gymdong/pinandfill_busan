@@ -8,5 +8,6 @@ def quiet_http_client_logs() -> None:
 
     CLI·앱 시작 시 부르고, 비밀 URL 로 요청하는 구성요소(TourAPI 잡·관리자 알림)도 직접 부른다. 여러 번 불러도 같다.
     """
-    for name in ("httpx", "httpcore"):
+    # anthropic SDK 가 쓰는 httpx2·httpcore2 도 같은 형식으로 남긴다(설치되면 TestClient 도 httpx2 를 쓴다).
+    for name in ("httpx", "httpcore", "httpx2", "httpcore2"):
         logging.getLogger(name).setLevel(logging.WARNING)
