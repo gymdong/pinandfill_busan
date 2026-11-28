@@ -1,0 +1,1 @@
+export { WeatherBadge } from './WeatherBadge';

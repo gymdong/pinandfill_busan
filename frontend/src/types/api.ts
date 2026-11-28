@@ -494,9 +494,24 @@ export interface ApplyPlanBRequest {
 }
 export type ApplyPlanBResponse = ScheduleMutationResponse;
 
-/** API-016 */
+/** API-016. 예보가 없는 블록은 빠진다('예보 없음'). MID 는 일 단위(오전/오후·최저/최고기온)다. */
+export interface TripWeatherForecast extends WeatherForecast {
+  tempMin?: number | null;
+  tempMax?: number | null;
+  /** 시간 단위 비 예보(강수형태 비·눈 또는 강수확률 기준 이상). MID 는 항상 false */
+  rain?: boolean;
+}
+export interface TripWeatherBlock {
+  blockId: Uuid;
+  forecast: TripWeatherForecast;
+  issuedAt: IsoDateTime;
+  scope: 'SHORT' | 'MID';
+  outdoor: boolean | null;
+  warnings: string[];
+}
 export interface TripWeatherResponse {
-  blocks: { blockId: Uuid; forecast: WeatherForecast; issuedAt: IsoDateTime; scope: 'SHORT' | 'MID' }[];
+  blocks: TripWeatherBlock[];
+  source?: string;
 }
 
 /** API-017. 공공 DB 장소에서만, 확신도 높은 순 최대 3곳. 확신이 낮으면 notFound 이고 candidates 는 비어 있다. */

@@ -8,20 +8,27 @@ import { CrowdBadge } from '@/features/crowd/CrowdBadge';
 import { BlockEditor } from '@/features/block-editor/BlockEditor';
 import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
 import { PlanBSheet } from '@/features/plan-b-sheet/PlanBSheet';
+import { WeatherBadge } from '@/features/weather';
 import { blockRole, formatDayDate, formatDuration, legBetween, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
 import { LegText } from '@/features/itinerary/LegText';
 import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, ShareIcon, UndoIcon } from '@/features/itinerary/icons';
 import { ShareSheet } from '@/features/share/ShareSheet';
 import { forgetTrip, rememberTrip } from '@/store/recentTrips';
 import { useApi } from '@/hooks/useApi';
-import type { Block, BlockCrowd, IsoDate, Schedule, ScheduleDay, Violation } from '@/types/api';
+import type { Block, BlockCrowd, IsoDate, Schedule, ScheduleDay, TripWeatherBlock, TripWeatherResponse, Violation } from '@/types/api';
 import styles from './TimelinePage.module.css';
 
-/** 플랜 B 를 띄울 블록(FR-010): 고정하지 않았고, 도착 시각 예상 '붐빔' 이상, 신뢰도 '중간' 이상. 서버가 다시 판정한다. */
-function needsPlanB(block: Block, crowd: BlockCrowd | undefined): boolean {
-  return !block.isFixed
-    && (crowd?.grade === '붐빔' || crowd?.grade === '매우 붐빔')
-    && (crowd.confidence === '중간' || crowd.confidence === '높음');
+/** 붐비는 블록: 도착 시각 예상 '붐빔' 이상, 신뢰도 '중간' 이상. */
+function crowded(crowd: BlockCrowd | undefined): boolean {
+  return (crowd?.grade === '붐빔' || crowd?.grade === '매우 붐빔') && (crowd.confidence === '중간' || crowd.confidence === '높음');
+}
+/** 비 예보가 있는 실외 블록(FR-013). 시간 단위 예보일 때만 rain 이 참이다. */
+function rainy(weather: TripWeatherBlock | undefined): boolean {
+  return Boolean(weather?.forecast.rain && weather.outdoor);
+}
+/** 플랜 B 를 띄울 블록(FR-010): 고정하지 않았고 붐비거나 실외에 비 예보. 서버가 다시 판정한다. */
+function needsPlanB(block: Block, crowd: BlockCrowd | undefined, weather: TripWeatherBlock | undefined): boolean {
+  return !block.isFixed && (crowded(crowd) || rainy(weather));
 }
 
 /** 플랜 B 알림은 여행·블록마다 한 번만 띄운다(FR-010 '알림 1회'). 저장이 막혀도 화면은 그대로 동작한다. */
@@ -66,6 +73,18 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const { showToast } = useOptionalToast();
   const addPanel = useRef<HTMLElement>(null);
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
+  // 블록 시각 예보(API-016). 'off' 는 서버에 기상청 키가 없거나 조회 실패: 배지를 숨긴다.
+  const [weather, setWeather] = useState<TripWeatherResponse | 'off' | null>(null);
+  const timesKey = schedule?.days.flatMap((d) => d.blocks.map((b) => `${b.id}@${b.arriveAt ?? ''}`)).join(',') ?? '';
+  useEffect(() => {
+    if (!tripId || !timesKey) return undefined;
+    const controller = new AbortController();
+    tripsApi.getWeather(tripId, { signal: controller.signal })
+      .then(setWeather)
+      .catch(() => { if (!controller.signal.aborted) setWeather('off'); });
+    return () => controller.abort();
+  }, [tripId, timesKey]);
+  const weatherOf = (blockId: string) => (weather && weather !== 'off' ? weather.blocks.find((row) => row.blockId === blockId) : undefined);
   const undoAvailable = undoState ?? (loaded.status === 'success' ? Boolean(loaded.data.canUndo) : false);
   // 고른 일차가 일정에 없으면(다시 불러온 일정 등) 첫 일차를 보여 준다.
   const day = schedule?.days.find((item) => item.dayNo === dayNo) ?? schedule?.days[0];
@@ -155,7 +174,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
 
   const selectDay = (next: number) => { setDayNo(next); setSelected(null); setSlot(null); };
   const crowdOf = (block: Block) => day?.crowd.find((item) => item.blockId === block.id);
-  const planBIds = new Set(day?.blocks.filter((block) => needsPlanB(block, crowdOf(block))).map((block) => block.id) ?? []);
+  const planBIds = new Set(day?.blocks.filter((block) => needsPlanB(block, crowdOf(block), weatherOf(block.id))).map((block) => block.id) ?? []);
   // '다음 블록'(UC-007): 여행 당일이면 지금 이후 블록만, 그 전이면 그날 첫 블록부터 본다.
   const upcoming = (block: Block) => day?.date !== localToday() || (block.arriveAt ?? '') > localNow();
   const alertBlock = [...(day?.blocks ?? [])].sort((a, b) => a.seq - b.seq).find((block) => planBIds.has(block.id) && upcoming(block) && !seen.includes(block.id));
@@ -193,7 +212,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     {alertBlock && <section className={styles.planBAlert} aria-label="플랜 B 알림">
       <p className={styles.planBText}>
         <strong>{resolveBlockPlace(alertBlock.place)?.name ?? '다음 장소'} {alertBlock.arriveAt ?? ''}</strong>
-        {` 예상 ${crowdOf(alertBlock)?.grade ?? '붐빔'}이에요. 다른 방법도 볼까요?`}
+        {rainy(weatherOf(alertBlock.id)) ? ' 비 예보가 있어요. 다른 방법도 볼까요?' : ` 예상 ${crowdOf(alertBlock)?.grade ?? '붐빔'}이에요. 다른 방법도 볼까요?`}
       </p>
       <span className={styles.planBActions}>
         <Button variant="outline" onClick={() => markSeen(alertBlock.id)}>괜찮아요</Button>
@@ -203,7 +222,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
 
     {day ? <DayTimeline
       key={day.dayNo} tripId={tripId} day={day} selected={selected} slot={slot} pending={pending} flashId={flashId}
-      planBIds={planBIds} onPlanB={openPlanB}
+      planBIds={planBIds} onPlanB={openPlanB} weatherOf={weather && weather !== 'off' ? weatherOf : null}
       onSelect={(id) => setSelected(selected === id ? null : id)} onSlot={(id) => setSlot(slot === id ? null : id)} onChange={change} onSlotChange={slotAndClose}
     /> : <p className={styles.empty}>표시할 일정이 없어요.</p>}
 
@@ -228,7 +247,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   </main>;
 }
 
-function DayTimeline({ tripId, day, selected, slot, pending, flashId, planBIds, onPlanB, onSelect, onSlot, onChange, onSlotChange }: {
+function DayTimeline({ tripId, day, selected, slot, pending, flashId, planBIds, onPlanB, weatherOf, onSelect, onSlot, onChange, onSlotChange }: {
   tripId: string;
   day: ScheduleDay;
   selected: string | null;
@@ -237,6 +256,8 @@ function DayTimeline({ tripId, day, selected, slot, pending, flashId, planBIds, 
   flashId: string | null;
   /** 플랜 B 를 볼 수 있는 블록(붐빔·신뢰 중간 이상, 고정 아님). */
   planBIds: ReadonlySet<string>;
+  /** 예보를 불러왔으면 블록별 예보. null 이면 날씨를 보이지 않는다(키 없음·실패·불러오는 중). */
+  weatherOf: ((blockId: string) => TripWeatherBlock | undefined) | null;
   onPlanB(id: string): void;
   onSelect(id: string): void;
   onSlot(id: string): void;
@@ -253,7 +274,8 @@ function DayTimeline({ tripId, day, selected, slot, pending, flashId, planBIds, 
     const leg = legBetween(day.legs, block, next);
     return <li key={block.id}>
       <BlockCard block={block} date={day.date} crowd={day.crowd.find((item) => item.blockId === block.id)} selected={selected === block.id} flash={flashId === block.id} onSelect={() => onSelect(block.id)}
-        onPlanB={planBIds.has(block.id) ? () => onPlanB(block.id) : undefined} planBDisabled={pending}>
+        onPlanB={planBIds.has(block.id) ? () => onPlanB(block.id) : undefined} planBDisabled={pending}
+        weather={weatherOf ? weatherOf(block.id) ?? null : undefined}>
         {selected === block.id && <BlockEditor key={block.id} tripId={tripId} block={block} disabled={pending} onChange={onChange} />}
       </BlockCard>
       {next && <div className={styles.between}>
@@ -290,8 +312,10 @@ function DayTimeline({ tripId, day, selected, slot, pending, flashId, planBIds, 
   })}</ol>;
 }
 
-function BlockCard({ block, date, crowd, selected, flash, onSelect, onPlanB, planBDisabled, children }: {
+function BlockCard({ block, date, crowd, selected, flash, onSelect, onPlanB, planBDisabled, weather, children }: {
   block: Block;
+  /** undefined 면 날씨를 보이지 않고, null 이면 '예보 없음'. */
+  weather?: TripWeatherBlock | null;
   /** 있으면 '플랜 B' 버튼을 보인다. */
   onPlanB?: () => void;
   planBDisabled?: boolean;
@@ -321,6 +345,8 @@ function BlockCard({ block, date, crowd, selected, flash, onSelect, onPlanB, pla
     <div className={styles.cardExtras}>
       {/* 혼잡 신호가 없는 블록도 '정보 부족'으로 표시한다(NFR-012, 지도 화면과 같음). */}
       <CrowdBadge grade={crowd?.grade ?? null} confidence={crowd?.confidence} />
+      {weather !== undefined && <WeatherBadge weather={weather} />}
+      {weather?.warnings.map((item) => <span className={styles.warnChip} key={item}>{item}</span>)}
       {/* 화면을 열 때 모든 칩을 읽지 않도록 알림(role=alert)은 위 요약 카드에만 둔다. */}
       {block.warnings.map((item, i) => <span className={styles.warnChip} key={i}>{item.cause}</span>)}
       {onPlanB && <button type="button" className={styles.planBButton} aria-haspopup="dialog" disabled={planBDisabled} onClick={onPlanB}>플랜 B</button>}

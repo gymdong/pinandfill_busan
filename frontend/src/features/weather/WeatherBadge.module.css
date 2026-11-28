@@ -1,0 +1,24 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-ink);
+  font-size: var(--text-xs);
+}
+
+.label {
+  color: var(--color-ink-muted);
+  font-weight: 700;
+}
+
+.rain {
+  border-color: var(--color-ink);
+  font-weight: 700;
+}
+
+.none {
+  color: var(--color-ink-muted);
+}

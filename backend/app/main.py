@@ -49,6 +49,10 @@ from app.modules.trips.repository import FakeTripRepository
 from app.modules.trips.router import TripAPIError
 from app.modules.trips.service import TripService
 from app.modules.trips.sql_repository import SqlSnapshotRepository, SqlTripRepository
+from app.modules.weather.kma import KmaClient
+from app.modules.weather.router import outdoor_of
+from app.modules.weather.service import WeatherService
+from app.modules.weather.settings import WeatherSettings
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +80,11 @@ def _stay(places: SamplePlaceData, place_id: str) -> int | None:
 
 
 def default_trip_service(
-    places: SamplePlaceData, database: Database | None = None, *, crowd_service: CrowdService | None = None
+    places: SamplePlaceData,
+    database: Database | None = None,
+    *,
+    crowd_service: CrowdService | None = None,
+    weather_service: WeatherService | None = None,
 ) -> TripService:
     """로컬 기본 구성: 앱의 공공 장소(PLACE_DATA_SOURCE), 경로 키가 있을 때만 실제 경로 조회.
 
@@ -119,6 +127,9 @@ def default_trip_service(
         preview_engine=BasicItineraryEngine(places, EstimatedFallbackRouteProvider(None), crowd=crowd_lookup),
         min_confidence=avoidance.min_confidence,
         min_gain=avoidance.min_gain,
+        # 비 예보 트리거(FR-013): 실외 속성은 공공 데이터 indoor_outdoor('실내'가 아니면 실외).
+        rain=weather_service,
+        outdoor=lambda place_id: outdoor_of(places, place_id),
     )
     if database is None:
         # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포에는 DATABASE_URL 을 설정한다.
@@ -166,6 +177,15 @@ def default_photo_service(places: SamplePlaceData) -> PhotoSearchService | None:
     return PhotoSearchService(list(places.all()), ClaudePhotoClassifier(settings, key), settings)
 
 
+def default_weather_service() -> WeatherService | None:
+    """기상청 키(KMA_SERVICE_KEY, 없으면 같은 계정의 DATA04_SERVICE_KEY)가 있을 때만 만든다. 만들 때 호출하지 않는다."""
+    settings = WeatherSettings()
+    key = settings.key()
+    if key is None:
+        return None
+    return WeatherService(KmaClient(key, timeout=settings.kma_timeout_s), settings)
+
+
 def kakao_settings() -> KakaoSettings | None:
     """KAKAO_REST_API_KEY 가 없거나 비어 있으면(공백뿐인 값 포함) None. 장소 검색은 그때 지금처럼 503(ERR-017)이다.
 
@@ -194,6 +214,7 @@ def create_app(
     crowd_service: CrowdService | None = None,
     photo_service: PhotoSearchService | None = None,
     share_service: ShareService | None = None,
+    weather_service: WeatherService | None = None,
 ) -> FastAPI:
     """주입하지 않은 서비스는 기본 구성으로 만든다.
 
@@ -214,8 +235,13 @@ def create_app(
         # 혼잡 서비스를 여행 서비스보다 먼저 만들어 API-012 와 초기 일정 생성(FR-009)이 같은 인스턴스를 쓴다.
         if crowd_service is None and places is not None:
             crowd_service = default_crowd_service(places)
+        # 날씨는 여행 서비스(플랜 B 비 트리거)와 API-016 이 같은 인스턴스(캐시)를 쓴다.
+        if weather_service is None and places is not None:
+            weather_service = default_weather_service()
         if trip_service is None and places is not None:
-            trip_service = default_trip_service(places, database, crowd_service=crowd_service)
+            trip_service = default_trip_service(
+                places, database, crowd_service=crowd_service, weather_service=weather_service
+            )
         # API-019·020 공유 링크는 여행과 같은 저장소(DB 가 있으면 shared_links, 없으면 메모리)에 둔다.
         if share_service is None and trip_service is not None:
             links = SqlShareLinks(database) if database is not None else InMemoryShareLinks()
@@ -259,6 +285,7 @@ def create_app(
     application.state.crowd_service = crowd_service
     application.state.photo_service = photo_service
     application.state.share_service = share_service
+    application.state.weather_service = weather_service
     # 분위기 추천 등 라우터가 앱과 같은 장소 데이터를 쓰게 한다. 서비스를 모두 주입한 앱에서는 None 이다.
     application.state.places = places
 

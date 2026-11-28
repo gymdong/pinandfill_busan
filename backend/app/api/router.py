@@ -12,11 +12,13 @@ from app.modules.recommend.mood_router import router as mood_router
 from app.modules.share.router import router as share_router
 from app.modules.trips.intake import router as trip_intake_router
 from app.modules.trips.router import router as trips_router
+from app.modules.weather.router import router as weather_router
 
 router = APIRouter(prefix="/api")
 router.include_router(trip_intake_router)
 router.include_router(trips_router)
 router.include_router(photo_router)
+router.include_router(weather_router)
 router.include_router(places_router)
 router.include_router(crowd_router)
 router.include_router(mood_router)

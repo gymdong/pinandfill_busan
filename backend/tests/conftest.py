@@ -16,6 +16,7 @@ from app.db.session import DatabaseSettings
 from app.modules.crowd.importers import Data04Settings
 from app.modules.photo.settings import PhotoSettings
 from app.modules.places.source import PlaceSourceSettings
+from app.modules.weather.settings import WeatherSettings
 
 # 개발자 backend/.env·셸에 있어도 시험에 새지 않게 지우는 DB·장소 출처·배치 수집(키·웹훅·DATA-06/07) 환경변수
 DB_ENV_NAMES = (
@@ -34,6 +35,7 @@ DB_ENV_NAMES = (
     "DATA04_SERVICE_KEY",
     "ANTHROPIC_API_KEY",
     "PHOTO_API_KEY",
+    "KMA_SERVICE_KEY",
     "PUBLIC_DATA_TIMEOUT_S",
     "PUBLIC_DATA_PAGE_SIZE",
     "DATA06_BASELINE_DAYS",
@@ -49,6 +51,7 @@ DB_SETTINGS_CLASSES = (
     VisitorDataSettings,
     Data04Settings,
     PhotoSettings,
+    WeatherSettings,
 )
 # 저장소 data/crowd/ 에는 실제 혼잡 자료가 있다. 시험은 빈 디렉터리를 기본으로 보고(→ 정보 부족),
 # 혼잡 값이 필요한 시험은 tests/fixtures/crowd/ 를 CROWD_DATA_DIR 로 직접 넘긴다.

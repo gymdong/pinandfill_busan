@@ -410,4 +410,22 @@ describe('되돌리기 상태(FR-006)', () => {
     expect(await screen.findByRole('button', { name: '플랜 B' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: '플랜 B 알림' })).not.toBeInTheDocument();
   });
+
+  it('실외 블록에 비 예보가 있으면 날씨 배지와 플랜 B 알림을 보인다(FR-013)', async () => {
+    sessionStorage.clear();
+    const [day] = schedule.days;
+    const target = day!.blocks.find((block) => !block.isFixed)!;
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule });
+    vi.spyOn(tripsApi, 'getWeather').mockResolvedValue({
+      blocks: [{
+        blockId: target.id, scope: 'SHORT', issuedAt: '2026-10-17T08:00:00+09:00', outdoor: true, warnings: ['실외 장소인데 비 예보가 있어요'],
+        forecast: { scope: 'SHORT', pop: 80, pty: '비', sky: '흐림', temp: 12, wind: 2, issuedAt: '2026-10-17T08:00:00+09:00', rain: true },
+      }],
+    });
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    const alert = await screen.findByRole('region', { name: '플랜 B 알림' });
+    expect(alert).toHaveTextContent('비 예보가 있어요');
+    expect(screen.getByText(/비 · 12° · 강수 80%/)).toBeInTheDocument();
+    expect(screen.getAllByText('예보 없음').length).toBeGreaterThan(0);
+  });
 });

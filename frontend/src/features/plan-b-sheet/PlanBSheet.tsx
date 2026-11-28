@@ -69,9 +69,11 @@ function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose 
   }
 
   const current = loaded.status === 'success' ? loaded.data : null;
-  const description = current?.crowd?.grade
-    ? `지금 시각은 예상 ${current.crowd.grade}이에요. 고르기 전에는 일정을 바꾸지 않아요.`
-    : '고르기 전에는 일정을 바꾸지 않아요.';
+  const description = current?.trigger === 'RAIN'
+    ? '이 시각에 비 예보가 있어요. 고르기 전에는 일정을 바꾸지 않아요.'
+    : current?.crowd?.grade
+      ? `지금 시각은 예상 ${current.crowd.grade}이에요. 고르기 전에는 일정을 바꾸지 않아요.`
+      : '고르기 전에는 일정을 바꾸지 않아요.';
 
   return <BottomSheet open onClose={onClose} title={`${placeName} 플랜 B`} description={description}>
     {applyError && <p role="alert" className={styles.error}>{applyError}</p>}
