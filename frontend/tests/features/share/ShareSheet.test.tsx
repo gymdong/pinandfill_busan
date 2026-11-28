@@ -44,4 +44,10 @@ describe('ShareSheet(FR-011)', () => {
     await userEvent.click(screen.getByRole('button', { name: '링크 복사' }));
     expect(await screen.findByText(/길게 눌러 복사해 주세요/)).toBeInTheDocument();
   });
+
+  it('0시가 아닌 만료도 그날로 보인다', async () => {
+    vi.spyOn(tripsApi, 'share').mockResolvedValue({ url: '/shared/noon', token: 'noon', expiresAt: '2099-12-09T03:00:00Z' });
+    render(<ShareSheet tripId="t3" onClose={vi.fn()} />);
+    expect(await screen.findByText('12월 9일까지 열려요.')).toBeInTheDocument();
+  });
 });
