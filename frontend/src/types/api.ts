@@ -515,12 +515,15 @@ export interface ShareTripRequest {
   expiresAt?: IsoDateTime;
 }
 export interface ShareTripResponse {
+  /** 프런트 기준 경로('/shared/{token}'). 화면이 자기 origin 을 붙인다. */
   url: string;
   token: string;
+  expiresAt?: IsoDateTime | null;
 }
 
-/** API-020 */
+/** API-020. 여행 ID·되돌리기 상태는 담지 않는다(읽기 전용). */
 export interface SharedTripResponse {
+  trip: Pick<Trip, 'dates' | 'dayStart' | 'dayEnd' | 'mode'>;
   schedule: Schedule;
 }
 

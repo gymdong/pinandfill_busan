@@ -153,6 +153,17 @@ class ScheduleSnapshotRow(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime)
 
 
+class SharedLinkRow(Base):
+    """FR-011 읽기 전용 공유 링크. SDD 의 token 열에는 토큰 원문 대신 SHA-256 해시(16진 64자)를 저장한다."""
+
+    __tablename__ = "shared_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("trips.id", ondelete="CASCADE"), index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+
+
 class PlaceRow(Base):
     __tablename__ = "places"
 

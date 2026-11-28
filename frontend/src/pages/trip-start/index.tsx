@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { toApiError, tripsApi } from '@/api';
 import { paths } from '@/app/paths';
 import { Badge, Banner, Button } from '@/components';
+import { RecentTrips } from '@/features/recent-trips/RecentTrips';
 import { PlaceSearch, STAY_OPTIONS, pinnedBadgeKind, toPinnedPlace } from '@/features/place-search';
 import {
   DEFAULT_CONDITIONS,
@@ -207,6 +208,7 @@ export default function TripStartPage() {
           <br />
           사이 동선은 저희가 채울게요.
         </h1>
+        <RecentTrips />
       </header>
 
       <section className={styles.section} aria-label="한 줄로 입력">

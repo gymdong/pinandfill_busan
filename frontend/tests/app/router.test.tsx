@@ -28,11 +28,6 @@ describe('라우팅', () => {
     expect(await screen.findByText(title)).toBeInTheDocument();
   });
 
-  it.each([paths.sharedTrip('token')])('P1 경로 %s는 비활성으로 표시한다', async (path) => {
-    renderAt(path);
-    expect(await screen.findByText(/P1 화면이에요/)).toBeInTheDocument();
-  });
-
   it('없는 경로는 안내를 보여 준다', async () => {
     renderAt('/없는-경로');
     expect(await screen.findByText('페이지를 찾을 수 없어요')).toBeInTheDocument();

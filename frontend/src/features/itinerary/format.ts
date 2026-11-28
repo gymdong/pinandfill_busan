@@ -17,7 +17,7 @@ export function formatDayDate(date: IsoDate): string {
 }
 
 /** 여행 기간과 이동수단. 예: '부산 2박 3일 · 대중교통'. 날짜를 해석할 수 없으면 기간을 지어내지 않고 뺀다. */
-export function tripSummary(trip: Trip): string {
+export function tripSummary(trip: Pick<Trip, 'dates' | 'mode'>): string {
   const start = Date.parse(`${trip.dates.start}T00:00:00Z`);
   const end = Date.parse(`${trip.dates.end}T00:00:00Z`);
   const days = Math.round((end - start) / 86_400_000) + 1;
