@@ -13,7 +13,7 @@ DELETE·undo 본문은 선택이며 카카오 좌표(`sessionCoords`)만 담는�
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.concurrency import run_in_threadpool
@@ -25,6 +25,8 @@ from app.modules.engine.service import (
     PolicyRequiredError,
     SequenceNormalizationRequiredError,
 )
+from app.modules.plan_b.schemas import ApplyPlanBRequest, PlanBResponse
+from app.modules.plan_b.service import PlanBRouteConflictError, PlanBStaleError
 from app.modules.trips.commands import FixedWindowRequiredError
 from app.modules.trips.edit_history import NothingToUndoError
 from app.modules.trips.schemas import (
@@ -77,6 +79,12 @@ Service = Annotated[TripService, Depends(trip_service)]
 
 def translate_error(exc: Exception) -> TripAPIError:
     # Never use str(exc), errors(), or the original body: they may contain search data.
+    if isinstance(exc, PlanBRouteConflictError):
+        # fields.optionId: 화면이 그 안만 고를 수 없게 표시한다(다시 불러도 추정으로는 같은 안이 나온다).
+        message = "실제 경로로 계산하니 하루 일정이나 고정 시각을 지킬 수 없어요. 다른 안을 골라 주세요."
+        return TripAPIError(409, "ERR-001", message, fields={"optionId": message})
+    if isinstance(exc, PlanBStaleError):
+        return TripAPIError(409, "ERR-001", "일정이 바뀌어 이 안을 적용할 수 없어요. 플랜 B를 다시 불러 주세요.")
     if isinstance(exc, TripNotFoundError):
         return TripAPIError(404, "ERR-016", "여행을 찾을 수 없습니다.")
     if isinstance(exc, FixedScheduleConflictError):
@@ -122,6 +130,33 @@ def translate_error(exc: Exception) -> TripAPIError:
         logger.warning("trip_db_unavailable kind=%s cause=%s sqlstate=%s", kind, cause, sqlstate)
         return TripAPIError(503, "ERR-017", "저장소가 바빠 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.")
     return TripAPIError(503, "ERR-017", "일정 계산을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+
+
+@router.get("/{trip_id}/plan-b", response_model=PlanBResponse)
+def get_plan_b(
+    trip_id: str,
+    response: Response,
+    service: Service,
+    block_id: Annotated[str, Query(alias="blockId", min_length=1, max_length=64)],
+) -> PlanBResponse:
+    """API-014 플랜 B 3안 조회(FR-010). 조건이 아니면 trigger 가 null 이고 options 가 비어 있다. 저장하지 않는다."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return service.plan_b(trip_id, block_id)
+    except Exception as exc:
+        raise translate_error(exc) from None
+
+
+@router.post("/{trip_id}/plan-b/apply", response_model=ScheduleMutationResponse)
+def apply_plan_b(
+    trip_id: str, body: ApplyPlanBRequest, response: Response, service: Service
+) -> ScheduleMutationResponse:
+    """API-015 고른 안 적용. 강행(KEEP)은 일정을 그대로 두고, 나머지는 편집 한 번으로 저장해 되돌릴 수 있다."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return service.apply_plan_b(trip_id, body)
+    except Exception as exc:
+        raise translate_error(exc) from None
 
 
 @router.get("/{trip_id}", response_model=TripDetailResponse)

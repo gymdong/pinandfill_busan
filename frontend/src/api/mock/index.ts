@@ -14,6 +14,7 @@ import type {
   PlaceDetailResponse,
   PlaceSearchResponse,
   PlacesAtResponse,
+  PlanBResponse,
   Schedule,
   ScheduleDay,
   ScheduleMutationResponse,
@@ -388,6 +389,18 @@ const routes: [HttpMethod, RegExp, Handler][] = [
       return { candidates: waypointCandidates.filter((item) => item.detourMin <= thresholdMin) };
     },
   ],
+  // API-014·015 플랜 B: 강행만 고를 수 있는 단순 mock. 실제 3안 계산은 백엔드가 한다.
+  ['GET', /^\/trips\/([^/]+)\/plan-b$/, ({ query }): PlanBResponse => ({
+    blockId: String((query as { blockId?: string } | undefined)?.blockId ?? ''),
+    trigger: 'CROWD',
+    crowd: null,
+    options: [
+      { id: 'KEEP', kind: 'KEEP', available: true, extraMinutes: 0, hoursConflict: false },
+      { id: 'REORDER', kind: 'REORDER', available: false, extraMinutes: null, hoursConflict: false, note: '고정 시각을 지키면서 덜 붐비게 되는 순서가 없어요.' },
+      { id: 'REPLACE', kind: 'REPLACE', available: false, extraMinutes: null, hoursConflict: false, note: '근처에 덜 붐비는 대체 장소가 없어요.' },
+    ],
+  })],
+  ['POST', /^\/trips\/([^/]+)\/plan-b\/apply$/, (_request, [tripId]): ScheduleMutationResponse => ({ schedule: snapshot(tripId ?? ''), violations: [] })],
   [
     'POST',
     /^\/recommend\/mood$/,
@@ -434,6 +447,6 @@ export async function mockRequest<T>(request: ApiRequest): Promise<T> {
     const match = method === request.method ? pattern.exec(request.path) : null;
     if (match) return handler(request, match.slice(1)) as T;
   }
-  // API-014~021(P1)은 타입만 두고 mock을 만들지 않는다.
+  // API-016~021(P1)은 타입만 두고 mock을 만들지 않는다.
   throw new ApiError({ id: 'UNKNOWN', message: `mock이 없는 API입니다: ${request.method} ${request.path}` });
 }

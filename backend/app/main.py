@@ -11,11 +11,13 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.adapters.kakao import KakaoLocalAdapter, KakaoSettings
+from app.adapters.route.estimated import EstimatedFallbackRouteProvider
 from app.adapters.route.service import build_route_provider
 from app.api.router import router
 from app.core.config import Settings
 from app.core.logging import quiet_http_client_logs
 from app.db.session import Database, DatabaseSettings
+from app.modules.crowd.avoidance import AvoidanceSettings
 from app.modules.crowd.engine_lookup import CrowdServiceLookup
 from app.modules.crowd.file_provider import (
     FileCrowdProvider,
@@ -35,6 +37,7 @@ from app.modules.places.samples import SamplePlaceData
 from app.modules.places.service import PlaceSearchService
 from app.modules.places.settings import PlaceMatchSettings
 from app.modules.places.source import load_places
+from app.modules.plan_b.service import PlanBPlanner
 from app.modules.recommend.waypoints import PublicPlaceCandidates, ScoreWeights, WaypointRecommender
 from app.modules.trips.edit_history import EditHistory
 from app.modules.trips.initial import PublicStayDurations
@@ -84,8 +87,9 @@ def default_trip_service(
     routes = build_route_provider()
     crowd_lookup = CrowdServiceLookup(crowd_service) if crowd_service is not None else None
     engine = BasicItineraryEngine(places, routes, crowd=crowd_lookup)
+    candidates = PublicPlaceCandidates(lambda: [item.place.id for item in places.all()], lambda pid: _stay(places, pid))
     recommender = WaypointRecommender(
-        PublicPlaceCandidates(lambda: [item.place.id for item in places.all()], lambda pid: _stay(places, pid)),
+        candidates,
         places,
         routes,
         WAYPOINT_WEIGHTS,
@@ -100,11 +104,28 @@ def default_trip_service(
         # 혼잡 계산과 같은 설정 파일에서 읽은 값을 서비스가 들고 있다(둘이 어긋나지 않게).
         avoidance=crowd_service.avoidance if crowd_service is not None else None,
     )
+    # FR-010 플랜 B. '덜 붐빔' 기준(신뢰도·이득)은 혼잡 회피(FR-009)와 같은 설정을 쓴다.
+    avoidance = crowd_service.avoidance if crowd_service is not None else AvoidanceSettings()
+    plan_b = PlanBPlanner(
+        engine,
+        places,
+        candidates,
+        crowd=crowd_lookup,
+        # 조회는 직선거리 추정만 쓴다(경로 API 한도 보호). 적용할 때만 실제 경로를 조회한다.
+        preview_engine=BasicItineraryEngine(places, EstimatedFallbackRouteProvider(None), crowd=crowd_lookup),
+        min_confidence=avoidance.min_confidence,
+        min_gain=avoidance.min_gain,
+    )
     if database is None:
         # 워커가 여러 개면 워커마다 여행이 따로 저장된다. 공유 배포에는 DATABASE_URL 을 설정한다.
         logger.warning("trip storage is in-memory (DATABASE_URL unset): trips and undo history are lost on restart")
         return TripService(
-            FakeTripRepository({}), engine, places.stay_min, recommender=recommender, initial_planner=initial_planner
+            FakeTripRepository({}),
+            engine,
+            places.stay_min,
+            recommender=recommender,
+            initial_planner=initial_planner,
+            plan_b=plan_b,
         )
     return TripService(
         SqlTripRepository(database),
@@ -113,6 +134,7 @@ def default_trip_service(
         recommender=recommender,
         history=EditHistory(SqlSnapshotRepository(database)),
         initial_planner=initial_planner,
+        plan_b=plan_b,
         transaction=database.transaction,
     )
 

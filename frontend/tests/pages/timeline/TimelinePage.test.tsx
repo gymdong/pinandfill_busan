@@ -381,4 +381,33 @@ describe('되돌리기 상태(FR-006)', () => {
     await screen.findByText('코스 타임라인');
     expect(screen.getByRole('button', { name: '직전 편집 되돌리기' })).toBeDisabled();
   });
+
+  it('붐비는 미고정 블록은 플랜 B 알림을 한 번 띄우고, 고르면 적용 후 알림을 보여 준다(FR-010)', async () => {
+    sessionStorage.clear();
+    const [day] = schedule.days;
+    const target = day!.blocks.find((block) => !block.isFixed)!;
+    const busy = { ...schedule, days: [{ ...day!, crowd: day!.crowd.map((row) => (row.blockId === target.id ? { ...row, grade: '붐빔' as const, confidence: '중간' as const } : row)) }] };
+    vi.spyOn(tripsApi, 'get').mockResolvedValue({ trip, schedule: busy });
+    vi.spyOn(tripsApi, 'getPlanB').mockResolvedValue({
+      blockId: target.id, trigger: 'CROWD', crowd: null,
+      options: [
+        { id: 'KEEP', kind: 'KEEP', available: true, extraMinutes: 0, hoursConflict: false },
+        { id: `REORDER:${target.id}:3`, kind: 'REORDER', available: true, extraMinutes: 5, hoursConflict: false, arriveAt: '16:00', departAt: '17:00' },
+        { id: `REPLACE:${target.id}`, kind: 'REPLACE', available: false, extraMinutes: null, hoursConflict: false, note: '근처에 덜 붐비는 대체 장소가 없어요.' },
+      ],
+    });
+    const apply = vi.spyOn(tripsApi, 'applyPlanB').mockResolvedValue({ schedule: busy, violations: [] });
+    const view = render(<ToastProvider><MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter></ToastProvider>);
+    const alert = await screen.findByRole('region', { name: '플랜 B 알림' });
+    await userEvent.click(within(alert).getByRole('button', { name: '플랜 B 보기' }));
+    await userEvent.click(await screen.findByRole('button', { name: '순서 바꾸기 적용' }));
+    expect(apply).toHaveBeenCalledExactlyOnceWith('t1', { optionId: `REORDER:${target.id}:3` });
+    expect(await screen.findByText(/순서를 바꿨어요/)).toBeInTheDocument();
+    // 한 번 본 알림은 다시 띄우지 않는다. 카드의 '플랜 B' 버튼은 남는다.
+    expect(screen.queryByRole('region', { name: '플랜 B 알림' })).not.toBeInTheDocument();
+    view.unmount();
+    render(<MemoryRouter initialEntries={['/trips/t1']}><Routes><Route path="/trips/:tripId" element={<TimelinePage />} /></Routes></MemoryRouter>);
+    expect(await screen.findByRole('button', { name: '플랜 B' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '플랜 B 알림' })).not.toBeInTheDocument();
+  });
 });

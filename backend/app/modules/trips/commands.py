@@ -156,6 +156,30 @@ def update_command(
     return _edited(trip, schedule, day_no, day, index + 1, day_start)
 
 
+def replace_command(
+    trip: TripWindow,
+    schedule: ScheduleState,
+    block_id: str,
+    *,
+    place_ref: PublicPlaceRef,
+    stay_min: int,
+    new_block_id: str,
+) -> RecomputeInput | ValidateInput:
+    """플랜 B 대체 장소(FR-010). 고정하지 않은 블록 하나를 같은 자리의 다른 공공 장소로 바꾸고 그 앞부터 다시 계산한다.
+
+    새 장소는 새 블록 ID 를 받는다(이전 장소의 구간은 버리고 엔진이 새 이웃 구간을 계산한다).
+    고정 블록은 바꾸지 않는다.
+    """
+    day, index = _day_of(schedule, block_id)
+    block = day[index]
+    if block.is_fixed:
+        raise EngineInputError("Fixed blocks are never replaced")
+    day[index] = block.model_copy(
+        update={"id": new_block_id, "place_ref": place_ref, "stay_min": stay_min, "origin": "SUGGESTED"}
+    )
+    return _edited(trip, schedule, block.day_no, day, index, day[0].arrive_at)
+
+
 def delete_command(trip: TripWindow, schedule: ScheduleState, block_id: str) -> RecomputeInput | ValidateInput:
     """API-008. 뒤 블록 seq 를 1씩 당기고 같은 날 앞 블록부터 다시 계산한다.
 
