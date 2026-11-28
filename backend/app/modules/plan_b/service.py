@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Literal
+from typing import Literal, Protocol
 from uuid import uuid4
 
 from app.adapters.route.estimated import distance_km
@@ -64,6 +64,18 @@ NOTES: dict[PlanBKind, dict[str, str]] = {
         "ENGINE": "지금은 대체 장소를 계산할 수 없어요.",
         "DEFAULT": "근처에 덜 붐비는 대체 장소가 없어요.",
     },
+}
+
+
+class RainLookup(Protocol):
+    """시간 단위 비 예보(FR-013). 단기예보가 없으면 None(판단하지 않는다)."""
+
+    def rain(self, lat: float, lng: float, day: date, hour: int) -> bool | None: ...
+
+
+RAIN_NOTES: dict[PlanBKind, str] = {
+    "REORDER": "비 예보를 피하면서 고정 시각과 하루 일정을 지키는 순서가 없어요.",
+    "REPLACE": "근처에 비를 피할 실내 대체 장소가 없어요.",
 }
 
 
@@ -128,6 +140,8 @@ class PlanBPlanner:
         max_positions: int = 4,
         max_replacements: int = 6,
         id_factory: Callable[[], str] = lambda: str(uuid4()),
+        rain: RainLookup | None = None,
+        outdoor: Callable[[str], bool | None] | None = None,
     ) -> None:
         self.engine = engine
         # 조회용 엔진. 주지 않으면 적용과 같은 엔진이다(시험용 가짜 경로 등).
@@ -142,6 +156,9 @@ class PlanBPlanner:
         self.max_positions = max_positions
         self.max_replacements = max_replacements
         self.id_factory = id_factory
+        # 비 예보 트리거(FR-010·013): 실외 장소(outdoor)의 도착 시각에 시간 단위 비 예보가 있으면 띄운다.
+        self.rain_lookup = rain
+        self.outdoor = outdoor
 
     # ---------- 조회(API-014) ----------
 
@@ -150,7 +167,7 @@ class PlanBPlanner:
         day = record.trip.start_date + timedelta(days=block.day_no - 1)
         crowd = self._lookup(block, day)
         summary = self._summary(crowd, block)
-        trigger = self._trigger(block, crowd, summary)
+        trigger = self._trigger(block, crowd, summary, day)
         if trigger is None:
             return PlanBResponse(block_id=block_id, trigger=None, crowd=summary)
         engine = self.preview_engine
@@ -183,9 +200,17 @@ class PlanBPlanner:
             crowd=summary,
             estimated=engine is not self.engine,
             options=(
-                keep,
-                self._reorder_option(record, block, crowd, base_cost, evaluate),
-                self._replace_option(record, block, day, summary, base_cost, evaluate),
+                (
+                    keep,
+                    self._rain_reorder(record, block, day, evaluate),
+                    self._rain_replace(record, block, day, evaluate),
+                )
+                if trigger == "RAIN"
+                else (
+                    keep,
+                    self._reorder_option(record, block, crowd, base_cost, evaluate),
+                    self._replace_option(record, block, day, summary, base_cost, evaluate),
+                )
             ),
         )
 
@@ -204,9 +229,14 @@ class PlanBPlanner:
             return engine.project(ValidateInput(trip=record.trip, schedule=record.schedule), context=context)
 
     def _trigger(
-        self, block: StoredBlock, crowd: PlaceCrowdResponse | None, summary: CrowdSummary | None
+        self, block: StoredBlock, crowd: PlaceCrowdResponse | None, summary: CrowdSummary | None, day: date
     ) -> PlanBTrigger | None:
-        if block.is_fixed or block.arrive_at is None or summary is None:
+        if block.is_fixed or block.arrive_at is None:
+            return None
+        # 비 예보가 혼잡보다 먼저다(실외에서 비를 맞는 쪽이 더 큰 문제다).
+        if self._is_outdoor(block.place_ref) and self._raining(block.place_ref, day, block.arrive_at.hour):
+            return "RAIN"
+        if summary is None:
             return None
         if summary.grade in TRIGGER_GRADES and meets_confidence(crowd, self.min_confidence):
             return "CROWD"
@@ -277,6 +307,90 @@ class PlanBPlanner:
             ranked.append((key, evaluated))
         if not ranked:
             return self._unavailable("REPLACE", block.id, reasons)
+        ranked.sort(key=lambda row: row[0])
+        return self._option(ranked[0][1], "REPLACE")
+
+    # ---------- 비 예보(RAIN) ----------
+
+    def _is_outdoor(self, ref: object) -> bool:
+        return isinstance(ref, PublicPlaceRef) and self.outdoor is not None and self.outdoor(ref.place_id) is True
+
+    def _raining(self, ref: object, day: date, hour: int) -> bool:
+        """그 장소·시각의 시간 단위 비 예보. 모르면 False(비를 근거로 바꾸지 않는다)."""
+        if self.rain_lookup is None or not isinstance(ref, PublicPlaceRef):
+            return False
+        try:
+            place = self.places.get(ref, on_date=day)
+            if place.lat is None or place.lng is None:
+                return False
+            return self.rain_lookup.rain(place.lat, place.lng, day, hour) is True
+        except Exception:
+            # 날씨 조회 실패가 혼잡 플랜 B 까지 막지 않게 한다(비를 근거로 바꾸지 않는다).
+            return False
+
+    def _dry(self, ref: object, day: date, hour: int) -> bool:
+        """비 예보가 없다고 확인되는가(단기예보로 비가 아님)."""
+        if self.rain_lookup is None or not isinstance(ref, PublicPlaceRef):
+            return False
+        try:
+            place = self.places.get(ref, on_date=day)
+            if place.lat is None or place.lng is None:
+                return False
+            return self.rain_lookup.rain(place.lat, place.lng, day, hour) is False
+        except Exception:
+            # 날씨 조회 실패가 혼잡 플랜 B 까지 막지 않게 한다(비를 근거로 바꾸지 않는다).
+            return False
+
+    def _rain_reorder(self, record: TripRecord, block: StoredBlock, day: date, evaluate: "_Evaluator") -> PlanBOption:
+        ranked: list[tuple[tuple[bool, int], _Evaluated]] = []
+        reasons: set[str] = set()
+        for seq in self._positions(record.schedule, block):
+            evaluated = evaluate(f"REORDER:{block.id}:{seq}", None)
+            if isinstance(evaluated, str):
+                reasons.add(evaluated)
+                continue
+            arrive = evaluated.block.arrive_at
+            if arrive is None or not self._dry(block.place_ref, day, arrive.hour):
+                reasons.add("NO_GAIN")
+                continue
+            ranked.append(((evaluated.hours_conflict, evaluated.extra or 0), evaluated))
+        if not ranked:
+            option = self._unavailable("REORDER", block.id, reasons)
+            return (
+                option
+                if option.note != NOTES["REORDER"]["DEFAULT"]
+                else option.model_copy(update={"note": RAIN_NOTES["REORDER"]})
+            )
+        ranked.sort(key=lambda row: row[0])
+        return self._option(ranked[0][1], "REORDER")
+
+    def _rain_replace(self, record: TripRecord, block: StoredBlock, day: date, evaluate: "_Evaluator") -> PlanBOption:
+        ranked: list[tuple[tuple[int, bool, int, str], _Evaluated]] = []
+        reasons: set[str] = set()
+        for candidate_id in self._replacement_ids(record, block, day):
+            evaluated = evaluate(f"REPLACE:{block.id}:{candidate_id}", None)
+            if isinstance(evaluated, str):
+                reasons.add(evaluated)
+                continue
+            grade = evaluated.crowd.grade if evaluated.crowd is not None else None
+            ref = PublicPlaceRef(place_id=candidate_id)
+            indoor = self.outdoor is not None and self.outdoor(candidate_id) is False
+            arrive = evaluated.block.arrive_at
+            dry = arrive is not None and self._dry(ref, day, arrive.hour)
+            if grade in TRIGGER_GRADES or not (indoor or dry):
+                reasons.add("NO_GAIN")
+                continue
+            # 실내 장소 → 비가 그친 실외 장소 순, 그다음 영업시간 충돌·이동시간.
+            ranked.append(
+                ((0 if indoor else 1, evaluated.hours_conflict, evaluated.extra or 0, candidate_id), evaluated)
+            )
+        if not ranked:
+            option = self._unavailable("REPLACE", block.id, reasons)
+            return (
+                option
+                if option.note != NOTES["REPLACE"]["DEFAULT"]
+                else option.model_copy(update={"note": RAIN_NOTES["REPLACE"]})
+            )
         ranked.sort(key=lambda row: row[0])
         return self._option(ranked[0][1], "REPLACE")
 
