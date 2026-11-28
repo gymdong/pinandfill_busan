@@ -76,4 +76,15 @@ describe('PlanBSheet', () => {
     expect(get).toHaveBeenCalledTimes(2);
     expect(input.onClose).not.toHaveBeenCalled();
   });
+
+  it('실제 경로로 안 되는 안(fields.optionId)은 다시 부르지 않고 그 안만 고를 수 없게 한다', async () => {
+    const get = vi.spyOn(tripsApi, 'getPlanB').mockResolvedValue(response);
+    const message = '실제 경로로 계산하니 하루 일정이나 고정 시각을 지킬 수 없어요. 다른 안을 골라 주세요.';
+    vi.spyOn(tripsApi, 'applyPlanB').mockRejectedValue(new ApiError({ id: 'ERR-001', status: 409, message, fields: { optionId: message } }));
+    render(<PlanBSheet {...props()} />);
+    await userEvent.click(await screen.findByRole('button', { name: '대체 장소 적용' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(screen.queryByRole('button', { name: '대체 장소 적용' })).not.toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(1);
+  });
 });

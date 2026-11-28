@@ -273,3 +273,42 @@ def test_low_confidence_busy_places_are_not_offered_as_replacements() -> None:
         body = client.get(f"/api/trips/{trip_id}/plan-b", params={"blockId": blocks[YONGDUSAN]["id"]}).json()
     replace = next(o for o in body["options"] if o["kind"] == "REPLACE")
     assert replace["available"] is False
+
+
+def test_option_that_breaks_with_real_routes_is_rejected_as_route_conflict() -> None:
+    """조회(추정 20분)로는 하루 끝(17:10) 안에 들지만 실제 경로(32분)로는 넘는 순서 안: 409 + fields.optionId."""
+
+    class Slower(TwentyMinutes):
+        def estimate(self, origin: object, destination: object, *, mode: str) -> RouteEstimate:
+            return RouteEstimate(32, "TMAP", datetime(2026, 12, 1, tzinfo=UTC))
+
+    places = load_sample_places()
+    crowd = FakeCrowd()
+    engine = BasicItineraryEngine(places, Slower(), crowd=crowd)
+    preview = BasicItineraryEngine(places, TwentyMinutes(), crowd=crowd)
+    candidates = PublicPlaceCandidates(lambda: [item.place.id for item in places.all()], lambda pid: _stay(places, pid))
+    service = TripService(
+        FakeTripRepository({}),
+        engine,
+        places.stay_min,
+        initial_planner=InitialSchedulePlanner(engine, PublicStayDurations(places.stay_min)),
+        plan_b=PlanBPlanner(engine, places, candidates, crowd=crowd, preview_engine=preview, max_replacements=0),
+    )
+    with TestClient(create_app(trip_service=service)) as client:
+        trip_id = client.post("/api/trips", json={**TRIP, "dayEnd": "17:10"}).json()["tripId"]
+        selections = [
+            _fixed(ART, "10:00", "11:00"),
+            {"clientId": YONGDUSAN, "place": {"placeId": YONGDUSAN}, "stayMin": 45},
+            _fixed(TAEJONGDAE, "15:00", "16:00"),
+        ]
+        created = client.post(
+            f"/api/trips/{trip_id}/schedule", json={"initial": {"policy": "FIRST_FEASIBLE", "selections": selections}}
+        )
+        assert created.status_code == 200, created.text
+        target = next(b for b in created.json()["days"][0]["blocks"] if b["place"]["id"] == YONGDUSAN)
+        body = client.get(f"/api/trips/{trip_id}/plan-b", params={"blockId": target["id"]}).json()
+        reorder = next(o for o in body["options"] if o["kind"] == "REORDER")
+        assert reorder["available"] and reorder["arriveAt"] == "16:20"
+        applied = client.post(f"/api/trips/{trip_id}/plan-b/apply", json={"optionId": reorder["id"]})
+    assert applied.status_code == 409
+    assert "optionId" in applied.json()["error"]["fields"]

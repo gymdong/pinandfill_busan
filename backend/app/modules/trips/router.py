@@ -26,7 +26,7 @@ from app.modules.engine.service import (
     SequenceNormalizationRequiredError,
 )
 from app.modules.plan_b.schemas import ApplyPlanBRequest, PlanBResponse
-from app.modules.plan_b.service import PlanBStaleError
+from app.modules.plan_b.service import PlanBRouteConflictError, PlanBStaleError
 from app.modules.trips.commands import FixedWindowRequiredError
 from app.modules.trips.edit_history import NothingToUndoError
 from app.modules.trips.schemas import (
@@ -79,6 +79,10 @@ Service = Annotated[TripService, Depends(trip_service)]
 
 def translate_error(exc: Exception) -> TripAPIError:
     # Never use str(exc), errors(), or the original body: they may contain search data.
+    if isinstance(exc, PlanBRouteConflictError):
+        # fields.optionId: 화면이 그 안만 고를 수 없게 표시한다(다시 불러도 추정으로는 같은 안이 나온다).
+        message = "실제 경로로 계산하니 하루 일정이나 고정 시각을 지킬 수 없어요. 다른 안을 골라 주세요."
+        return TripAPIError(409, "ERR-001", message, fields={"optionId": message})
     if isinstance(exc, PlanBStaleError):
         return TripAPIError(409, "ERR-001", "일정이 바뀌어 이 안을 적용할 수 없어요. 플랜 B를 다시 불러 주세요.")
     if isinstance(exc, TripNotFoundError):

@@ -71,6 +71,10 @@ class PlanBStaleError(Exception):
     """고른 안이 지금 일정에서는 없거나 달라졌다. 화면이 3안을 다시 불러야 한다."""
 
 
+class PlanBRouteConflictError(Exception):
+    """추정으로는 되던 안이 실제 경로로 계산하니 하루 범위·고정 시각 등을 지킬 수 없다. 그 안만 고를 수 없다."""
+
+
 @dataclass(frozen=True, slots=True)
 class _Evaluated:
     option_id: str
@@ -150,20 +154,24 @@ class PlanBPlanner:
         if trigger is None:
             return PlanBResponse(block_id=block_id, trigger=None, crowd=summary)
         engine = self.preview_engine
-        base = engine.project(ValidateInput(trip=record.trip, schedule=record.schedule), context=context)
+        # 비교 기준(지금 일정)도 안과 같은 엔진으로 그 날 처음부터 다시 계산한다. 저장된 실제 경로값과
+        # 추정값을 섞어 비교하면 이동시간 차이·충돌 판단·덜 붐빔 판단이 틀린다.
+        base = self._baseline(record, block.day_no, context, engine)
         base_flags = _timing_flags(base, block.day_no)
-        base_travel = _day_travel(record.schedule, block.day_no)
+        base_travel = _day_travel(base.state, block.day_no)
+        base_block = next((b for b in base.state.blocks if b.id == block.id), block)
         base_cost = (
-            window_cost(crowd, block.arrive_at, block.depart_at)
-            if crowd is not None and block.arrive_at is not None and block.depart_at is not None
+            window_cost(crowd, base_block.arrive_at, base_block.depart_at)
+            if crowd is not None and base_block.arrive_at is not None and base_block.depart_at is not None
             else None
         )
+        stored = self.engine.project(ValidateInput(trip=record.trip, schedule=record.schedule), context=context)
         keep = PlanBOption(
             id=KEEP_ID,
             kind="KEEP",
             available=True,
             extra_minutes=0,
-            hours_conflict=self._hours_conflict(_day_blocks(base, block.day_no)),
+            hours_conflict=self._hours_conflict(_day_blocks(stored, block.day_no)),
             arrive_at=block.arrive_at,
             depart_at=block.depart_at,
             crowd=summary,
@@ -180,6 +188,20 @@ class PlanBPlanner:
                 self._replace_option(record, block, day, summary, base_cost, evaluate),
             ),
         )
+
+    def _baseline(
+        self, record: TripRecord, day_no: int, context: CalculationContext, engine: ItineraryEngine
+    ) -> EngineResult:
+        """지금 일정을 `engine` 으로 그 날 첫 블록부터 다시 계산한 결과. 계산할 수 없으면 저장된 일정 투영."""
+        if engine is self.engine:
+            return engine.project(ValidateInput(trip=record.trip, schedule=record.schedule), context=context)
+        first = min((b for b in record.schedule.blocks if b.day_no == day_no), key=lambda b: b.seq)
+        try:
+            return engine.recompute(
+                RecomputeInput(trip=record.trip, schedule=record.schedule, from_block_id=first.id), context=context
+            )
+        except (EngineInputError, PolicyRequiredError, NeedsConfirmationError):
+            return engine.project(ValidateInput(trip=record.trip, schedule=record.schedule), context=context)
 
     def _trigger(
         self, block: StoredBlock, crowd: PlaceCrowdResponse | None, summary: CrowdSummary | None
@@ -317,22 +339,23 @@ class PlanBPlanner:
         """고른 안을 지금 일정으로 다시 확인한 뒤 실제 엔진으로 계산한다. KEEP 은 TripService 가 저장 없이 처리한다.
 
         지금 일정에서 그 안이 없거나(다른 편집으로 바뀜) 고를 수 없으면, 또는 실제 경로로 계산하니 원래 없던
-        시각 충돌이 생기거나 일정이 그대로면 `PlanBStaleError` 다.
+        시각 충돌이 생기면 `PlanBRouteConflictError`, 일정이 그대로면 `PlanBStaleError` 다.
+        재확인은 조회(API-014, GET)와 같은 빈 context 로 해서 조회 때 보인 안과 같은 기준으로 고른다.
         """
         _, block_id, _ = self._parse(option_id)
         if self._block(record, block_id).is_fixed:
             raise EngineInputError("Fixed blocks have no plan B")
-        current = self.options(record, block_id, context)
+        current = self.options(record, block_id, CalculationContext())
         if not any(option.id == option_id and option.available for option in current.options):
             raise PlanBStaleError
         block = self._block(record, block_id)
         base = self.engine.project(ValidateInput(trip=record.trip, schedule=record.schedule), context=context)
         result, new_id = self._compute(record, option_id, context, self.engine)
         rename = {new_id: block_id} if new_id != block_id else None
-        if result.state == record.schedule or not _timing_flags(result, block.day_no, rename) <= _timing_flags(
-            base, block.day_no
-        ):
+        if result.state == record.schedule:
             raise PlanBStaleError
+        if not _timing_flags(result, block.day_no, rename) <= _timing_flags(base, block.day_no):
+            raise PlanBRouteConflictError
         return result
 
     def _parse(self, option_id: str) -> tuple[str, str, str]:

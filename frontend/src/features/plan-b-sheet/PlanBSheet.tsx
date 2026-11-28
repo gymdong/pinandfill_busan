@@ -37,6 +37,8 @@ export function PlanBSheet(props: PlanBSheetProps) {
 function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose }: PlanBSheetProps) {
   const [applyError, setApplyError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 실제 경로로 계산하니 안 되는 안(409 + fields.optionId). 다시 불러도 추정으로는 같은 안이 나오므로 여기서 막는다.
+  const [rejected, setRejected] = useState<Record<string, string>>({});
   const inFlight = useRef(false);
   const busy = disabled || submitting;
   const fetchOptions = useCallback((signal: AbortSignal) => tripsApi.getPlanB(tripId, blockId, { signal }), [tripId, blockId]);
@@ -56,8 +58,10 @@ function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose 
     } catch (cause) {
       const error = toApiError(cause);
       setApplyError(error.message);
+      const routeConflict = error.fields?.optionId;
+      if (routeConflict) setRejected((current) => ({ ...current, [option.id]: routeConflict }));
       // 일정이 바뀌어 안이 달라졌으면(409) 지금 일정으로 3안을 다시 받는다.
-      if (error.status === 409) loaded.reload();
+      else if (error.status === 409) loaded.reload();
     } finally {
       inFlight.current = false;
       setSubmitting(false);
@@ -79,7 +83,10 @@ function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose 
     {current && current.trigger === null && <p role="status" className={styles.status}>지금은 바꿀 필요가 없어요. 예상 혼잡이 높지 않거나 근거가 부족해요.</p>}
     {current?.trigger && current.estimated && <p className={styles.note}>시각·이동시간은 추정이에요. 고르면 실제 경로로 다시 계산해요.</p>}
     {current && current.trigger !== null && <ul className={styles.options} aria-label="플랜 B 3안">
-      {current.options.map((option) => <li key={option.kind} className={`${styles.option} ${option.available ? '' : styles.optionOff}`}>
+      {current.options.map((candidate) => {
+        const blocked = rejected[candidate.id];
+        const option = blocked ? { ...candidate, available: false, note: blocked } : candidate;
+        return <li key={option.kind} className={`${styles.option} ${option.available ? '' : styles.optionOff}`}>
         <div className={styles.head}>
           <h3 className={styles.name}>{TITLES[option.kind]}{option.kind === 'REPLACE' && option.place ? `: ${option.place.name}` : ''}</h3>
           {option.available && option.arriveAt && <p className={styles.time}>{option.arriveAt}–{option.departAt ?? '--:--'}</p>}
@@ -98,7 +105,8 @@ function PlanBContent({ tripId, blockId, placeName, disabled, onChange, onClose 
             onClick={() => { void choose(option); }}
           >{option.kind === 'KEEP' ? '그대로 두기' : '이렇게 바꾸기'}</Button>
         </> : <p className={styles.meta}>{option.note ?? '지금은 고를 수 없어요.'}</p>}
-      </li>)}
+      </li>;
+      })}
     </ul>}
   </BottomSheet>;
 }
