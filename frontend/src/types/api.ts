@@ -461,15 +461,28 @@ export interface MoodResponse {
 
 /* ---------- P1: 플랜 B·날씨·사진·저장·공유·회원 ---------- */
 
-/** API-014 */
+/** API-014. SDD 는 {trigger, options[3]} 만 정한다. 나머지 필드는 백엔드 잠정 계약과 같다. */
+export type PlanBKind = 'KEEP' | 'REORDER' | 'REPLACE';
 export interface PlanBOption {
   id: string;
-  kind: string;
-  extraMinutes: number;
+  kind: PlanBKind;
+  /** false 면 고를 수 없고 note 가 이유다. */
+  available: boolean;
+  /** 그 날 총 이동시간 변화(분, 음수면 줄어듦). 모르면 null */
+  extraMinutes: number | null;
   hoursConflict: boolean;
+  arriveAt?: LocalTime | null;
+  departAt?: LocalTime | null;
+  crowd?: CrowdSummary | null;
+  /** REPLACE 의 대체 장소 */
+  place?: PlaceSummary | null;
+  note?: string | null;
 }
 export interface PlanBResponse {
-  trigger: string;
+  blockId: Uuid;
+  /** null 이면 플랜 B 를 띄울 조건이 아니다. */
+  trigger: 'CROWD' | 'RAIN' | null;
+  crowd: CrowdSummary | null;
   options: PlanBOption[];
 }
 
@@ -477,9 +490,7 @@ export interface PlanBResponse {
 export interface ApplyPlanBRequest {
   optionId: string;
 }
-export interface ApplyPlanBResponse {
-  schedule: Schedule;
-}
+export type ApplyPlanBResponse = ScheduleMutationResponse;
 
 /** API-016 */
 export interface TripWeatherResponse {

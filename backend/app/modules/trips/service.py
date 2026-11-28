@@ -10,7 +10,10 @@ from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.interfaces import EngineResult, ItineraryEngine
 from app.modules.engine.schemas import CalculationContext, RecomputeInput, ScheduleState, ValidateInput
 from app.modules.engine.service import NeedsConfirmationError, PolicyRequiredError
+from app.modules.plan_b.schemas import ApplyPlanBRequest, PlanBResponse
+from app.modules.plan_b.service import KEEP_ID, PlanBPlanner
 from app.modules.recommend.waypoints import WaypointRecommender
+from app.modules.trips.acceptance import fixed_timing_conflicts
 from app.modules.trips.commands import calculation_context, delete_command, insert_command, update_command
 from app.modules.trips.edit_history import EditHistory, InMemorySnapshotRepository, changed_block_ids
 from app.modules.trips.initial import initial_command
@@ -81,6 +84,7 @@ class TripService:
         recommender: WaypointRecommender | None = None,
         history: EditHistory | None = None,
         initial_planner: InitialSchedulePlanner | None = None,
+        plan_b: PlanBPlanner | None = None,
         transaction: Callable[[], AbstractContextManager[object]] = nullcontext,
     ) -> None:
         self.repository = repository
@@ -88,6 +92,7 @@ class TripService:
         self.stay_duration = stay_duration
         self.recommender = recommender
         self.initial_planner = initial_planner
+        self.plan_b_planner = plan_b
         # 기본값은 로컬 Fake 저장소(FakeTripRepository)와 짝을 이루는 메모리 이력이다.
         # DB 저장소를 붙일 때 schedule_snapshots 를 쓰는 SnapshotRepository 구현으로 바꿔 주입해야 한다.
         self.history = history if history is not None else EditHistory(InMemorySnapshotRepository())
@@ -106,6 +111,31 @@ class TripService:
         if self.recommender is None:
             raise NeedsConfirmationError("Waypoint providers are not configured")
         return self.recommender.suggest(record, request, calculation_context(request))
+
+    def plan_b(self, trip_id: str, block_id: str) -> PlanBResponse:
+        """API-014. 쓰지 않으므로 잠금 없이 읽고, 3안 계산(경로 조회 포함)은 트랜잭션 밖에서 한다.
+
+        GET 이라 카카오 좌표를 받지 않는다. 카카오 장소와 잇는 구간은 이동시간을 모르는 것으로 계산된다.
+        """
+        record = self._read(trip_id)
+        if self.plan_b_planner is None:
+            raise NeedsConfirmationError("Plan B is not configured")
+        return self.plan_b_planner.options(record, block_id, CalculationContext())
+
+    def apply_plan_b(self, trip_id: str, request: ApplyPlanBRequest) -> ScheduleMutationResponse:
+        """API-015. 강행(KEEP)은 저장하지 않고 지금 일정을 돌려준다. 다른 안은 편집 한 번으로 저장한다(되돌리기 됨)."""
+        planner = self.plan_b_planner
+        if planner is None:
+            raise NeedsConfirmationError("Plan B is not configured")
+        if request.option_id == KEEP_ID:
+            record = self._read(trip_id)
+            result = self.engine.project(
+                ValidateInput(trip=record.trip, schedule=record.schedule), context=calculation_context(request)
+            )
+            return ScheduleMutationResponse(schedule=result.schedule, violations=result.schedule.violations)
+        return self._edit_blocks(
+            trip_id, lambda record: planner.apply(record, request.option_id, calculation_context(request))
+        )
 
     def detail(self, trip_id: str) -> TripDetailResponse:
         """API-026. 저장된 일정을 다시 계산하지 않고 투영한다(경로 조회 없음). GET 이라 카카오 좌표는 받지 않는다.
@@ -177,20 +207,7 @@ class TripService:
     @staticmethod
     def _timing_conflicts(result: EngineResult, *, days: set[int] | None = None) -> set[str]:
         """고정 시각을 지킬 수 없는 고정 블록 ID."""
-        timing_errors = {
-            "TRAVEL_TIME_CONFLICT",
-            "FIXED_TIME_CONFLICT",
-            "STAY_CONFLICT",
-            "DAY_WINDOW_CONFLICT",
-            "TIME_WINDOW_UNSUPPORTED",
-        }
-        return {
-            block.id
-            for day in result.schedule.days
-            if days is None or day.day_no in days
-            for block in day.blocks
-            if block.is_fixed and any(warning.type in timing_errors for warning in block.warnings)
-        }
+        return fixed_timing_conflicts(result, days=days)
 
     def _commit_edit(self, trip_id: str, record: TripRecord, result: EngineResult) -> ScheduleMutationResponse:
         """편집 한 번을 확정한다: 수락 검사 → 편집 전 스냅샷 기록 → 저장.

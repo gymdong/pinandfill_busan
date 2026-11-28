@@ -7,12 +7,29 @@ import { Banner, Button, useOptionalToast } from '@/components';
 import { CrowdBadge } from '@/features/crowd/CrowdBadge';
 import { BlockEditor } from '@/features/block-editor/BlockEditor';
 import { WaypointSheet } from '@/features/waypoint-sheet/WaypointSheet';
+import { PlanBSheet } from '@/features/plan-b-sheet/PlanBSheet';
 import { blockRole, formatDayDate, formatDuration, legBetween, scheduleLevelViolations, tripSummary } from '@/features/itinerary/format';
 import { LegText } from '@/features/itinerary/LegText';
 import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, UndoIcon } from '@/features/itinerary/icons';
 import { useApi } from '@/hooks/useApi';
 import type { Block, BlockCrowd, IsoDate, Schedule, ScheduleDay, Violation } from '@/types/api';
 import styles from './TimelinePage.module.css';
+
+/** 플랜 B 를 띄울 블록(FR-010): 고정하지 않았고, 도착 시각 예상 '붐빔' 이상, 신뢰도 '중간' 이상. 서버가 다시 판정한다. */
+function needsPlanB(block: Block, crowd: BlockCrowd | undefined): boolean {
+  return !block.isFixed
+    && (crowd?.grade === '붐빔' || crowd?.grade === '매우 붐빔')
+    && (crowd.confidence === '중간' || crowd.confidence === '높음');
+}
+
+/** 플랜 B 알림은 여행·블록마다 한 번만 띄운다(FR-010 '알림 1회'). 저장이 막혀도 화면은 그대로 동작한다. */
+function seenKey(tripId: string) { return `pinandfill:planb-seen:${tripId}`; }
+function readSeen(tripId: string): string[] {
+  try { return JSON.parse(sessionStorage.getItem(seenKey(tripId)) ?? '[]') as string[]; } catch { return []; }
+}
+function writeSeen(tripId: string, ids: string[]) {
+  try { sessionStorage.setItem(seenKey(tripId), JSON.stringify(ids)); } catch { /* 저장 불가: 이번 화면에서만 기억 */ }
+}
 
 export default function TimelinePage() {
   const { tripId } = useParams();
@@ -36,6 +53,9 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const [mutationViolations, setMutationViolations] = useState<Violation[]>([]);
   // 방금 들어간 블록. 그 카드로 스크롤하고 잠깐 강조한다(무엇이 바뀌었는지 보이게).
   const [flashId, setFlashId] = useState<string | null>(null);
+  // 플랜 B 시트를 연 블록, 알림을 이미 본 블록.
+  const [planBBlock, setPlanBBlock] = useState<string | null>(null);
+  const [seen, setSeen] = useState<string[]>(() => (tripId ? readSeen(tripId) : []));
   const { showToast } = useOptionalToast();
   const addPanel = useRef<HTMLElement>(null);
   const schedule = edited ?? (loaded.status === 'success' ? loaded.data.schedule : null);
@@ -63,7 +83,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   }, [flashId]);
 
   /** 요청을 보내고 성공 여부를 돌려준다. 패널은 그 패널에서 보낸 추가가 성공했을 때만 닫는다. */
-  const run = async (action: Parameters<Change>[0], isUndo = false) => {
+  const run = async (action: Parameters<Change>[0], isUndo = false, message?: string) => {
     setPending(true);
     setError(null);
     try {
@@ -72,7 +92,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       setEdited(result.schedule);
       setMutationViolations(result.violations ?? []);
       setUndoAvailable(!isUndo);
-      announce(before, result.schedule, isUndo);
+      announce(before, result.schedule, isUndo, message);
       return true;
     } catch (cause) {
       setError(toApiError(cause).message);
@@ -82,7 +102,7 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     }
   };
   /** 바뀐 내용을 알림(화면 읽기 프로그램에도 읽힘)으로 알리고, 새로 들어간 블록을 강조한다. */
-  const announce = (before: Schedule | null, after: Schedule, isUndo: boolean) => {
+  const announce = (before: Schedule | null, after: Schedule, isUndo: boolean, message?: string) => {
     const beforeIds = new Set(before?.days.flatMap((d) => d.blocks.map((b) => b.id)) ?? []);
     const afterBlocks = after.days.flatMap((d) => d.blocks);
     const afterIds = new Set(afterBlocks.map((b) => b.id));
@@ -90,7 +110,10 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
     const removed = before?.days.flatMap((d) => d.blocks).find((b) => !afterIds.has(b.id));
     const nameOf = (block: Block) => resolveBlockPlace(block.place)?.name ?? '장소';
     if (isUndo) showToast('직전 편집을 되돌렸어요.');
-    else if (added) {
+    else if (message) {
+      if (added) setFlashId(added.id);
+      showToast(message);
+    } else if (added) {
       setFlashId(added.id);
       showToast(`일정에 넣었어요: ${nameOf(added)} · 되돌리기 버튼으로 취소할 수 있어요.`);
     } else if (removed) showToast(`일정에서 뺐어요: ${nameOf(removed)} · 되돌리기 버튼으로 취소할 수 있어요.`);
@@ -100,11 +123,23 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   const addAndClose: Change = async (action) => { if (await run(action)) setAdding(false); };
   const slotAndClose: Change = async (action) => { if (await run(action)) setSlot(null); };
 
+  const markSeen = (blockId: string) => {
+    if (!tripId || seen.includes(blockId)) return;
+    const next = [...seen, blockId];
+    setSeen(next);
+    writeSeen(tripId, next);
+  };
+  const openPlanB = (blockId: string) => { markSeen(blockId); setPlanBBlock(blockId); };
+
   if (!tripId) return <Banner tone="warn">여행 정보를 찾을 수 없어요.</Banner>;
   if (loaded.status === 'loading') return <p role="status" className={styles.status}>일정을 불러오는 중…</p>;
   if (loaded.status === 'error') return <Banner tone="warn">일정을 불러오지 못했어요. <Button onClick={loaded.reload}>다시 시도</Button></Banner>;
 
   const selectDay = (next: number) => { setDayNo(next); setSelected(null); setSlot(null); };
+  const crowdOf = (block: Block) => day?.crowd.find((item) => item.blockId === block.id);
+  const planBIds = new Set(day?.blocks.filter((block) => needsPlanB(block, crowdOf(block))).map((block) => block.id) ?? []);
+  const alertBlock = [...(day?.blocks ?? [])].sort((a, b) => a.seq - b.seq).find((block) => planBIds.has(block.id) && !seen.includes(block.id));
+  const planBTarget = day?.blocks.find((block) => block.id === planBBlock);
 
   return <main className={styles.page}>
     <h1 className="sr-only">코스 타임라인</h1>
@@ -132,10 +167,31 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
       </ul>
     </section>}
 
+    {alertBlock && <section className={styles.planBAlert} aria-label="플랜 B 알림">
+      <p className={styles.planBText}>
+        <strong>{resolveBlockPlace(alertBlock.place)?.name ?? '다음 장소'} {alertBlock.arriveAt ?? ''}</strong>
+        {` 예상 ${crowdOf(alertBlock)?.grade ?? '붐빔'}이에요. 다른 방법도 볼까요?`}
+      </p>
+      <span className={styles.planBActions}>
+        <Button variant="outline" onClick={() => markSeen(alertBlock.id)}>괜찮아요</Button>
+        <Button aria-haspopup="dialog" onClick={() => openPlanB(alertBlock.id)}>플랜 B 보기</Button>
+      </span>
+    </section>}
+
     {day ? <DayTimeline
       key={day.dayNo} tripId={tripId} day={day} selected={selected} slot={slot} pending={pending} flashId={flashId}
+      planBIds={planBIds} onPlanB={openPlanB}
       onSelect={(id) => setSelected(selected === id ? null : id)} onSlot={(id) => setSlot(slot === id ? null : id)} onChange={change} onSlotChange={slotAndClose}
     /> : <p className={styles.empty}>표시할 일정이 없어요.</p>}
+
+    {planBTarget && <PlanBSheet
+      tripId={tripId} blockId={planBTarget.id} placeName={resolveBlockPlace(planBTarget.place)?.name ?? '이 장소'} disabled={pending}
+      onClose={() => setPlanBBlock(null)}
+      onChange={async (action, message) => {
+        // 실패하면 시트를 열어 둔다(run 이 오류를 위 배너에 보여 준다).
+        if (await run(action, false, message)) setPlanBBlock(null);
+      }}
+    />}
 
     {adding && <section ref={addPanel} className={styles.addPanel}>
       <BlockEditor tripId={tripId} dayNo={day?.dayNo ?? 1} disabled={pending} onChange={addAndClose} />
@@ -148,13 +204,16 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   </main>;
 }
 
-function DayTimeline({ tripId, day, selected, slot, pending, flashId, onSelect, onSlot, onChange, onSlotChange }: {
+function DayTimeline({ tripId, day, selected, slot, pending, flashId, planBIds, onPlanB, onSelect, onSlot, onChange, onSlotChange }: {
   tripId: string;
   day: ScheduleDay;
   selected: string | null;
   slot: string | null;
   pending: boolean;
   flashId: string | null;
+  /** 플랜 B 를 볼 수 있는 블록(붐빔·신뢰 중간 이상, 고정 아님). */
+  planBIds: ReadonlySet<string>;
+  onPlanB(id: string): void;
   onSelect(id: string): void;
   onSlot(id: string): void;
   onChange: Change;
@@ -169,7 +228,8 @@ function DayTimeline({ tripId, day, selected, slot, pending, flashId, onSelect, 
     const next = blocks[index + 1];
     const leg = legBetween(day.legs, block, next);
     return <li key={block.id}>
-      <BlockCard block={block} date={day.date} crowd={day.crowd.find((item) => item.blockId === block.id)} selected={selected === block.id} flash={flashId === block.id} onSelect={() => onSelect(block.id)}>
+      <BlockCard block={block} date={day.date} crowd={day.crowd.find((item) => item.blockId === block.id)} selected={selected === block.id} flash={flashId === block.id} onSelect={() => onSelect(block.id)}
+        onPlanB={planBIds.has(block.id) ? () => onPlanB(block.id) : undefined} planBDisabled={pending}>
         {selected === block.id && <BlockEditor key={block.id} tripId={tripId} block={block} disabled={pending} onChange={onChange} />}
       </BlockCard>
       {next && <div className={styles.between}>
@@ -206,8 +266,11 @@ function DayTimeline({ tripId, day, selected, slot, pending, flashId, onSelect, 
   })}</ol>;
 }
 
-function BlockCard({ block, date, crowd, selected, flash, onSelect, children }: {
+function BlockCard({ block, date, crowd, selected, flash, onSelect, onPlanB, planBDisabled, children }: {
   block: Block;
+  /** 있으면 '플랜 B' 버튼을 보인다. */
+  onPlanB?: () => void;
+  planBDisabled?: boolean;
   flash: boolean;
   /** 그 블록이 있는 날. 장소 상세가 이 날의 영업시간·예상 혼잡을 보이게 넘긴다. */
   date: IsoDate;
@@ -236,6 +299,7 @@ function BlockCard({ block, date, crowd, selected, flash, onSelect, children }: 
       <CrowdBadge grade={crowd?.grade ?? null} confidence={crowd?.confidence} />
       {/* 화면을 열 때 모든 칩을 읽지 않도록 알림(role=alert)은 위 요약 카드에만 둔다. */}
       {block.warnings.map((item, i) => <span className={styles.warnChip} key={i}>{item.cause}</span>)}
+      {onPlanB && <button type="button" className={styles.planBButton} aria-haspopup="dialog" disabled={planBDisabled} onClick={onPlanB}>플랜 B</button>}
       {/* D6: 이번 접속에서 고르지 않은 카카오 장소는 place_url을 외부 브라우저로 연다. */}
       {block.place.source === 'PUBLIC' && <Link className={styles.placeLink} to={paths.placeDetail(block.place.id, date)} aria-label={`${block.place.name} 장소 상세 보기`}>장소 상세 보기</Link>}
       {kakaoLink && <a className={styles.placeLink} href={kakaoLink} target="_blank" rel="noopener noreferrer">카카오맵에서 장소 확인 (새 창)</a>}

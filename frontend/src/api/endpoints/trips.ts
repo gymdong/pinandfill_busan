@@ -121,7 +121,12 @@ export const tripsApi = {
 
   /** API-015 플랜 B 적용 (P1) */
   applyPlanB: (tripId: string, body: ApplyPlanBRequest, options?: CallOptions) =>
-    apiRequest<ApplyPlanBResponse>({ method: 'POST', path: `/trips/${tripId}/plan-b/apply`, body, ...options }),
+    apiRequest<ApplyPlanBResponse>({
+      method: 'POST',
+      path: `/trips/${tripId}/plan-b/apply`,
+      body: withSessionCoords(body),
+      ...options,
+    }),
 
   /** API-016 블록 시각별 예보 (P1) */
   getWeather: (tripId: string, options?: CallOptions) =>
