@@ -47,7 +47,9 @@
   font-size: var(--text-s);
 }
 
-.title:focus:not(:focus-visible) {
+/* 제목은 열 때만 코드로 포커스를 받는다(tabIndex=-1, Tab 으로는 못 간다). Safari 는 키보드 입력 뒤 이 포커스에도
+   테두리를 그리므로, 시트 제목에는 포커스 테두리를 두지 않는다. Tab 순서의 첫 요소(닫기)는 그대로 테두리가 있다. */
+.title:focus {
   outline: none;
 }
 
