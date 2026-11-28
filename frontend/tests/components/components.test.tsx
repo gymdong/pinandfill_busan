@@ -64,6 +64,17 @@ describe('BottomSheet', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  it('열면 포커스를 제목에 두고, 시트 이름은 제목이다', () => {
+    render(
+      <BottomSheet open onClose={() => {}} title="시트 제목">
+        내용
+      </BottomSheet>,
+    );
+    const heading = screen.getByRole('heading', { name: '시트 제목' });
+    expect(heading).toHaveFocus();
+    expect(screen.getByRole('dialog', { hidden: true })).toHaveAccessibleName('시트 제목');
+  });
+
   it('닫히면 본문 스크롤 잠금을 푼다', () => {
     const { rerender } = render(
       <BottomSheet open onClose={() => {}} title="시트">

@@ -89,19 +89,25 @@
   width: 100%;
   min-width: 0;
   font-size: var(--text-m);
-  -webkit-appearance: none;
-  appearance: none;
 }
 
-.rowInputs .field::-webkit-date-and-time-value {
-  min-height: 1.5em;
-  text-align: left;
-}
+/* iOS(터치 Safari)에만 적용한다. 데스크톱 브라우저의 달력 버튼·높이는 건드리지 않는다. */
+@supports (-webkit-touch-callout: none) {
+  .rowInputs .field {
+    -webkit-appearance: none;
+    appearance: none;
+  }
 
-/* 기본 모양을 끄면 iOS 가 값을 위쪽에 붙인다. 칸 높이에 맞춰 세로 가운데에 둔다. */
-.rowInputs .field[type='date'],
-.rowInputs .field[type='time'] {
-  line-height: calc(var(--tap-min) - 2px);
+  .rowInputs .field::-webkit-date-and-time-value {
+    min-height: 1.5em;
+    text-align: left;
+  }
+
+  /* 기본 모양을 끄면 iOS 가 값을 위쪽에 붙인다. 칸 높이에 맞춰 세로 가운데에 둔다. */
+  .rowInputs .field[type='date'],
+  .rowInputs .field[type='time'] {
+    line-height: calc(var(--tap-min) - 2px);
+  }
 }
 
 .rowNote {
