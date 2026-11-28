@@ -36,12 +36,18 @@ describe('ShareSheet(FR-011)', () => {
     const share = vi.spyOn(tripsApi, 'share').mockResolvedValue({ url: '/shared/again', token: 'again', expiresAt: '2099-12-09T15:00:00Z' });
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
     const first = render(<ShareSheet tripId="t2" onClose={vi.fn()} />);
-    expect(await screen.findByText('12월 10일까지 열려요.')).toBeInTheDocument();
+    expect(await screen.findByText('12월 9일까지 열려요.')).toBeInTheDocument();
     first.unmount();
     render(<ShareSheet tripId="t2" onClose={vi.fn()} />);
     expect(screen.getByLabelText('공유 링크')).toHaveValue(`${window.location.origin}/shared/again`);
     expect(share).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByRole('button', { name: '링크 복사' }));
     expect(await screen.findByText(/길게 눌러 복사해 주세요/)).toBeInTheDocument();
+  });
+
+  it('0시가 아닌 만료도 그날로 보인다', async () => {
+    vi.spyOn(tripsApi, 'share').mockResolvedValue({ url: '/shared/noon', token: 'noon', expiresAt: '2099-12-09T03:00:00Z' });
+    render(<ShareSheet tripId="t3" onClose={vi.fn()} />);
+    expect(await screen.findByText('12월 9일까지 열려요.')).toBeInTheDocument();
   });
 });
