@@ -29,6 +29,8 @@ from app.modules.crowd.service import CrowdService
 from app.modules.crowd.signals import load_config, load_inputs
 from app.modules.engine.initial import InitialSchedulePlanner
 from app.modules.engine.service import BasicItineraryEngine
+from app.modules.photo.service import ClaudePhotoClassifier, PhotoSearchService
+from app.modules.photo.settings import PhotoSettings
 from app.modules.places.detail import PlaceDetailService, SamplePlaceDetails
 from app.modules.places.matcher import PlaceMatcher
 from app.modules.places.photos import load_place_photos
@@ -154,6 +156,14 @@ def default_crowd_service(places: SamplePlaceData) -> CrowdService:
     return CrowdService(provider, avoidance=config.avoidance)
 
 
+def default_photo_service(places: SamplePlaceData) -> PhotoSearchService | None:
+    settings = PhotoSettings()
+    key = settings.key()
+    if key is None:
+        return None
+    return PhotoSearchService(list(places.all()), ClaudePhotoClassifier(settings, key), settings)
+
+
 def kakao_settings() -> KakaoSettings | None:
     """KAKAO_REST_API_KEY 가 없거나 비어 있으면(공백뿐인 값 포함) None. 장소 검색은 그때 지금처럼 503(ERR-017)이다.
 
@@ -180,6 +190,7 @@ def create_app(
     place_search_service: PlaceSearchService | None = None,
     place_detail_service: PlaceDetailService | None = None,
     crowd_service: CrowdService | None = None,
+    photo_service: PhotoSearchService | None = None,
 ) -> FastAPI:
     """주입하지 않은 서비스는 기본 구성으로 만든다.
 
@@ -205,6 +216,9 @@ def create_app(
         # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
         if place_detail_service is None and places is not None:
             place_detail_service = PlaceDetailService(SamplePlaceDetails(places, load_place_photos()))
+        # API-017 사진 찾기: ANTHROPIC_API_KEY 가 있을 때만 켠다. 없으면 503 으로 이름 검색을 안내한다.
+        if photo_service is None and places is not None:
+            photo_service = default_photo_service(places)
         kakao = kakao_settings() if place_search_service is None else None
     except BaseException:
         if database is not None:
@@ -236,6 +250,7 @@ def create_app(
     application.state.place_search_service = place_search_service
     application.state.place_detail_service = place_detail_service
     application.state.crowd_service = crowd_service
+    application.state.photo_service = photo_service
     # 분위기 추천 등 라우터가 앱과 같은 장소 데이터를 쓰게 한다. 서비스를 모두 주입한 앱에서는 None 이다.
     application.state.places = places
 
