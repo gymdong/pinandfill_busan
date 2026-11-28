@@ -50,7 +50,8 @@ export function BottomSheet({ open, onClose, title, description, children, foote
         <div className={styles.handle} aria-hidden="true" />
         <header className={styles.header}>
           <div>
-            <h2 className={styles.title}>{title}</h2>
+            {/* 열릴 때 포커스를 제목에 둔다(화면 읽기가 제목부터 읽고, 닫기 버튼에 포커스 테두리가 뜨지 않게). */}
+            <h2 className={styles.title} tabIndex={-1} autoFocus>{title}</h2>
             {description ? <p className={styles.description}>{description}</p> : null}
           </div>
           <button type="button" className={styles.close} aria-label="닫기" onClick={onClose}>

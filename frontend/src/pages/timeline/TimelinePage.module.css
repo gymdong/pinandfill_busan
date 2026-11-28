@@ -10,7 +10,8 @@
 /* ---------- 상단 ---------- */
 .top {
   display: grid;
-  grid-template-columns: var(--tap-min) 1fr var(--tap-min);
+  /* 뒤로 · 제목 · 공유 · 되돌리기. 아이콘이 둘째 줄로 떨어지지 않게 한 줄 4칸으로 둔다. */
+  grid-template-columns: var(--tap-min) minmax(0, 1fr) var(--tap-min) var(--tap-min);
   align-items: center;
   gap: var(--space-1);
   margin: 0 calc(var(--space-2) * -1);

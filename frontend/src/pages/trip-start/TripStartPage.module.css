@@ -82,9 +82,26 @@
   gap: var(--space-2);
 }
 
+/* iOS Safari 의 날짜·시각 입력은 기본 모양(appearance)이 고유 최소 너비를 가져 칸 밖으로 넘친다.
+   기본 모양을 끄고 칸 너비에 맞춘다. 16px 미만이면 iOS 가 입력할 때 화면을 확대하므로 16px 로 둔다. */
 .rowInputs .field {
+  display: block;
   width: 100%;
-  font-size: var(--text-s);
+  min-width: 0;
+  font-size: var(--text-m);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.rowInputs .field::-webkit-date-and-time-value {
+  min-height: 1.5em;
+  text-align: left;
+}
+
+/* 기본 모양을 끄면 iOS 가 값을 위쪽에 붙인다. 칸 높이에 맞춰 세로 가운데에 둔다. */
+.rowInputs .field[type='date'],
+.rowInputs .field[type='time'] {
+  line-height: calc(var(--tap-min) - 2px);
 }
 
 .rowNote {
