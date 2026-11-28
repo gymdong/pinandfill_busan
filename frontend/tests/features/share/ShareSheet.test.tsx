@@ -1,9 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, tripsApi } from '@/api';
 import { ShareSheet } from '@/features/share/ShareSheet';
 
+beforeEach(() => sessionStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('ShareSheet(FR-011)', () => {
@@ -29,5 +30,18 @@ describe('ShareSheet(FR-011)', () => {
     await userEvent.click(screen.getByRole('button', { name: '다시 시도' }));
     expect(await screen.findByLabelText('공유 링크')).toBeInTheDocument();
     expect(share).toHaveBeenCalledTimes(2);
+  });
+
+  it('다시 열면 만든 링크를 다시 쓰고, 복사가 막히면 직접 복사하도록 안내한다', async () => {
+    const share = vi.spyOn(tripsApi, 'share').mockResolvedValue({ url: '/shared/again', token: 'again', expiresAt: '2099-12-09T15:00:00Z' });
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
+    const first = render(<ShareSheet tripId="t2" onClose={vi.fn()} />);
+    expect(await screen.findByText('12월 10일까지 열려요.')).toBeInTheDocument();
+    first.unmount();
+    render(<ShareSheet tripId="t2" onClose={vi.fn()} />);
+    expect(screen.getByLabelText('공유 링크')).toHaveValue(`${window.location.origin}/shared/again`);
+    expect(share).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole('button', { name: '링크 복사' }));
+    expect(await screen.findByText(/길게 눌러 복사해 주세요/)).toBeInTheDocument();
   });
 });

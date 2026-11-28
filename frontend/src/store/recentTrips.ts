@@ -15,10 +15,21 @@ export interface RecentTrip {
   openedAt: string;
 }
 
+const MODES: readonly string[] = ['TRANSIT', 'CAR', 'WALK'];
+
+/** 다른 버전·손상된 저장값이 화면을 깨뜨리지 않게, 모양이 맞는 항목만 남긴다. */
+function isRecentTrip(value: unknown): value is RecentTrip {
+  const item = value as Partial<RecentTrip> | null;
+  return typeof item?.id === 'string'
+    && typeof item.dates?.start === 'string'
+    && typeof item.dates?.end === 'string'
+    && typeof item.mode === 'string' && MODES.includes(item.mode);
+}
+
 export function recentTrips(): RecentTrip[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(KEY) ?? '[]');
-    return Array.isArray(value) ? (value as RecentTrip[]).filter((item) => typeof item?.id === 'string').slice(0, LIMIT) : [];
+    return Array.isArray(value) ? value.filter(isRecentTrip).slice(0, LIMIT) : [];
   } catch {
     return [];
   }

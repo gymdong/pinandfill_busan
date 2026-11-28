@@ -1,8 +1,9 @@
 """API-019 공유 링크 만들기, API-020 공유 일정 열람(읽기 전용). 응답은 모두 `Cache-Control: no-store`."""
 
+import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.params import Body
 
 from app.modules.share.schemas import SharedTripResponse, ShareTripRequest, ShareTripResponse
@@ -10,6 +11,8 @@ from app.modules.share.service import InvalidExpiryError, SharedLinkNotFoundErro
 from app.modules.trips.router import TripAPIError, translate_error
 
 router = APIRouter(tags=["share"])
+# 형식이 틀린 토큰(메신저에서 잘린 링크 등)도 없는 링크와 같이 404 로 답한다(존재 여부를 구분하지 않는다).
+TOKEN = re.compile(r"[A-Za-z0-9_-]{20,64}")
 
 
 def share_service(request: Request) -> ShareService:
@@ -42,11 +45,13 @@ def create_share_link(
 def get_shared_trip(
     response: Response,
     service: Service,
-    token: Annotated[str, Path(min_length=20, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
+    token: str,
 ) -> SharedTripResponse:
     response.headers["Cache-Control"] = "no-store"
     # 검색 엔진이 공유 일정을 색인하지 않게 한다.
     response.headers["X-Robots-Tag"] = "noindex"
+    if TOKEN.fullmatch(token) is None:
+        raise TripAPIError(404, "ERR-016", "공유 링크가 없거나 만료되었습니다.")
     try:
         return service.shared(token)
     except SharedLinkNotFoundError:

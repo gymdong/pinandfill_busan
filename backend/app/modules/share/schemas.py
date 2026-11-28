@@ -10,7 +10,7 @@ from app.modules.trips.schemas import Schedule, TripDates
 
 
 class ShareTripRequest(ContractModel):
-    # 없으면 만료 없음. 시간대가 있는 시각만 받는다.
+    # 없으면 여행 마지막 날 + 7일(한국 시간)에 닫힌다. 시간대가 있는 시각만 받는다.
     expires_at: AwareDatetime | None = None
 
 

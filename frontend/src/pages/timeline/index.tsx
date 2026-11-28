@@ -12,7 +12,7 @@ import { blockRole, formatDayDate, formatDuration, legBetween, scheduleLevelViol
 import { LegText } from '@/features/itinerary/LegText';
 import { AlertIcon, BackIcon, LockIcon, MapIcon, PlusIcon, ShareIcon, UndoIcon } from '@/features/itinerary/icons';
 import { ShareSheet } from '@/features/share/ShareSheet';
-import { rememberTrip } from '@/store/recentTrips';
+import { forgetTrip, rememberTrip } from '@/store/recentTrips';
 import { useApi } from '@/hooks/useApi';
 import type { Block, BlockCrowd, IsoDate, Schedule, ScheduleDay, Violation } from '@/types/api';
 import styles from './TimelinePage.module.css';
@@ -82,9 +82,13 @@ function TimelineTrip({ tripId }: { tripId: string | undefined }) {
   }, [adding]);
 
   // 비회원 임시 저장(FR-011): 이 브라우저에서 연 일정을 기억해 여행 시작 화면에서 다시 열 수 있게 한다.
+  const loadedTrip = loaded.status === 'success' ? loaded.data.trip : null;
+  const missing = loaded.status === 'error' && toApiError(loaded.error).status === 404;
   useEffect(() => {
-    if (tripId && loaded.status === 'success') rememberTrip(tripId, loaded.data.trip);
-  }, [tripId, loaded]);
+    if (tripId && loadedTrip) rememberTrip(tripId, loadedTrip);
+    // 서버에 없는 일정(재시작 등)은 '이 기기에서 본 일정'에서 지운다.
+    if (tripId && missing) forgetTrip(tripId);
+  }, [tripId, loadedTrip, missing]);
 
   useEffect(() => {
     if (!flashId) return undefined;

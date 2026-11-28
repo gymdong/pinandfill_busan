@@ -59,7 +59,7 @@ def test_links_are_unguessable_and_expire() -> None:
     assert past.status_code == 400
     assert missing_trip.status_code == 404
     assert unknown.status_code == 404 and unknown.json()["error"]["id"] == "ERR-016"
-    assert malformed.status_code == 400
+    assert malformed.status_code == 404 and malformed.json()["error"]["id"] == "ERR-016"
 
 
 def test_expired_link_is_not_found_and_only_digest_is_stored() -> None:
@@ -76,3 +76,11 @@ def test_expired_link_is_not_found_and_only_digest_is_stored() -> None:
         expired = client.get(f"/api/shared/{token}")
     assert expired.status_code == 404
     assert links.find(token) is None and links.find(token_digest(token)) is not None
+
+
+def test_links_without_expiry_close_a_week_after_the_trip() -> None:
+    with TestClient(create_app()) as client:
+        trip_id = _trip(client)
+        body = client.post(f"/api/trips/{trip_id}/share").json()
+    # 2026-12-02 당일 여행 → 12-03 00:00 KST + 7일 = 2026-12-09T15:00:00Z
+    assert body["expiresAt"].startswith("2026-12-09T15:00:00")
