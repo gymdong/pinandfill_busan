@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from app.modules.crowd.router import router as crowd_router
 from app.modules.places.router import router as places_router
 from app.modules.recommend.mood_router import router as mood_router
-from app.modules.share.router import router as share_router
 from app.modules.trips.intake import router as trip_intake_router
 from app.modules.trips.router import router as trips_router
 
@@ -18,7 +17,6 @@ router.include_router(trips_router)
 router.include_router(places_router)
 router.include_router(crowd_router)
 router.include_router(mood_router)
-router.include_router(share_router)
 
 
 class HealthResponse(BaseModel):

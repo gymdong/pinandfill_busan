@@ -39,8 +39,6 @@ from app.modules.places.settings import PlaceMatchSettings
 from app.modules.places.source import load_places
 from app.modules.plan_b.service import PlanBPlanner
 from app.modules.recommend.waypoints import PublicPlaceCandidates, ScoreWeights, WaypointRecommender
-from app.modules.share.repository import InMemoryShareLinks, SqlShareLinks
-from app.modules.share.service import ShareService
 from app.modules.trips.edit_history import EditHistory
 from app.modules.trips.initial import PublicStayDurations
 from app.modules.trips.repository import FakeTripRepository
@@ -182,7 +180,6 @@ def create_app(
     place_search_service: PlaceSearchService | None = None,
     place_detail_service: PlaceDetailService | None = None,
     crowd_service: CrowdService | None = None,
-    share_service: ShareService | None = None,
 ) -> FastAPI:
     """주입하지 않은 서비스는 기본 구성으로 만든다.
 
@@ -205,10 +202,6 @@ def create_app(
             crowd_service = default_crowd_service(places)
         if trip_service is None and places is not None:
             trip_service = default_trip_service(places, database, crowd_service=crowd_service)
-        # API-019·020 공유 링크는 여행과 같은 저장소(DB 가 있으면 shared_links, 없으면 메모리)에 둔다.
-        if share_service is None and trip_service is not None:
-            links = SqlShareLinks(database) if database is not None else InMemoryShareLinks()
-            share_service = ShareService(links, trip_service)
         # API-005 는 외부 API 를 부르지 않으므로 키 없이도 표본 장소로 응답한다.
         if place_detail_service is None and places is not None:
             place_detail_service = PlaceDetailService(SamplePlaceDetails(places, load_place_photos()))
@@ -243,7 +236,6 @@ def create_app(
     application.state.place_search_service = place_search_service
     application.state.place_detail_service = place_detail_service
     application.state.crowd_service = crowd_service
-    application.state.share_service = share_service
     # 분위기 추천 등 라우터가 앱과 같은 장소 데이터를 쓰게 한다. 서비스를 모두 주입한 앱에서는 None 이다.
     application.state.places = places
 
