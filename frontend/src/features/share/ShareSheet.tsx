@@ -32,7 +32,8 @@ function remember(tripId: string, value: { url: string; expiresAt: string | null
 }
 function untilLabel(expiresAt: string | null): string {
   if (!expiresAt) return '';
-  const date = new Date(expiresAt);
+  // 만료는 그날 끝(다음 날 0시)이다. 1ms 앞을 보여 '12월 12일까지'처럼 읽히게 한다.
+  const date = new Date(Date.parse(expiresAt) - 1);
   if (Number.isNaN(date.getTime())) return '';
   return `${new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', timeZone: 'Asia/Seoul' }).format(date)}까지 열려요.`;
 }

@@ -36,7 +36,7 @@ describe('ShareSheet(FR-011)', () => {
     const share = vi.spyOn(tripsApi, 'share').mockResolvedValue({ url: '/shared/again', token: 'again', expiresAt: '2099-12-09T15:00:00Z' });
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
     const first = render(<ShareSheet tripId="t2" onClose={vi.fn()} />);
-    expect(await screen.findByText('12월 10일까지 열려요.')).toBeInTheDocument();
+    expect(await screen.findByText('12월 9일까지 열려요.')).toBeInTheDocument();
     first.unmount();
     render(<ShareSheet tripId="t2" onClose={vi.fn()} />);
     expect(screen.getByLabelText('공유 링크')).toHaveValue(`${window.location.origin}/shared/again`);
