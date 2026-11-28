@@ -25,7 +25,9 @@
   background: var(--color-surface);
   color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  /* 16px 미만이면 iOS 가 칸을 누를 때 화면을 확대한다. */
+  font-size: var(--text-m);
+  text-overflow: ellipsis;
 }
 
 .actions {

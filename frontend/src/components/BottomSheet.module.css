@@ -47,6 +47,10 @@
   font-size: var(--text-s);
 }
 
+.title:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .close {
   flex: none;
   width: var(--tap-min);
