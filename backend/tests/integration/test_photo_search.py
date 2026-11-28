@@ -3,16 +3,34 @@
 분류기는 가짜다(외부 API 를 부르지 않는다).
 """
 
-from collections.abc import Sequence
+import asyncio
+import json
+from collections.abc import Iterator, Sequence
 
+import httpx2
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.modules.photo.service import Guess, PhotoSearchService, PhotoUnavailableError
+from app.modules.photo import router as photo_router
+from app.modules.photo.service import (
+    ClaudePhotoClassifier,
+    Guess,
+    InvalidPhotoError,
+    PhotoSearchService,
+    PhotoUnavailableError,
+)
 from app.modules.photo.settings import PhotoSettings
 from app.modules.places.samples import SamplePlace, load_sample_places
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit() -> Iterator[None]:
+    photo_router._recent.clear()
+    yield
+    photo_router._recent.clear()
 
 
 class FakeClassifier:
@@ -75,13 +93,15 @@ def test_invalid_photos_are_rejected_without_calling_the_model() -> None:
     classifier = FakeClassifier([])
     with _client(classifier, max_bytes=100) as client:
         wrong_type = _post(client, media_type="application/pdf")
+        disguised = _post(client, data=b"%PDF-1.7" + b"0" * 40)  # image/png 라고 보냈지만 PDF
         too_large = _post(client, data=b"x" * 101)
         empty = _post(client, data=b"")
         missing = client.post("/api/places/photo-search")
     assert wrong_type.status_code == 400 and wrong_type.json()["error"]["id"] == "ERR-014"
     assert too_large.status_code == 413 and too_large.json()["error"]["id"] == "ERR-014"
+    assert disguised.status_code == 400
     assert empty.status_code == 400
-    assert missing.status_code == 400
+    assert missing.status_code == 400 and missing.json()["error"]["id"] == "ERR-014"
     assert classifier.calls == []
 
 
@@ -96,3 +116,71 @@ def test_provider_failure_is_503_and_missing_key_disables_the_endpoint(monkeypat
     with TestClient(create_app()) as client:
         disabled = _post(client)
     assert disabled.status_code == 503
+
+
+def test_rate_limit_per_client() -> None:
+    with _client(FakeClassifier([]), per_minute=2) as client:
+        codes = [_post(client).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
+
+
+def _claude(handler) -> ClaudePhotoClassifier:  # type: ignore[no-untyped-def]
+    classifier = ClaudePhotoClassifier(PhotoSettings(api_key=None), "test-key")
+    classifier.client = classifier.client.with_options(
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)), max_retries=0
+    )
+    return classifier
+
+
+def _message(text: str | None, stop_reason: str = "end_turn") -> dict[str, object]:
+    content = [] if text is None else [{"type": "text", "text": text}]
+    return {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+
+
+def _run(classifier: ClaudePhotoClassifier) -> list[Guess]:
+    places = list(load_sample_places().all())
+    return asyncio.run(classifier.classify(PNG, "image/png", places))
+
+
+def test_claude_classifier_parses_structured_output_and_sends_enum() -> None:
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        sent.append(json.loads(request.content))
+        return httpx2.Response(200, json=_message('{"candidates": [{"place_id": "126658", "confidence": 0.8}]}'))
+
+    assert _run(_claude(handler)) == [Guess("126658", 0.8)]
+    body = sent[0]
+    schema = body["output_config"]["format"]["schema"]  # type: ignore[index]
+    assert "126658" in schema["properties"]["candidates"]["items"]["properties"]["place_id"]["enum"]
+    assert body["fallbacks"] == "default" and body["model"] == "claude-opus-5-5"
+
+
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        (httpx2.Response(200, json=_message(None, "refusal")), PhotoUnavailableError),
+        (httpx2.Response(200, json=_message("{", "max_tokens")), PhotoUnavailableError),
+        (httpx2.Response(200, json=_message("not json")), PhotoUnavailableError),
+        (
+            httpx2.Response(529, json={"type": "error", "error": {"type": "overloaded_error", "message": "x"}}),
+            PhotoUnavailableError,
+        ),
+        (
+            httpx2.Response(400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "x"}}),
+            InvalidPhotoError,
+        ),
+    ],
+)
+def test_claude_classifier_maps_failures(response: httpx2.Response, error: type[Exception]) -> None:
+    with pytest.raises(error):
+        _run(_claude(lambda request: response))

@@ -14,6 +14,7 @@ import type {
   PlaceDetailResponse,
   PlaceSearchResponse,
   PlacesAtResponse,
+  PhotoSearchResponse,
   PlanBResponse,
   Schedule,
   ScheduleDay,
@@ -401,6 +402,10 @@ const routes: [HttpMethod, RegExp, Handler][] = [
     ],
   })],
   ['POST', /^\/trips\/([^/]+)\/plan-b\/apply$/, (_request, [tripId]): ScheduleMutationResponse => ({ schedule: snapshot(tripId ?? ''), violations: [] })],
+  // API-017 사진 찾기: 어떤 사진이든 태종대 하나를 돌려주는 mock.
+  ['POST', /^\/places\/photo-search$/, (): PhotoSearchResponse => ({
+    candidates: [{ place: placeSummaries.taejongdae, confidence: 0.82 }], notFound: false,
+  })],
   [
     'POST',
     /^\/recommend\/mood$/,
@@ -447,6 +452,6 @@ export async function mockRequest<T>(request: ApiRequest): Promise<T> {
     const match = method === request.method ? pattern.exec(request.path) : null;
     if (match) return handler(request, match.slice(1)) as T;
   }
-  // API-016~021(P1)은 타입만 두고 mock을 만들지 않는다.
+  // API-016·018~021(P1)은 타입만 두고 mock을 만들지 않는다.
   throw new ApiError({ id: 'UNKNOWN', message: `mock이 없는 API입니다: ${request.method} ${request.path}` });
 }

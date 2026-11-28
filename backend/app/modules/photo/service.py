@@ -22,7 +22,7 @@ from app.modules.places.samples import SamplePlace
 
 logger = logging.getLogger(__name__)
 
-MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/webp", "image/gif"})
+MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 MAX_CANDIDATES = 3
 
 SYSTEM = (
@@ -55,6 +55,17 @@ class InvalidPhotoError(ValueError):
 class Guess:
     place_id: str
     confidence: float
+
+
+def _sniff(image: bytes) -> str | None:
+    """파일 첫 바이트로 실제 형식을 본다. 클라이언트가 보낸 Content-Type 만 믿지 않는다."""
+    if image.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(image) >= 12 and image[:4] == b"RIFF" and image[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 class PhotoClassifier(Protocol):
@@ -120,7 +131,7 @@ class ClaudePhotoClassifier:
         try:
             response = await self.client.beta.messages.create(
                 model=self.settings.model,
-                max_tokens=4000,
+                max_tokens=8000,
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
                 output_config=output_config,
@@ -131,12 +142,17 @@ class ClaudePhotoClassifier:
             raise PhotoUnavailableError("timeout") from None
         except anthropic.RateLimitError:
             raise PhotoUnavailableError("rate_limited") from None
+        except anthropic.BadRequestError:
+            # 깨진 이미지 등 요청 자체가 잘못됐다. 같은 사진으로 다시 시도해도 안 된다.
+            raise InvalidPhotoError("rejected_by_provider") from None
         except anthropic.APIStatusError as error:
             # 상태 코드만 남긴다. 오류 본문에는 요청 일부가 들어 있을 수 있다.
             logger.warning("photo_search provider_error status=%s", error.status_code)
             raise PhotoUnavailableError("provider_error") from None
         except anthropic.APIConnectionError:
             raise PhotoUnavailableError("network") from None
+        except anthropic.APIError:
+            raise PhotoUnavailableError("provider_error") from None
         if response.stop_reason == "refusal":
             raise PhotoUnavailableError("refusal")
         text = next((block.text for block in response.content if block.type == "text"), None)
@@ -163,12 +179,14 @@ class PhotoSearchService:
 
     async def search(self, image: bytes, media_type: str) -> tuple[list[PhotoMatch], bool]:
         """(후보 최대 3곳, 찾지 못함). 확신도 높은 순."""
-        if media_type not in MEDIA_TYPES:
-            raise InvalidPhotoError("media_type")
         if not image:
             raise InvalidPhotoError("empty")
         if len(image) > self.settings.max_bytes:
             raise InvalidPhotoError("too_large", status=413)
+        actual = _sniff(image)
+        if media_type not in MEDIA_TYPES or actual is None:
+            raise InvalidPhotoError("media_type")
+        media_type = actual
         by_id = {item.place.id: item for item in self.places}
         guesses = await self.classifier.classify(image, media_type, self.places)
         best: dict[str, float] = {}

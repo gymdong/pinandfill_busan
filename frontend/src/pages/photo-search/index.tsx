@@ -47,11 +47,13 @@ export default function PhotoSearchPage() {
     try {
       upload = await shrinkPhoto(file);
     } catch {
-      setState({ status: 'error', message: '이 사진은 읽을 수 없어요. JPG·PNG 사진으로 다시 골라 주세요.' });
+      setPreview(null);
+      setState({ status: 'error', message: '이 사진은 읽을 수 없어요. HEIC 사진이면 JPG로 바꾸거나 다른 사진을 골라 주세요.' });
       return;
     }
     try {
-      const result = await placesApi.photoSearch(upload, { signal: current.signal });
+      // 서버는 모델 응답을 최대 약 40초 기다린다. 그보다 길게 기다린다.
+      const result = await placesApi.photoSearch(upload, { signal: current.signal, timeoutMs: 45_000 });
       if (!current.signal.aborted) setState({ status: 'done', result });
     } catch (cause) {
       if (!current.signal.aborted) setState({ status: 'error', message: toApiError(cause).message });
@@ -84,7 +86,7 @@ export default function PhotoSearchPage() {
           : <span className={styles.placeholder}>가고 싶은 곳의 사진을 골라 주세요</span>}
         <span className={styles.pickLabel}>{preview ? '다른 사진 고르기' : '사진 고르기'}</span>
       </label>
-      <p className={styles.privacy}>사진은 장소를 찾는 데만 쓰고 저장하지 않아요. 보내기 전에 촬영 위치 정보를 지워요.</p>
+      <p className={styles.privacy}>사진은 AI(Anthropic Claude)로 장소를 찾는 데만 쓰고, 저희 서버에는 저장하지 않아요. 보내기 전에 촬영 위치 정보를 지워요.</p>
 
       {state.status === 'searching' && <LoadingState message="사진 속 장소를 찾는 중이에요" />}
       {state.status === 'error' && <Banner tone="warn" title="사진으로 찾지 못했어요">{state.message}</Banner>}

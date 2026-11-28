@@ -29,7 +29,7 @@ describe('사진으로 찾기(FR-012)', () => {
     });
     await choose();
     expect(await screen.findByRole('heading', { name: placeSummaries.taejongdae.name })).toBeInTheDocument();
-    expect(search).toHaveBeenCalledWith(shrunk, { signal: expect.any(AbortSignal) });
+    expect(search).toHaveBeenCalledWith(shrunk, { signal: expect.any(AbortSignal), timeoutMs: 45_000 });
     expect(screen.getByText(/확신도 86%/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: `${placeSummaries.taejongdae.name} 담기` }));
     expect(screen.getByRole('button', { name: `${placeSummaries.taejongdae.name} 빼기` })).toBeInTheDocument();
