@@ -35,3 +35,7 @@ export function PlusIcon() {
 export function AlertIcon() {
   return <svg {...base} width={18} height={18}><path d="M12 3l9 16H3L12 3z" /><path d="M12 10v4M12 17h.01" /></svg>;
 }
+
+export function ShareIcon() {
+  return <svg {...base}><path d="M12 15V3M7 8l5-5 5 5" /><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></svg>;
+}

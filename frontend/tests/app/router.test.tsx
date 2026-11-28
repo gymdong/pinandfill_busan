@@ -28,7 +28,7 @@ describe('라우팅', () => {
     expect(await screen.findByText(title)).toBeInTheDocument();
   });
 
-  it.each([paths.photoSearch(), paths.sharedTrip('token')])('P1 경로 %s는 비활성으로 표시한다', async (path) => {
+  it.each([paths.photoSearch()])('P1 경로 %s는 비활성으로 표시한다', async (path) => {
     renderAt(path);
     expect(await screen.findByText(/P1 화면이에요/)).toBeInTheDocument();
   });
